@@ -1,0 +1,23 @@
+{
+  "name": "ora-vibe-coder",
+  "version": "0.2.0",
+  "description": "Turn a software idea into an approved specification, executable plan, implemented product, and independently verified result.",
+  "author": {
+    "name": "Ora"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Ora Vibe Coder",
+    "shortDescription": "Guide software from idea through independent verification.",
+    "longDescription": "Four independently usable stages separate product decisions from implementation decisions, hand approved work to the existing Programming Loop, and certify only a fully verified candidate; a separate guided entry helps choose the right stage.",
+    "developerName": "Ora",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Guide this software idea from specification through independent verification."
+    ]
+  }
+}

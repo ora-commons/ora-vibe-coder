@@ -1,0 +1,23 @@
+{
+  "component": "programming-loop",
+  "files": {
+    "LICENSE": "d08917ad4cf19dc0f4d6cffa9ffd792835a1748070539d7e783abc236cfa2c3c",
+    "NOTICE.md": "192e926e1c3b277b624c728c6dfbff565f15c8448a3e833bd33fe3e62b6a4140",
+    "README.md": "83a033c239523a2911409b1fd91fed050627602b41d3c37a93c975cd4a5112bd",
+    "VERSION": "59854984853104df5c353e2f681a15fc7924742f9a2e468c29af248dce45ce03",
+    "adapters/claude.md": "4c6f4bcb836026f04a329e81d88d97a67693d0fce5cce6d4f8b1feee5ff35e89",
+    "adapters/codex.md": "ab22d9451af9a6dd28e0fb515cb43cf14478c201c018ddfaa31b10d9dfb57bbb",
+    "adapters/hermes.md": "8d8dac0c6d2c7b7775e5faabbdec8c539db03e7e4627c6c078ac5dc261460ff9",
+    "adapters/minimax.md": "89ec4b39477c0b974241c1b151d0a3b4bc19a12131b692b64f4b406e8cd73c0a",
+    "adapters/qwen.md": "99ee4cf0f441aade18f218452830ee6fa6b0bddef6aa37f841de6980d96ff96d",
+    "adapters/zcode.md": "5f0217dce6fb4f267191d7f398a86666596a56c232178020c5888ec5b74dc465",
+    "frameworks/programming-loop.md": "66b1fa787447a41a62a1af4150604b5a439c28daf84b9a333f7a3640bc86ade2",
+    "profiles/claude/programming-loop-reviewer.md": "c5aa930a38a9b5795a927b78f96d5f538607e56fd6d82f0cdcbba974caf03a09",
+    "profiles/qwen/programming-loop-reviewer.md": "083fdb0244d4061bec893c65d8b4c3f8286387c48953e8df77ff87d8e88ce209",
+    "profiles/zcode/programming-loop-reviewer.md": "ea1fbd60f4683fd0fc33394c68b1b4a8ce83778e1ac6974829d5aa5630fa9fed",
+    "scripts/install.py": "b06fb810dd88292d53197ff6434631fb034108f35baab7e68366909be164316e",
+    "skills/programming-loop/SKILL.md": "858e9df37aa6b55a125ec8909bfb1ec407144a20bbc233f51c71626e883a28b9"
+  },
+  "source": "programming-loop",
+  "version": "1.0.0"
+}
