@@ -1,0 +1,14 @@
+{
+  "name": "ora-vibe-coder",
+  "description": "Local Ora Vibe Coder skills for specification, planning, programming, and verification.",
+  "owner": {
+    "name": "Ora"
+  },
+  "plugins": [
+    {
+      "name": "ora-vibe-coder",
+      "source": "./plugins/ora-vibe-coder",
+      "description": "Guide software from idea through independent verification."
+    }
+  ]
+}
