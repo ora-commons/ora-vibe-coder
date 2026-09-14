@@ -283,7 +283,7 @@ def install_files(source, home, platform, destination, hosts, plugin, version, f
             raise ValueError("The Vibe release has no native entries. The previous installation was preserved.")
         loop_installer = plugin / "resources/programming-loop/scripts/install.py"
         if hosts and not loop_installer.is_file():
-            raise ValueError("The maintained Programming Loop installer is missing. The previous installation was preserved.")
+            raise ValueError("The bundled Programming Loop installer is missing. The previous installation was preserved.")
         for host in hosts:
             if not (plugin / "resources/programming-loop/adapters" / f"{host}.md").is_file():
                 raise ValueError(f"The selected {host} host operations are missing. The previous installation was preserved.")
@@ -405,7 +405,7 @@ def remove(source=ROOT, *, home=None, destination=None, hosts=(), platform=None)
                     marker = {}
                 if marker.get("component") == "programming-loop" and marker.get("source") == "programming-loop":
                     if not loop_installer.is_file():
-                        raise ValueError("The maintained Programming Loop removal tool is missing; no Vibe files were removed.")
+                        raise ValueError("The bundled Programming Loop removal tool is missing; no Vibe files were removed.")
                     run_loop_installer(loop_installer, "remove-check", host, home)
                     loop_hosts.append(host)
         for target in vibe_targets:

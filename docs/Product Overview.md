@@ -25,7 +25,7 @@ Start with Specification or **Help me get started**. The method helps turn inten
 Open the directory, link its current requirements and documentation, and choose the stage that matches the real gap. Vibe does not require renaming files or migrating the repository into a proprietary project format.
 ### Developers using several coding tools
 
-The same Vibe stages can prepare work for Codex, Claude Code, ZCode, Hermes, Qwen Code, or MiniMax Code. Host-specific mechanics stay in small adapters; the Programming Loop method remains the same.
+The same Vibe stages can prepare work for Codex, Claude Code, ZCode, Hermes, Qwen Code, or MiniMax Code. Host-specific mechanics stay in small adapters; every host receives the same reviewed Programming Loop method plus its matching adapter from the vendored product files.
 ### Teams that need an inspectable handoff
 
 `Handoff.md` is a complete current snapshot that can be reviewed, copied, versioned, or delivered manually. It starts with the exact user request and labels instructions, project facts, source material, authority, and expected output.
@@ -57,7 +57,7 @@ Vibe's browser workspace is served from your computer. Projects remain normal di
 The complete packet is saved and displayed before Continue or Copy. If the saved file changes, Vibe refuses to copy unseen content. This makes the handoff something you can inspect rather than a hidden prompt assembled at launch time.
 ### One method, several hosts
 
-The Programming Loop has one universal workflow. Each initiating host gets only the instructions needed to create a fresh worker, retrieve its result, and wait safely. This avoids six drifting versions of what “implement and review” means.
+The Programming Loop has one universal workflow maintained in its dedicated source and published through its public release. Vibe bundles the matching 17 product files and modes for offline setup and handoffs; the public release separately includes its delivery manifest. Each initiating host gets only the instructions needed to create a fresh worker, retrieve its result, and wait safely. This avoids six drifting versions of what “implement and review” means without turning the Vibe snapshot into another maintained source.
 ### Independent review is structural
 
 The Loop creates a fresh executor, then a different fresh reviewer that receives the approved plan, real cumulative diff, repository access, and exact check evidence. It does not receive the executor's conversation or intended conclusions.
@@ -110,7 +110,7 @@ Use Copy to deliver the same complete Markdown to a different capable recipient.
 
 - The application uses ordinary Python and static browser assets.
 - The lifecycle method is consolidated instead of copied into native entries.
-- The Programming Loop has one canonical component and one generated embedded mirror.
+- The Programming Loop has one authoritative source and public release; Vibe's component subtree and generated resources contain the same 17 product files and modes as that release, whose delivery manifest remains separate.
 - Installation and handoff replacement are transactional and preserve uncertain user content.
 - Focused tests can prove deterministic packaging without provider calls.
 
@@ -135,7 +135,7 @@ It does not silently install coding tools, authenticate, choose a paid route, pu
 
 Vibe requires Python 3.10 or later, a browser, and filesystem access to the chosen project directory. Continue additionally requires a supported coding-tool executable and a desktop terminal route. Copy works when Continue is unavailable.
 
-Specification and Planning require the separately installed Gear 3 and Gear 4 companion; Vibe setup does not install it. Programming requires the Programming Loop, which Vibe setup installs or updates for each coding tool the user selects. If either required companion is unavailable or mismatched, the dependent stage stops honestly: use Gear's own setup instructions for Gear, or rerun Vibe setup with the receiving host selected and restart that host for the Loop. Agent Bridge is optional and serves only an explicitly selected external-review route; without it, that route is unavailable, not silently substituted or described as model diversity, while a qualified fresh internal or complete manual review route remains usable where the stage provides it.
+Specification and Planning require the separately installed Gear 3 and Gear 4 companion; Vibe setup does not install it. Programming requires the Programming Loop, which Vibe setup installs or updates from its bundled product-file snapshot for each coding tool the user selects. If either required companion is unavailable or mismatched, the dependent stage stops honestly: use Gear's own setup instructions for Gear, or rerun Vibe setup with the receiving host selected and restart that host for the Loop. This ordinary update route does not require access to the private authoritative repository. Agent Bridge is optional and serves only an explicitly selected external-review route; without it, that route is unavailable, not silently substituted or described as model diversity, while a qualified fresh internal or complete manual review route remains usable where the stage provides it.
 
 The quality of a stage depends on accessible source material. A remote reviewer cannot inspect a local-only path. A visual requirement cannot be established from text alone. A live provider claim cannot be established by a fake test. Vibe preserves and labels these limits rather than converting them into success.
 
@@ -159,7 +159,7 @@ If that result cannot be reached within current authority, the expected output i
 
 Use Vibe when the work benefits from explicit stages, durable Markdown context, a visible handoff, and an executor/reviewer loop. For a tiny one-line edit with no meaningful ambiguity or review risk, a direct coding-tool conversation may be simpler.
 
-Use Copy when you want the packet discipline without a native launch route. Use the standalone Programming Loop when requirements and a plan are already available and you do not need the local project workspace.
+Use Copy when you want the packet discipline without a native launch route. Use the standalone Programming Loop from its public `ora-commons/ora-programming-loop` release when requirements and a plan are already available and you do not need the local project workspace.
 
 Do not use Vibe as a reason to share material a recipient should not receive. Its value is making the boundary inspectable so you can choose responsibly.
 
@@ -178,7 +178,7 @@ Do not use Vibe as a reason to share material a recipient should not receive. It
 
 - [User Guide](User%20Guide.md) for setup, ordinary use, document linking, delivery, recovery, stopping, and removal.
 - [Technical Documentation](Technical%20Documentation.md) for architecture, trust boundaries, packet construction, host routes, installation, and maintenance.
-- [Programming Loop component](../components/programming-loop/README.md) for standalone installation, host adapters, and extension guidance.
+- [Vendored Programming Loop README](../components/programming-loop/README.md) for the same standalone installation, host-adapter, and extension guidance published with the public Loop release.
 - [Repository README](../README.md) for the shortest start and package map.
 
 ## License

@@ -17,7 +17,7 @@ You need:
 
 Vibe itself does not require a provider key and never asks for one. If a coding tool needs login or a subscription, complete that through the coding tool's normal interface.
 
-The companions have distinct installation boundaries. Specification and Planning require the separately installed Gear 3 and Gear 4 product; install or update it through Gear's own setup instructions for a supported engine. Vibe setup does not install Gear. Programming uses the Programming Loop that Vibe setup installs into each coding tool you select. Agent Bridge is optional and is used only when you explicitly choose an external-review route.
+The companions have distinct installation boundaries. Specification and Planning require the separately installed Gear 3 and Gear 4 product; install or update it through Gear's own setup instructions for a supported engine. Vibe setup does not install Gear. Programming uses Vibe's bundled Programming Loop product-file snapshot, which setup installs into each coding tool you select. Agent Bridge is optional and is used only when you explicitly choose an external-review route.
 
 ## Five-minute start
 
@@ -90,7 +90,7 @@ The result is one current Implementation Plan, not a diary of alternatives or re
 
 ### Programming
 
-Use Programming to hand a current requirement and implementation plan to the maintained Programming Loop. The Loop inspects the repository, presents a minimum honest scope lock, and waits for approval before edits.
+Use Programming to hand a current requirement and implementation plan to the released Programming Loop. The Loop inspects the repository, presents a minimum honest scope lock, and waits for approval before edits.
 
 After approval, the Loop uses a fresh executor and a separate fresh reviewer, runs only the agreed checks, corrects material defects, and reaches the agreed Git or delivery endpoint. It preserves unrelated work and uses Git for rollback when the project uses Git.
 
@@ -120,7 +120,7 @@ When a document is on another machine or inaccessible to the receiving tool, add
 
 Every prepared packet starts with your exact instruction and a visible boundary before framework instructions. It then contains the selected method, shared working contract, role assignment, project and authority facts, current stage-appropriate materials, known gaps, and the expected next result.
 
-Programming and guided packets also include the canonical Programming Loop and exactly one adapter for the selected initiating host. Packets for other stages do not include the Loop. Guided packets include all four Vibe stage bodies exactly once.
+Programming and guided packets include the universal Programming Loop framework and exactly one adapter for the selected initiating host. Before building either packet, Vibe validates its bundled snapshot of the 17 Loop product files and their modes; the public release's separate delivery manifest is not part of that snapshot or the packet. Packets for other stages do not include the Loop. Guided packets include all four Vibe stage bodies exactly once.
 
 The packet excludes an earlier outgoing packet and stage materials that do not belong at the destination. This keeps the request complete without turning it into an archive.
 
@@ -188,7 +188,7 @@ Stop that stage rather than accepting an imitation. Install, enable, or update t
 
 ### Programming says the Programming Loop is unavailable or out of date
 
-Stop the companion-dependent work. Choose **Stop app**, reopen the same supplied Vibe setup from the release folder, select the receiving coding tool, and choose **Install or update Vibe and selected entries**. Restart that coding tool, reopen Vibe from its launcher, and prepare the Programming request again. Do not treat the Loop text embedded in a handoff as proof that the installed companion ran.
+Stop the companion-dependent work. Choose **Stop app**, reopen the same supplied Vibe setup from the release folder, select the receiving coding tool, and choose **Install or update Vibe and selected entries**. This updates from Vibe's bundled product-file snapshot without requiring access to the private authoritative source. Restart that coding tool, reopen Vibe from its launcher, and prepare the Programming request again. Standalone Loop users update through the public `ora-commons/ora-programming-loop` release. Do not treat the Loop text embedded in a handoff as proof that the installed companion ran.
 
 ### Agent Bridge is unavailable
 

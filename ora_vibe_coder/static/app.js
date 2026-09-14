@@ -70,7 +70,7 @@ async function initialize() {
   $("destination").replaceChildren(new Option("Choose a coding tool", ""), ...hostChoices.map(h => new Option(h.name, h.name)));
   $("setup-hosts").replaceChildren(...hostChoices.map(h => { const p = document.createElement(data.installation ? "label" : "p"); p.textContent = `${h.name}: ${h.detected ? "command found — account access not checked" : "not found"}`; if (data.installation) { const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.value = h.id; p.prepend(checkbox); } return p; }));
   if (data.installation) {
-    $("setup-introduction").textContent = "Choose the coding tools to configure. Setup installs Vibe, the maintained Programming Loop, and a launcher in your user folders. Unselected coding tools and their account settings are preserved. Specification and Planning also require the separately installed Gear companion.";
+    $("setup-introduction").textContent = "Choose the coding tools to configure. Setup installs Vibe, its bundled Programming Loop product-file snapshot, and a launcher in your user folders. Unselected coding tools and their account settings are preserved. Specification and Planning also require the separately installed Gear companion.";
     $("choose-home").hidden = true; $("install-app").hidden = false; $("remove-app").hidden = false;
   }
   $("setup").hidden = !!data.home;

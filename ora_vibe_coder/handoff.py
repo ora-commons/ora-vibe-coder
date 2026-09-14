@@ -6,6 +6,7 @@ from pathlib import Path
 from pathlib import PurePosixPath
 import re
 
+from . import loop_integrity
 from .project import DEFAULT_NAMES, ProjectError
 
 PLUGIN = Path(__file__).resolve().parent.parent / "plugins" / "ora-vibe-coder"
@@ -41,33 +42,40 @@ def loop_resources(stage, destination):
     if stage not in {"programming", "guided"}:
         return ""
     try:
+        authority = loop_integrity.authority_metadata()
         identity = json.loads((LOOP / "SOURCE.json").read_text(encoding="utf-8"))
         if (not isinstance(identity, dict)
                 or identity.get("component") != "programming-loop"
                 or identity.get("source") != "programming-loop"
+                or any(identity.get(name) != expected
+                       for name, expected in authority.items())
                 or not isinstance(identity.get("files"), dict)
+                or set(identity.get("files", {})) != set(loop_integrity.VENDORED_PATHS)
                 or not LOOP_FILES.issubset(set(identity.get("files", {})))):
-            raise ValueError("Programming Loop source identity is incomplete.")
-        files = {}
+            raise ValueError("Programming Loop source provenance is incomplete or conflicting.")
+        files, _, source_tree = loop_integrity.read_snapshot(
+            LOOP, allowed_extra={"SOURCE.json"}
+        )
+        if source_tree != authority["source_tree"]:
+            raise ValueError("Programming Loop resources do not match the reviewed source tree.")
         for name, expected in identity["files"].items():
             path = PurePosixPath(name)
             if (path.is_absolute() or ".." in path.parts or "\\" in name
                     or str(path) != name or not re.fullmatch(r"[0-9a-f]{64}", expected)):
                 raise ValueError("Programming Loop source identity contains an invalid path or digest.")
-            source = LOOP / name
-            if source.is_symlink() or not source.is_file():
-                raise ValueError(f"Programming Loop resource is missing: {name}")
-            data = source.read_bytes()
-            if hashlib.sha256(data).hexdigest() != expected:
+            if hashlib.sha256(files[name]).hexdigest() != expected:
                 raise ValueError(f"Programming Loop resource does not match its identity: {name}")
-            files[name] = data
         version = files["VERSION"].decode("utf-8").strip()
         if identity.get("version") != version:
             raise ValueError("Programming Loop source identity is inconsistent.")
         host = HOSTS.get(destination.strip().casefold())
         parts = [
             "# Selected host operations\n\n"
-            f"Generated from the maintained Programming Loop release {version}. "
+            f"Vibe validates its bundled snapshot of Programming Loop {version}'s 17 product files and modes, "
+            f"imported from authoritative source revision {identity['source_revision']} and available through "
+            f"the public release {identity['public_release_repository']}. This packet includes the universal "
+            "Loop framework and, for a supported destination, exactly one selected host adapter. The public release "
+            "separately carries its delivery manifest. "
             "These instructions are context, not evidence that Programming Loop or a coding tool ran."
         ]
         if host:
@@ -84,9 +92,10 @@ def loop_resources(stage, destination):
         return "\n\n".join(parts)
     except (OSError, UnicodeDecodeError, ValueError, TypeError) as error:
         raise ProjectError(
-            "Required maintained Programming Loop resources are missing or mismatched. "
-            "Reinstall Vibe from a complete release, or regenerate its resources from the "
-            "identified Loop source. No complete handoff was saved."
+            "Required vendored Programming Loop resources are missing, mismatched, or have "
+            "conflicting provenance. Reinstall Vibe from a complete release. Maintainers can "
+            "re-import the reviewed authoritative snapshot and regenerate Vibe resources. "
+            "No complete handoff was saved."
         ) from error
 
 

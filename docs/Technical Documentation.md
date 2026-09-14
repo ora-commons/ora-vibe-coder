@@ -11,13 +11,14 @@ The system separates three truths: project files describe the product and status
 | Path | Responsibility |
 |---|---|
 | `ora_vibe_coder/` | Local server, project model, packet construction, host launch, installation, and static interface. |
-| `plugins/ora-vibe-coder/` | Native Vibe plugin entries, canonical stage frameworks, shared references, and generated Loop resources. |
-| `components/programming-loop/` | Standalone canonical Programming Loop distribution and installer. |
-| `scripts/assemble_resources.py` | One-way assembler from the canonical Loop into the Vibe plugin. |
+| `ora_vibe_coder/loop_integrity.py` | Single reviewed Loop authority pin and shared offline Git-tree verification. |
+| `plugins/ora-vibe-coder/` | Native Vibe plugin entries, canonical Vibe stage frameworks, shared references, and generated Loop resources. |
+| `components/programming-loop/` | Vendored copy of the 17 Programming Loop product files retained for offline Vibe installation. |
+| `scripts/assemble_resources.py` | One-way assembler from the vendored Loop snapshot into the Vibe plugin. |
 | `docs/` | Public user, technical, and product documentation. |
 | `tests/` | Focused application, handoff, installer, and framework delivery checks. |
 
-The canonical Loop and generated plugin mirror are separate distribution locations, not two maintained methods. Authored Loop changes begin in `components/programming-loop`; the assembler replaces `plugins/ora-vibe-coder/resources/programming-loop` and writes exact source hashes.
+Programming Loop is authored in the dedicated private source repository `Golfplan18/ora-programming-loop` and released publicly through `ora-commons/ora-programming-loop`. Vibe's component subtree and generated plugin resources are two vendored distribution locations, not maintained methods. Ordinary users install or update through Vibe setup or the public Loop release; neither route requires private-repository access.
 
 ## Runtime architecture
 
@@ -83,11 +84,11 @@ The plugin maintains five framework bodies: Specification, Planning, Programming
 
 Each native skill file is intentionally thin. It loads the shared contract, role source, and exactly one canonical framework. The guided loader also exposes all four stage bodies because guided coordination may need to select the earliest responsible stage.
 
-The Programming framework is a readiness and handoff layer. It does not duplicate the Programming Loop. The packet supplies the canonical generated Loop framework and exactly one host adapter when Programming or guided use requires it.
+The Programming framework is a readiness and handoff layer. It does not duplicate the Programming Loop. The packet supplies the generated vendored Loop framework and exactly one host adapter when Programming or guided use requires it.
 
-### Programming Loop source and mirror
+### Programming Loop source and vendored snapshots
 
-`components/programming-loop` is the maintained standalone source. It contains:
+The authoritative source is `Golfplan18/ora-programming-loop`; its public release is `ora-commons/ora-programming-loop`. Vibe retains a reviewed copy of the 17 product files at `components/programming-loop` so setup and handoff assembly work offline. Those files and their executable modes match the corresponding public-release product files. The public release separately carries `.ora-public-release-manifest.json`, which describes delivery and is not part of Vibe's vendored product-files tree. The snapshot contains:
 
 - one universal framework;
 - six initiating-host adapters;
@@ -97,11 +98,15 @@ The Programming framework is a readiness and handoff layer. It does not duplicat
 - CC0 and notice files; and
 - a semantic version.
 
-`scripts/assemble_resources.py` enumerates the exact public resource set, validates non-empty regular files, reads the neutral version, synchronizes Vibe plugin manifest versions, assembles a sibling staging directory, verifies every byte, and atomically replaces the plugin resource target.
+The snapshot contains 17 files. Its unchanged upstream README names `Golfplan18/ora-programming-loop` as the sole authoritative source and `ora-commons/ora-programming-loop` as the public source and update route; the Vibe subtree is neither.
 
-The generated `SOURCE.json` names `programming-loop`, records the component version, and maps every copied relative path to its SHA-256 digest. This proves byte identity with the declared source; it is not a review certificate or runtime status.
+`ora_vibe_coder/loop_integrity.py` is the single metadata owner for the authoritative repository, public release repository, imported revision, source tree, and vendored path. It also defines the exact 17-file inventory and calculates Git-compatible blob and nested-tree identities from file bytes and executable modes. Both assembly and handoff import this owner, so a reviewed revision/tree advance has one metadata edit and no stale second pin.
 
-Maintainers must never edit the generated resource directory by hand. Regenerate it from the canonical component and inspect both the source diff and generated parity.
+`scripts/assemble_resources.py` reads all 17 regular files, rejects missing, extra, symbolic-link, empty, byte-divergent, or mode-divergent input when its calculated Git tree differs from the reviewed pin, and does so before resource replacement. It then reads the neutral version, synchronizes Vibe plugin manifest versions, assembles a sibling staging directory with the same bytes and modes, verifies its tree, and atomically replaces the plugin resource target. Its optional revision argument can only assert the centrally reviewed revision, not stamp a different one.
+
+The generated `SOURCE.json` preserves `source: programming-loop` for the standalone installer's compatibility marker. It also records the authoritative repository and exact revision/tree, the public release repository without binding Vibe to a branch-specific public commit, the vendored snapshot path, the component version, and every copied relative path's SHA-256 digest. Handoff checks those generated facts against the shared authority pin, recalculates the complete 17-file Git tree from the packaged bytes and modes, and refuses a divergent snapshot even when its SHA-256 map was regenerated to match the divergence. This identity is not a review certificate or runtime status.
+
+Maintainers must never author changes in either vendored location or edit the generated resource directory by hand. The smallest refresh is manual and reviewed: replace the 17 files under `components/programming-loop` from one authoritative checkout, update the `AUTHORITY` revision and tree in `ora_vibe_coder/loop_integrity.py`, then run `python3 scripts/assemble_resources.py --loop-source components/programming-loop`. Inspect the imported bytes, modes, generated diff, and focused offline parity test together. No service or synchronizer is required.
 
 ### Host selection
 
@@ -115,7 +120,7 @@ If the destination is free-form or no supported adapter can be established, the 
 
 1. the user's exact input;
 2. a visible boundary before framework instructions;
-3. shared contract, role source, selected framework, and when applicable the canonical Loop plus one adapter;
+3. shared contract, role source, selected framework, and when applicable the universal Loop framework plus one adapter; Vibe validates the separate vendored 17-file snapshot before assembly;
 4. project, authority, protected state, output, and assignment facts;
 5. only stage-appropriate current materials; and
 6. known gaps and the next bounded result.
@@ -169,7 +174,7 @@ Removal deletes only installation-owned content. Projects, documents, credential
 
 ### Standalone Loop installer
 
-`components/programming-loop/scripts/install.py` supports `install`, `remove`, `status`, `recover`, `install-check`, and `remove-check`. It accepts a host and either the normal user home or an explicit host root.
+The vendored `components/programming-loop/scripts/install.py` supports `install`, `remove`, `status`, `recover`, `install-check`, and `remove-check`. It accepts a host and either the normal user home or an explicit host root.
 
 Installation writes a versioned release under a component-owned directory, records source hashes, and switches only the selected host's entry points. Hosts with reviewer profiles receive only their matching selected profile. Failure between staging and switching preserves the prior release and exposes recovery.
 
@@ -205,7 +210,7 @@ The receiving tool's permissions, provider settings, retention, and network beha
 | Host executable is missing | Saved packet and Copy | Install/enable the selected tool or use manual Copy. |
 | Terminal launch fails | Saved packet; operation staging is removed | Use Copy or correct the terminal environment. |
 | Installer validation fails | Previous installation | Preserve reported content, resolve ownership, then retry. |
-| Generated Loop assembly fails | Previous generated resource directory | Correct canonical inputs and rerun the assembler. |
+| Generated Loop assembly fails | Previous generated resource directory | Maintainers correct the reviewed vendored inputs or pinned provenance and rerun the assembler. |
 
 No recovery step silently selects another coding tool or provider.
 
@@ -223,9 +228,9 @@ When changing the system, choose the smallest checks that judge the material cha
 
 Edit the owning framework or shared reference, not the five thin loaders. Enumerate every packet that consumes shared text and keep links valid. Preserve the distinction between stage ownership: Specification defines WHAT, Planning defines HOW, Programming hands off to the Loop, and Verification remains independent and read-only.
 
-### Change Programming Loop behavior
+### Import a Programming Loop change
 
-Edit `components/programming-loop/frameworks/programming-loop.md` and the minimum adapter or entry files required. Do not place universal rules in host adapters. Run the approved assembler to replace the embedded resource copy, then verify generated identity and focused distribution behavior.
+Make and review Loop behavior changes in `Golfplan18/ora-programming-loop`, then release them through `ora-commons/ora-programming-loop`. To update Vibe, replace all 17 vendored files from that reviewed authoritative revision, update the single `AUTHORITY` revision/tree in `ora_vibe_coder/loop_integrity.py`, and regenerate the embedded resources. Do not hand-edit the Vibe snapshot as though it were an owning source.
 
 ### Add a host
 
@@ -261,7 +266,7 @@ Use Git as the rollback mechanism. Remove task-owned staging and background proc
 - Exact user input precedes all packaged instruction text, and a visible boundary distinguishes the two. A refactor that normalizes or summarizes the input changes the product contract even if the resulting prose seems equivalent.
 - Displayed, saved, and copied packet content agree byte-for-text after the documented newline handling. A stale display never authorizes replacement or copy of a newly changed outgoing file.
 - Each packet contains the shared contract and role source once, the intended stage bodies once, and no prior outgoing packet. Programming and guided packets alone contain the Loop; they contain one initiating-host adapter, never an adapter collection.
-- Source identity for the embedded Loop describes the exact canonical bytes. Version and hashes are regenerated facts. They cannot be edited to bless a divergent mirror, and their presence does not replace substantive review.
+- Source identity for the embedded Loop names the dedicated authority, its exact imported revision/tree, the corresponding public release repository, and the matching 17-file Vibe snapshot. The public delivery manifest is separate from that product-files tree. The shared authority pin controls acceptance; generated version and hashes are supporting facts and cannot bless bytes or modes whose calculated Git tree diverges. Identity checks do not replace substantive review.
 - Missing metadata fails open only where truthful partial representation remains possible. It must not become a fabricated approval or hide a readable real artifact. Security, ownership, replacement, and publication boundaries continue to fail explicitly.
 - Host launch text is inert data, never a shell program. Long Markdown stays in a file with restrictive permissions, arguments are constructed as arrays or safely quoted wrappers, and an unsupported terminal leaves the saved handoff and Copy path intact.
 - Native entries remain loaders. Universal lifecycle behavior belongs in canonical frameworks, and host-specific Programming mechanics belong only in adapters. A new entry that restates the method creates a drift surface and should be consolidated before release.

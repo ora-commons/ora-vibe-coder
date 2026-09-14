@@ -1,9 +1,10 @@
 {
+  "authoritative_repository": "Golfplan18/ora-programming-loop",
   "component": "programming-loop",
   "files": {
     "LICENSE": "d08917ad4cf19dc0f4d6cffa9ffd792835a1748070539d7e783abc236cfa2c3c",
     "NOTICE.md": "192e926e1c3b277b624c728c6dfbff565f15c8448a3e833bd33fe3e62b6a4140",
-    "README.md": "83a033c239523a2911409b1fd91fed050627602b41d3c37a93c975cd4a5112bd",
+    "README.md": "3f4ec3918e098061635ad671ffe583b6a3cdf5a90f428de6da37e69e42cc22aa",
     "VERSION": "59854984853104df5c353e2f681a15fc7924742f9a2e468c29af248dce45ce03",
     "adapters/claude.md": "4c6f4bcb836026f04a329e81d88d97a67693d0fce5cce6d4f8b1feee5ff35e89",
     "adapters/codex.md": "ab22d9451af9a6dd28e0fb515cb43cf14478c201c018ddfaa31b10d9dfb57bbb",
@@ -15,9 +16,14 @@
     "profiles/claude/programming-loop-reviewer.md": "c5aa930a38a9b5795a927b78f96d5f538607e56fd6d82f0cdcbba974caf03a09",
     "profiles/qwen/programming-loop-reviewer.md": "083fdb0244d4061bec893c65d8b4c3f8286387c48953e8df77ff87d8e88ce209",
     "profiles/zcode/programming-loop-reviewer.md": "ea1fbd60f4683fd0fc33394c68b1b4a8ce83778e1ac6974829d5aa5630fa9fed",
-    "scripts/install.py": "b06fb810dd88292d53197ff6434631fb034108f35baab7e68366909be164316e",
-    "skills/programming-loop/SKILL.md": "858e9df37aa6b55a125ec8909bfb1ec407144a20bbc233f51c71626e883a28b9"
+    "scripts/install.py": "f772e4e8246a80fc3efcb99e5aeff112ef3a6c17776f418d3c787ffa54fbcc94",
+    "skills/programming-loop/SKILL.md": "858e9df37aa6b55a125ec8909bfb1ec407144a20bbc233f51c71626e883a28b9",
+    "tests/test_distribution.py": "9c0d7acd69ca592952f881aa85eb66b2d0f44c8fa546e4c89e0bfe22c00f0cbe"
   },
+  "public_release_repository": "ora-commons/ora-programming-loop",
   "source": "programming-loop",
+  "source_revision": "bd59b1150ea110e2a2ededac820238a46ceb49d2",
+  "source_tree": "6750b01c295fa91f914225a6cd476402c4177560",
+  "vendored_snapshot": "components/programming-loop",
   "version": "1.0.0"
 }
