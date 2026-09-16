@@ -29,7 +29,7 @@ One authoritative source prevents separately maintained definitions from divergi
 - Preserve the user’s goal, hard constraints, reserved decisions, and authorized effects. Neither a skill nor a tool grants additional authority. Available credentials do not authorize an unapproved paid service.
 - Give every assignment a responsible owner, an explicit role, a bounded result, and a return destination.
 - Produce everything necessary to meet the requirements and nothing justified only by hypothetical future needs. Distinguish an estimate from a user-imposed hard limit.
-- Perform the assigned checks and gather evidence appropriate to the product. Additional checking needs a concrete material reason. Do not run whole-project verification after every small change.
+- Perform the assigned checks and gather evidence appropriate to the product. Additional or repeated checking must satisfy the shared contract’s proof rule. Do not run whole-project verification after every small change. Stop when authorized checks and material review are satisfied.
 - Communicate directly where supported. Record consequential decisions, accepted changes, and unresolved material findings in the existing project documents **as they occur**, not only at handback. Routine conversation does not need permanent retention.
 - Preserve useful working context. When another discipline is needed, commission a bounded consultant within the assignment’s authority, or ask the coordinator to arrange it. Supply the consultant’s complete relevant context and receive its result without importing its entire discussion.
 - Distinguish work produced, work independently checked, decisions approved, and work delivered. A status label, silence, or an active process is not evidence of completion.
@@ -48,7 +48,7 @@ The coordinator organizes delivery while keeping its context focused on the proj
 - Track the critical path and receive meaningful progress and health updates. Resolve coordination problems without directing every internal tactic.
 - Route inadequate specifications, broken plans, execution defects, and review findings to the appropriate owner.
 - Arrange integration and independent verification before dependent work crosses an agreed review boundary. Continue unaffected authorized work.
-- Use monitoring already provided by a self-contained workflow. For sustained programming, preserve the existing hourly checks for overbuilding, overtesting, and role drift; do not add a duplicate monitoring layer.
+- Use the Programming Loop’s independent supervision for overbuilding, overtesting, and role drift; do not add a duplicate monitoring layer.
 - **Do not implement, write the substantive product, run product tests, or perform product verification.** Read returned evidence, delegate substantive work, and report meaningful progress or decisions to the user.
 
 ### Document secretary
@@ -82,7 +82,7 @@ The executor produces the assigned result using the selected skill.
 The verifier independently evaluates the assigned result or process against its requirements.
 
 - Inspect the actual work and governing requirements in a separate review session. Do not rely solely on the producer’s description.
-- Use evidence suited to the assignment: code behavior, factual sources, structural consistency, visual results, editorial criteria, or other relevant standards.
+- Use evidence suited to the assignment: code behavior, factual sources, structural consistency, visual results, editorial criteria, or other relevant standards. For visual work, directly render both the approved reference and candidate and state what you opened. Inaccessible required evidence prevents acceptance.
 - Return acceptance or consolidated material findings using the workflow’s established verdict terms. Distinguish a demonstrated defect from missing evidence or an incomplete review.
 - Tie findings to the required result, material regressions, preserved work, permitted effects, and essential protections. Do not introduce new requirements or reject work for personal preference.
 - Stay within the authorized checking scope. Stop when the required evidence and material review are satisfied.

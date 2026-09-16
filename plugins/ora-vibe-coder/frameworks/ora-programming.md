@@ -8,6 +8,12 @@ Use this framework with the complete [shared contract](../references/shared-cont
 
 Address the entry assignment to the existing Programming Loop owner. Supply the complete role source and assignment through its approved task instructions. That owner passes applicable role instructions and complete assignments to producing executors and independent verifiers through the Loop's worker briefs and dispatch method. An outer coordinator commissions the complete Loop and receives its handback; it does not take over internal workers or add a second team.
 
+## Transfer Programming ownership
+
+- A session that participated in Specification, Planning, or a failed implementation cannot coordinate Programming. Session history decides this, not task complexity.
+- The initiating session and host adapter automatically deliver one complete handoff and transfer sole Programming ownership to one fresh coordinator that can dispatch and monitor the fresh executor and independent reviewer. A session opened specifically for Programming from approved artifacts is already fresh; do not add another coordinator.
+- The user does not open, copy between, or manage worker conversations. If the actual host cannot preserve these boundaries, report the concrete limitation. Do not collapse roles or add an outer coordination layer. This rule controls Programming worker transfer; initial user delivery of a prepared request remains supported.
+
 ## Check the basis and companion
 
 Read the supplied Specification and Implementation Plan or substantive equivalents. Judge them by content:
@@ -44,11 +50,13 @@ Never install a coding tool, authenticate, discover credentials, choose a paid
 route, or switch providers merely to make an adapter usable. If the selected
 recipient cannot establish its native route, show the complete manual delivery
 option and disclose that execution or review isolation remains unestablished
-until a qualified recipient returns evidence.
+until a qualified recipient returns evidence. If it cannot establish the
+required automatic Programming transfer, report that concrete limitation
+instead of asking the user to manage worker conversations.
 
 ## Create the clean handoff
 
-Prepare one complete body for the released Programming Loop. Invoke its available documented interface only under the applicable authority; otherwise show the full manual handoff, what recipient to open, what to paste, and the expected next result. A prepared or copied body is not a Loop run. Include:
+Prepare one complete body for the released Programming Loop. Invoke its available documented interface only under the applicable authority; otherwise show the full manual handoff, what recipient to open, what to paste, and the expected next result. When execution is authorized, deliver it under the ownership-transfer rule above. A preparation-only request stops with the handoff; a prepared or copied body is not a Loop run. Include:
 
 - the approved Specification and Plan when each exists;
 - otherwise the available current requirements, exact known gaps, and every consequential unresolved assumption;
@@ -74,7 +82,7 @@ The Programming Loop remains sole owner of project inspection, scope approval, c
 
 If Programming finds an inadequate WHAT or HOW, its owner routes a bounded Specification or Planning assignment under the shared correction rules. Obtain the required review and acceptance, incorporate the accepted amendment through document custody, and refresh affected workers before resumption. Ask the user for changes outside delegated authority or to retained decisions, preserving initial upstream approvals. Ordinary implementation correction stays with the Loop, whose existing correction procedures and verdicts remain controlling.
 
-The Programming Loop's single hourly overseer after 60 minutes is inherited only while Programming is actively executing. This framework does not create or extend a monitor.
+The Programming Loop's single independent supervisor owns milestone and timed inspections while Programming is actively executing. This framework creates no additional monitor.
 
 ## Output and stop
 

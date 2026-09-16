@@ -66,7 +66,7 @@ The fresh reviewer returns either no material findings or one consolidated curre
 
 In the guided path, use only the Plan's exact authorized checks and require all of them to pass. Do not widen the ceiling for reassurance.
 
-In standalone use, begin read-only inspection immediately. Propose an additional check only when a named material risk cannot be judged from read-only evidence and no credible current output resolves it. Show the smallest exact check and its risk; this proposal is not permission to run it. If the user declines, continue the rest of the review and mark the unjudged risk `NOT PASSED — REVIEW INCOMPLETE`.
+In standalone use, begin read-only inspection immediately. Any proposed additional or repeated check must satisfy the shared contract’s proof rule; use credible current evidence first. Show the smallest necessary check; a proposal is not permission to run it. If required evidence remains unavailable, continue the rest of the review and mark the affected criterion `NOT PASSED — REVIEW INCOMPLETE`.
 
 Standalone Verification stops with findings and its recommendation; it never invokes a correction stage secretly. In the guided path, return the complete correction set to the owner for the earliest responsible stage. Specification and Plan amendments follow shared review, acceptance, custody, and refresh rules; retained user approvals remain required. Programming corrects implementation and affected documentation, affected authorized checks are refreshed, and the whole current candidate receives another fresh cumulative Verification. Do not review only the last fix or convert an unresolved defect into a final limitation.
 

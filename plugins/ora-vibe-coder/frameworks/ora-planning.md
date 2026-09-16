@@ -55,7 +55,7 @@ Choose the smallest useful working pattern for each phase:
 
 - An executor and separate verifier for bounded production and independent checking.
 - A bounded consultant using the relevant skill for a distinct question, returning to the caller with useful execution context preserved.
-- Coordinated parallel assignments for genuinely independent work, with shared accepted documents and exclusive ownership of conflicting changes.
+- One writer for a coupled foundation until independent acceptance; then path-exclusive parallel lanes with one writer per shared integration surface. Freeze all edit lanes before cumulative review.
 
 Each assignment supplies the role contract's complete brief, prerequisites, waiting dependencies, expected evidence, and next owner. Plan integration and verification where outputs join, and show the critical path through finishing work. Use existing coordination to take only ready, unowned work; create no scheduler or parallel tracking system.
 
@@ -81,11 +81,11 @@ Produce one current Plan with only useful project-specific content, in this orde
 
 > **Implementation safeguards**
 >
-> Build only the product defined by the approved Specification, using the simplest implementation that fulfills it and fits the inspected project. Do not add speculative features, future-proofing, generalized frameworks, compatibility layers, tracking systems, extension mechanisms, or edge-case machinery unless the Specification requires them or their absence would cause a named material failure.
+> Build only the product defined by the approved Specification, using the simplest implementation that fulfills it and fits the inspected project. Reject speculative features, future-proofing, generalized frameworks, compatibility layers, tracking systems, extension mechanisms, and edge-case machinery. Any proposed discretionary addition must satisfy the supplied shared contract’s proof rule; a named material risk is not sufficient.
 >
 > Every lasting component must enable a required behavior, truth guarantee, safety property, or necessary recovery capability. If it does none of those, remove it. A newly discovered missing WHAT returns to Specification for the user's decision; implementation must not silently choose it.
 >
-> The checks named in this Plan are the complete testing ceiling. An additional check may be proposed only when a newly discovered concrete material risk cannot be judged by the approved checks, and it must be the smallest check that judges that risk. Do not run a full suite or full build unless this Plan names it and explains why narrower checks cannot responsibly judge the changed surface.
+> The checks named in this Plan are the complete testing ceiling. A named test file does not authorize unlimited test additions or reruns. Additional or repeated checks, broad suites, and builds must satisfy the supplied shared contract’s proof rule and necessary authority. Run approved checks after coherent batches; count invocations in existing check output, without a tracker.
 >
 > Add or change tests only for user-visible behavior, a material regression, preservation of important content or data, or essential failure behavior. Stop testing when the approved checks pass and material review is satisfied.
 >
