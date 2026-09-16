@@ -40,7 +40,7 @@ Assign an executor Ora Planning with the current Request, approved Specification
 
 ### 3. Programming
 
-Commission the Programming Loop owner through Ora Programming with the approved Specification and Plan, role source, complete assignment, actual project state, and protected-work facts. Exclude raw Request history, planning discussion, and Gear deliberation. The Loop owns scope approval, internal workers, exact checks, independent review, verdicts, correction, Git finish line, documentation, recovery, single hourly oversight, and cleanup. Receive its inspectable candidate and evidence; create no second execution or monitoring lane.
+Commission the Programming Loop owner through Ora Programming with the approved Specification and Plan, role source, complete assignment, actual project state, and protected-work facts. Exclude raw Request history, planning discussion, and Gear deliberation. The Loop owns scope approval, internal workers, exact checks, independent review, verdicts, correction, Git finish line, documentation, recovery, single independent supervision, and cleanup. Receive its inspectable candidate and evidence; create no second execution or monitoring lane.
 
 ### 4. Verification
 

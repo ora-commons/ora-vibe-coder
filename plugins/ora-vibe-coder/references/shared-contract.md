@@ -18,7 +18,11 @@ For every question, suggestion, artifact, check, and process element, ask:
 
 > If this did not exist, which required behavior, truth guarantee, safety property, or recovery capability would become impossible?
 
-Omit anything whose only value is tracking, possible future use, architectural elegance, optional polish, or reviewer convenience. Prevent both under-specification, in which the AI silently chooses part of the product, and over-construction, in which it adds machinery or scope that does not advance the user's goal or prevent a material failure.
+- Omit anything justified only by tracking, possible future use, architectural elegance, optional polish, or reviewer convenience. Prevent both under-specification, in which the AI silently chooses part of the product, and over-construction, in which it adds machinery or scope that does not advance the user's goal or prevent a material failure.
+- Before proposing a discretionary addition, restriction, extra or repeated check, broad suite, or build, the proposer must supply all four: the specific approved requirement; verifiable evidence it fails or cannot be met without the addition; why the existing simpler approach cannot meet it; and the necessary authority. Otherwise reject the proposal. Apply this rule to planning and reviewer demands too.
+- “Material risk,” hypothetical catastrophe, rarity, “hardening,” safety, quality, and future usefulness do not substitute for that proof. Do not propose optional hardening to the user.
+- A justified restriction must identify its smallest reversible change, affected paths, user friction, compatibility and maintenance cost, extra testing, new failure modes, and removal path.
+- Optional enrichment paths fail open with loud reporting. Existing security, authentication, authority, publication, and data-integrity controls retain their required failure behavior.
 
 A **material** issue can cause a wrong user-visible result, lost content or data, a false claim or misattribution, a real runtime or deployment failure, unauthorized scope or effects, a broken atomic operation, a failed necessary recovery, a security exposure, or failure to fulfill the user's stated goal. Style preferences and speculative improvements are not material.
 
@@ -35,7 +39,12 @@ Read all supplied material and use available inspection before asking the user a
 
 Ask only for a user-owned decision or fact that inspection, safe inference, or reversible professional judgment cannot responsibly supply. Ask one decision at a time. Before asking, show what is being decided, why it matters, what each live option does, its concrete cost or risk, whether it is reversible, and the recommended option. Match technical depth to the user's interest while keeping every consequential choice visible.
 
-Preserve the user's terminology, values, boundaries, corrections, and intentionally unresolved ambiguity. A later direct correction controls over an earlier statement; show a real conflict rather than silently combining versions. Tie every proposed requirement or implementation option to an existing goal or a concrete material failure. Recommend the simpler route when it fulfills the same result.
+Preserve the user's terminology, values, boundaries, corrections, and intentionally unresolved ambiguity. A later direct correction controls over an earlier statement; show a real conflict rather than silently combining versions. Tie every proposed requirement or implementation option to the user’s goal; discretionary additions must also satisfy the proof rule above. Recommend the simpler route when it fulfills the same result.
+
+## Establish reference meaning
+
+- Specification records each approved reference as **literal** (binding source and observable result), **adaptive** (only named aspects may change), or **conceptual** (an idea, not a binding implementation). Planning and Programming apply that classification without reclassifying; resolve consequential uncertainty through Specification before dependent planning.
+- For a literal executable reference, use its source as the starting implementation; every observable object, state, interaction, and behavior is binding. A similar rewrite is insufficient. Before coding, Planning maps that source to required behavior in the existing Plan. Report a material incompatibility or proposed deviation before rewriting.
 
 ## Keep WHAT and HOW with their owners
 
@@ -127,6 +136,9 @@ Assemble a complete Markdown body for each fresh stage, Gear, Bridge, independen
 | Programming | Approved Specification and Plan when available; otherwise current requirements, exact gaps and assumptions; project path and protected state | Raw Request history, planning discussion, Gear deliberation |
 | Verification | Accessible candidate and specification material; Plan, documentation, credible checks, baseline or diff when they exist; every guided-path product | Raw Request history, implementation transcript, prior claims offered as proof |
 | Correction | Consolidated current material findings, controlling artifacts, actual candidate, and evidence needed by the owning stage | Superseded findings and unrelated review commentary |
+
+- Give every executor and reviewer the exact current governing instructions, Specification, Plan, approved references, retained decisions, acceptance criteria, baseline, permitted effects, and test ceiling applicable to the assignment. Preserve explicitly approved omissions.
+- Before dependent work, require the receiver to open each required item and report any access failure to its owner. Bridge requests must be self-contained and grant the required reading access.
 
 Prepare the visible packet in this order:
 

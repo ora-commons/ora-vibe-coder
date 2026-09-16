@@ -11,8 +11,8 @@ import re
 AUTHORITY = {
     "authoritative_repository": "Golfplan18/ora-programming-loop",
     "public_release_repository": "ora-commons/ora-programming-loop",
-    "source_revision": "bd59b1150ea110e2a2ededac820238a46ceb49d2",
-    "source_tree": "6750b01c295fa91f914225a6cd476402c4177560",
+    "source_revision": "6ad795606dbfe3bdb7b1a3006e472b811369ea24",
+    "source_tree": "766950c288f3764a45e9721da7905bfccd374f2d",
     "vendored_snapshot": "components/programming-loop",
 }
 
