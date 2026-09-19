@@ -57,7 +57,7 @@ Companion check:
 ## Create the clean handoff
 
 - Prepare one complete body for the released Programming Loop.
-- Invoke its available documented interface only under the applicable authority; otherwise show the full manual handoff — what recipient to open, what to paste, and the expected next result.
+- Invoke its available documented interface only under the applicable authority; otherwise show the full manual handoff, what recipient to open, what to paste, and the expected next result.
 - When execution is authorized, deliver it under the ownership-transfer rule above.
 - A preparation-only request stops with the handoff; a prepared or copied body is not a Loop run.
 
@@ -68,6 +68,8 @@ Include:
 - the actual project path and current state;
 - factual protected state needed to preserve user work; and
 - the shared handoff contract's authority limits, exact authorized checks, output locations, and truthful access limitations.
+
+Assignment content:
 
 - Include the contract's complete assignment: owner and return destination, applicable role and skill, current accepted inputs, dependencies, operating limits, delegated discretion, document custodian, and retained approvals.
 - Carry the Specification's completion conditions and the Plan's whole delivery route, identifying what this Loop must finish and what returns to another owner afterward.
@@ -80,14 +82,15 @@ Tell the Programming Loop that the complete candidate includes product code in i
 - **Technical Documentation** — actual architecture, responsibilities, control and data flow, safe operation and configuration, interfaces, dependencies, checks, failure behavior, recovery, and safe maintenance. Do not duplicate source code or construction history; and
 - **Product Overview** — a plain-language decision aid beginning with a concise paragraph explaining purpose, intended users, value, and any key condition. Explain the problem, uses, benefits, limits, prerequisites, and expected result without becoming a second User Guide or marketing fiction.
 
+Documentation rules:
+
 - Use the shared default filenames when this is a guided Ora project.
 - Do not add another documentation command or copy source code into a Markdown artifact.
 
 ## Respect ownership
 
 - The Programming Loop remains sole owner of project inspection, scope approval, clean-context execution, exact checks, independent implementation review, correction, Git delivery and rollback, active-execution oversight, and task cleanup. Its exact check list is the testing ceiling. Ora creates no parallel records or execution lane.
-- If Programming finds an inadequate WHAT or HOW, its owner routes a bounded Specification or Planning assignment under the shared correction rules: obtain the required review and acceptance, incorporate the accepted amendment through document custody, and refresh affected workers before resumption.
-- Ask the user for changes outside delegated authority or to retained decisions, preserving initial upstream approvals.
+- If Programming finds an inadequate WHAT or HOW, its owner routes a bounded Specification or Planning assignment under the shared correction rules. Obtain the required review and acceptance, incorporate the accepted amendment through document custody, and refresh affected workers before resumption. Ask the user for changes outside delegated authority or to retained decisions, preserving initial upstream approvals.
 - Ordinary implementation correction stays with the Loop, whose existing correction procedures and verdicts remain controlling.
 - The Programming Loop's single independent supervisor owns milestone and timed inspections while Programming is actively executing; this framework creates no additional monitor.
 

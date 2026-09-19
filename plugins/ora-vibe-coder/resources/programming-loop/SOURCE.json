@@ -5,14 +5,14 @@
     "LICENSE": "d08917ad4cf19dc0f4d6cffa9ffd792835a1748070539d7e783abc236cfa2c3c",
     "NOTICE.md": "192e926e1c3b277b624c728c6dfbff565f15c8448a3e833bd33fe3e62b6a4140",
     "README.md": "672dc844f9f63aa4b0a9ef2370b822663c986c5646b73e8a17eba377fa72d7cb",
-    "VERSION": "9fd28642d3aca191e5c7fc2383cfd6fabb2aac8743f029dabb8989ac584e31bc",
+    "VERSION": "f5e5c9534532840fcd45bb002e69ed85c61dba2753450e26b448b7df1481e24d",
     "adapters/claude.md": "51392019479360daa9d2b2992752a5a4931b72f05997ab82a138829366eacb48",
     "adapters/codex.md": "ab22d9451af9a6dd28e0fb515cb43cf14478c201c018ddfaa31b10d9dfb57bbb",
     "adapters/hermes.md": "8d8dac0c6d2c7b7775e5faabbdec8c539db03e7e4627c6c078ac5dc261460ff9",
     "adapters/minimax.md": "89ec4b39477c0b974241c1b151d0a3b4bc19a12131b692b64f4b406e8cd73c0a",
     "adapters/qwen.md": "99ee4cf0f441aade18f218452830ee6fa6b0bddef6aa37f841de6980d96ff96d",
     "adapters/zcode.md": "06fc9f5cae58f3d1b1078c604c67461bfee2e461dbfd56c00efa8842db5eb8d2",
-    "frameworks/programming-loop.md": "703d4c646fcdc23d4aa1d1f54ffc38459fd705b998db111b901186688ddfb328",
+    "frameworks/programming-loop.md": "73b35a51267d19bc7983b088c4c3799b9374d78ffabde70b1ccf9c4aeed69af0",
     "profiles/claude/programming-loop-reviewer.md": "c5aa930a38a9b5795a927b78f96d5f538607e56fd6d82f0cdcbba974caf03a09",
     "profiles/qwen/programming-loop-reviewer.md": "083fdb0244d4061bec893c65d8b4c3f8286387c48953e8df77ff87d8e88ce209",
     "profiles/zcode/programming-loop-reviewer.md": "ea1fbd60f4683fd0fc33394c68b1b4a8ce83778e1ac6974829d5aa5630fa9fed",
@@ -22,8 +22,8 @@
   },
   "public_release_repository": "ora-commons/ora-programming-loop",
   "source": "programming-loop",
-  "source_revision": "af796f4d8d7f6383fc1dbfe490d738e21c826b89",
-  "source_tree": "eb6410cbbe891d6cd39b57585448b35ea6f6ee35",
+  "source_revision": "1719eaed5f4c7c5d63dec65e011e6643b46de04c",
+  "source_tree": "f38487dd1937fd666a6839becce26244623cc9ad",
   "vendored_snapshot": "components/programming-loop",
-  "version": "1.0.2"
+  "version": "1.0.3"
 }

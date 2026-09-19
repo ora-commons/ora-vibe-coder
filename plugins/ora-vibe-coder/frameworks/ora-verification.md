@@ -30,6 +30,8 @@ For the guided path, assemble:
 - exact output from every check authorized by the Plan; and
 - the relevant cumulative diff when one exists.
 
+Basis limits:
+
 - Exclude raw Request discussion and implementation transcripts.
 - When an upstream artifact was explicitly skipped, disclose the reduced conformance basis.
 - For standalone use: identify exact omissions and continue everything still judgeable rather than inventing requirements or rejecting the whole review.
@@ -85,10 +87,16 @@ The fresh reviewer returns either no material findings or one consolidated curre
 
 ## Checks and correction
 
-- In the guided path, use only the Plan's exact authorized checks and require all of them to pass; do not widen the ceiling for reassurance.
-- In standalone use, begin read-only inspection immediately.
+- In the guided path: use only the Plan's exact authorized checks and require all of them to pass; do not widen the ceiling for reassurance.
+
+In standalone use:
+
+- Begin read-only inspection immediately.
 - Any proposed additional or repeated check must satisfy the shared contract's proof rule; use credible current evidence first. Show the smallest necessary check; a proposal is not permission to run it.
 - If required evidence remains unavailable: continue the rest of the review and mark the affected criterion `NOT PASSED — REVIEW INCOMPLETE`.
+
+Correction routing:
+
 - Standalone Verification stops with findings and its recommendation; it never invokes a correction stage secretly.
 - In the guided path, return the complete correction set to the owner for the earliest responsible stage.
 - Specification and Plan amendments follow shared review, acceptance, custody, and refresh rules; retained user approvals remain required.
@@ -113,6 +121,8 @@ Only then create `<Project Name> — 07 Report.md` through an authorized report 
 - a concise summary of exact check evidence rather than raw logs;
 - the truthful readiness conclusion for the use named by the Specification; and
 - the delivered-material list: Request, Specification, Implementation Plan, product-code path or revision, User Guide, Technical Documentation, Product Overview, and REPORT.
+
+REPORT limits and handback:
 
 - REPORT may describe approved limits or a genuinely reduced basis only when its conclusion remains true.
 - REPORT must not contain: an unresolved material defect, a reviewer transcript, a construction diary, or a claim that its own existence proves success.

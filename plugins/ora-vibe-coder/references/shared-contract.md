@@ -4,9 +4,7 @@ Read and apply this contract and the [role-and-assignment contract](role-and-ass
 
 ## Assign responsibility before work
 
-At entry:
-
-- Identify the receiving session's role, method, assignment owner, and return destination.
+- At entry, identify the receiving session's role, method, assignment owner, and return destination.
 - Use the stage's entry assignment below and the role contract's six-part brief, including the project-specific completion endpoint.
 - Load common rules and the assigned role; coordinators and team designers read the complete catalogue.
 - Stage names and app document categories are not agent roles.
@@ -46,7 +44,7 @@ For every question, suggestion, artifact, check, and process element, ask:
 - A justified restriction must identify: its smallest reversible change; affected paths; user friction; compatibility and maintenance cost; extra testing; new failure modes; and removal path.
 - Optional enrichment paths fail open with loud reporting; existing security, authentication, authority, publication, and data-integrity controls retain their required failure behavior.
 
-A **material** issue is any of: a wrong user-visible result; lost content or data; a false claim or misattribution; a real runtime or deployment failure; unauthorized scope or effects; a broken atomic operation; a failed necessary recovery; a security exposure; or failure to fulfill the user's stated goal. Style preferences and speculative improvements are not material.
+A **material** issue causes or is highly likely to cause any of: a wrong user-visible result; lost content or data; a false claim or misattribution; a real runtime or deployment failure; unauthorized scope or effects; a broken atomic operation; a failed necessary recovery; a security exposure; or failure to fulfill the user's stated goal. Style preferences and speculative improvements are not material.
 
 ## Understand before asking
 
@@ -59,10 +57,15 @@ Read all supplied material and use available inspection before asking the user a
 - the recommendation and its reason; and
 - the live alternatives when a real choice remains.
 
+Asking:
+
 - Ask only for a user-owned decision or fact that inspection, safe inference, or reversible professional judgment cannot responsibly supply. Ask one decision at a time.
 - Before asking, show: what is being decided; why it matters; what each live option does; its concrete cost or risk; whether it is reversible; and the recommended option.
-- Match technical depth to the user’s interest while keeping every consequential choice visible.
-- Preserve the user’s terminology, values, boundaries, corrections, and intentionally unresolved ambiguity.
+- Match technical depth to the user's interest while keeping every consequential choice visible.
+
+User material:
+
+- Preserve the user's terminology, values, boundaries, corrections, and intentionally unresolved ambiguity.
 - A later direct correction controls over an earlier statement; show a real conflict rather than silently combining versions.
 - Tie every proposed requirement or implementation option to the user’s goal; discretionary additions must also satisfy the proof rule above.
 - Recommend the simpler route when it fulfills the same result.
@@ -78,7 +81,7 @@ Read all supplied material and use available inspection before asking the user a
 - Planning owns how the approved product will be implemented in the inspected project.
 - A method belongs in Specification only when the user made it part of the required outcome or it is a genuine product constraint.
 - Route missing or incorrect WHAT to an executor using Specification; route inadequate HOW to an executor using Planning.
-- Correction route: delegated detail can receive review and acceptance within existing authority; changing a goal, hard constraint, reserved decision, or authorized effect requires the user's decision.
+- Use the role contract's correction route: delegated detail can receive review and acceptance within existing authority; changing a goal, hard constraint, reserved decision, or authorized effect requires the user's decision.
 - Never disguise either as an ordinary implementation choice; never treat consultation alone as an accepted amendment.
 
 ## Treat readiness as advice, not hidden authority
@@ -114,26 +117,36 @@ The default retained filenames are:
 - For a new-project collision, ask for another project name or directory.
 - Never silently overwrite; never invent a timestamp, ID, suffix, version folder, archive, registry, or retention system.
 
+Keeping the Request current:
+
 - Update the Request when the user supplies or corrects a material goal, requirement, boundary, fact, authority, or approval during an interactive stage.
 - Organize decisions by subject and preserve enough surrounding meaning to understand the instruction; never turn the Request into a chronological transcript of every turn, analysis, Gear exchange, rejected draft, implementation action, test event, or status poll.
 - Update the current Specification or Plan too when the correction changes its controlling meaning; keep each as one current synthesis, not an amendment log.
+
+Authorship and custody:
 
 - Name the substantive author, acceptance owner, and document custodian in the existing assignment or current project documents.
 - The secretary, when assigned, handles custody under the role contract.
 - Record consequential accepted decisions and unresolved material findings as they arise in the relevant existing documents; routine discussion stays out.
 - When substantive documentation is missing or wrong, assign its creation or correction to an executor with the appropriate skill.
 
+Amendments:
+
 - Keep proposed amendments distinct from governing text until the author, required independent review, and applicable approval are established.
 - Initial Specification and Plan approval remain explicit user decisions.
 - The owner may accept a reviewed amendment within discretion already delegated by the user; changes beyond it return the actual conflict and recommendation to the user.
 - The custodian incorporates accepted meaning into the current synthesis and notifies the coordinator and affected workers.
-- Affected workers refresh their governing inputs before affected work resumes; unaffected authorized work continues.
+- The coordinator and affected workers refresh their governing inputs before affected work resumes; unaffected authorized work continues.
 - Never settle a disagreement through a silent rewrite; never import a consultant's whole discussion.
+
+Managed project files:
 
 - Managed projects may also have a small `Project.md` overview and one current `Handoff.md`; these are associations and an outgoing snapshot, not competing requirement authorities.
 - Use explicitly designated current files rather than guessing from filenames, dates, or modification times; adequate existing files need not be renamed.
 - Disclose a missing, unreadable, or ambiguous association with a file-selection remedy; never treat it as an empty successful result.
 - Direct framework use requires neither app file, its naming, nor Ora history.
+
+Temporary material:
 
 - Temporary unless the user requests an extra: Bridge sessions, Gear working records, reviewer prompts, disposable projects, and atomic staging files.
 - Keep task-owned temporary material only while correction, resumption, or rollback needs it; then remove it without deleting user files, another task's work, or companion qualification records.
@@ -150,13 +163,17 @@ The default retained filenames are:
 - An optional external reviewer remains a bounded recipient of the review packet.
 - The initiating host continues to own dispatch, evidence collection, correction, and delivery.
 
+Distribution truth:
+
 - Package identity and live capability are separate facts.
-- Distribution integrity — establishable without contacting a model — comes from: exact files, valid links, source hashes, installation destinations, transactional recovery, and fake host fixtures.
+- Exact files, valid links, source hashes, installation destinations, transactional recovery, and fake host fixtures can establish distribution integrity without contacting a model.
 - That evidence cannot establish: live login, account access, provider selection, model identity, permission behavior, or end-to-end qualification.
 - State the strongest fact the evidence proves and no stronger.
 - When a live route reports model or provider attribution, preserve the exact returned attribution beside the requested selector. Never infer an effective model from an alias, command option, launch acknowledgement, or intended route. Missing, ambiguous, multiple, or mismatched attribution leaves that identity unverified. This truth rule authorizes no call, credential use, or paid fallback.
 - Generated copies report, rather than create, truth: retain the canonical source identity and exact file hashes; generate through the one approved assembler; never repair a mirror by hand. If the source and mirror differ, correct the canonical input or generator and regenerate. A hash match proves byte parity, not semantic quality or runtime success.
 - Native delivery is a convenience. A visible, complete manual Markdown handoff remains the portable baseline when a native operation is absent, inaccessible, or unsuitable. Disclose which context or artifact the manual recipient cannot access; preparing or copying it still does not prove receipt or execution.
+
+Reviewer profiles and independence:
 
 - A selected reviewer profile is a useful default, not a security boundary or proof of independence.
 - The coordinator must: inspect the host's effective tool and permission behavior; state the review-only authority in the assignment; and inspect the resulting repository state.
@@ -187,12 +204,16 @@ Prepare the visible packet in this order:
 4. **Current material:** supply only the destination-appropriate content in the table, with each item's role, source, and access limitation. Label quoted project data separately from instructions. The recipient must apply its own instruction hierarchy, permissions, and companion checks.
 5. **Gaps and next result:** identify every known missing input, consequential unresolved assumption, reduced basis, required companion, and the next bounded assignment and inspectable handback expected by its owner. Preserve the governing completion conditions downstream. Do not imply omitted material was supplied.
 
+Packet access:
+
 - A local path is usable only when the recipient can actually access it.
-- Disclose local paths that are unavailable remotely, unreadable, oversized, binary, remote, or user-designated sensitive.
+- Disclose local paths unavailable remotely, and unreadable, oversized, binary, remote, or user-designated sensitive material.
 - Supply honest references and access limits instead of unsuitable attachments; retain all useful permitted context.
 - During packet preparation, never silently truncate, upload, fetch remote content, scan for secrets, discover unselected harnesses, or transform the user's text into shell commands.
 - A reading-size ceiling is not a promise that a model can accept the packet's entire context.
 - Missing optional material must not block a useful reduced-basis handoff.
+
+Outgoing snapshot:
 
 - Build one current outgoing snapshot from the exact input and designated sources; never append or include an earlier outgoing packet, even when it was accidentally associated with another document role.
 - Preserve source documents.
@@ -200,10 +221,14 @@ Prepare the visible packet in this order:
 - Use a temporary sibling and atomic replacement. On failure: retain the user's input and prior saved handoff; remove only operation-owned staging; do not report success.
 - Never invent archives, suffixes, renames, or deletion as a fallback.
 
+Delivery baseline:
+
 - Copy-and-paste is the fully supported delivery baseline: show what to open, what complete raw Markdown to paste, and the expected next result.
 - Native entries are a convenience only when available.
 - Preparing, saving, displaying, or copying is not sending, beginning execution, completing review, or approving a stage; a process or window opening does not prove delivery.
 - While preparing a packet, never install, authenticate, select a hidden fallback target, or initiate a model call.
+
+App display agreement:
 
 - The app's displayed prepared source, saved handoff, and copied Markdown must agree, including content below the visible pane.
 - Before copying, compare the prepared snapshot with the saved file; if changed, show the current content and require another Copy action rather than copying unseen changes.
@@ -225,10 +250,14 @@ Prepare the visible packet in this order:
 | Programming | `Programming` in `Project.md` | `NOT STARTED`, `IN PROGRESS`, `COMPLETE`, `INCOMPLETE`, `CLOSED BY USER — UNRESOLVED FINDINGS` |
 | Verification | `Verification` in `Project.md` | `NOT STARTED`, `IN PROGRESS`, the quality vocabulary below, and `CLOSED BY USER — UNRESOLVED FINDINGS` |
 
+Recognized fields:
+
 - Require exactly one recognized field.
 - Missing, duplicate, malformed, or unrecognized labels mean Not reported or Unknown — never success; they do not block reading, preparation, copying, or selecting any stage.
 - No other legacy text maps to approval.
 - Specification and Planning review quality stays separate from their approval field: `PASSED` from Gear is not user approval, and `APPROVED` is not a claim that review passed.
+
+Setting values:
 
 - Set actual start/result state, not a forecast. Opening, reading, selecting a stage, preparing, and copying never change status.
 - Initial Specification and Plan approval, and revisions requiring a new user decision, use `IN PROGRESS` while revising and `AWAITING APPROVAL` when presented; only actual user approval sets `APPROVED`.
@@ -237,11 +266,15 @@ Prepare the visible packet in this order:
 - Programming becomes `COMPLETE` only at its approved execution finish line.
 - Verification becomes `PASSED` only under its independent whole-candidate passing contract; a fallback or unrepeated review is never a final `PASSED` result.
 
+Overview field updates:
+
 - Under normal write authority, Programming and Verification may update only their own named overview result field.
 - Reread `Project.md` immediately before the minimal update and preserve its other result, description, goals, associations, and all unowned text.
 - Do not overwrite changes observed since reading; simultaneous app/harness overview writes are unsupported.
 - This grants no permission to correct the candidate, Specification, Plan, or documentation during Verification.
 - If the brief is absent or writing is unavailable or unauthorized: report the result in conversation and leave the UI status unreported without blocking permitted work.
+
+Earlier REPORT:
 
 - After a later unsuccessful or incomplete Verification, retain an earlier REPORT without deletion or archival; identify it as a previous report, not current-pass evidence.
 - Stopping is not successful completion.
