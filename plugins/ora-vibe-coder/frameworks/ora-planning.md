@@ -2,24 +2,40 @@
 
 ## Purpose and boundary
 
-Turn an approved Specification or substantive equivalent into one executable HOW for the actual project. Prevent a fresh Programming Loop from having to redesign the solution, choose a consequential dependency, invent the affected scope, guess what risks deserve checks, or guess where the work finishes.
+Turn an approved Specification or substantive equivalent into one executable HOW for the actual project. A fresh Programming Loop must not have to:
 
-Use this framework with the complete [shared contract](../references/shared-contract.md) and its required role-and-assignment source. For portable use, supply all three texts. This entry works without Ora provenance or default filenames. Planning is read-only toward the target project and may write only Request and Plan artifacts under applicable artifact authority. Do not implement the Plan.
+- redesign the solution;
+- choose a consequential dependency;
+- invent the affected scope;
+- guess what risks deserve checks; or
+- guess where the work finishes.
 
-Assign the producing session the executor role using Ora Planning. As the team designer, it reads the complete role catalogue and receives a complete assignment, including the agreed completion endpoint and document custodian. The architecture describes actual assignments under that contract rather than inventing new worker roles.
+Use and authority:
+
+- Use this framework with the complete [shared contract](../references/shared-contract.md) and its required role-and-assignment source; for portable use, supply all three texts.
+- This entry works without Ora provenance or default filenames.
+- Planning is read-only toward the target project; it may write only Request and Plan artifacts under applicable artifact authority.
+- Do not implement the Plan.
+
+Assignment:
+
+- Assign the producing session the executor role using Ora Planning.
+- As team designer, it reads the complete role catalogue and receives a complete assignment, including the agreed completion endpoint and document custodian.
+- The architecture describes actual assignments under that contract; it invents no new worker roles.
 
 ## Inputs and readiness
 
-Read the current Request and Specification when they exist, or the substantive equivalents the user supplies. Evaluate product intent by content. If a material WHAT is absent, show:
+Read the current Request and Specification when they exist; otherwise use the substantive equivalents the user supplies. Evaluate product intent by content.
+
+If a material WHAT is absent, show:
 
 1. the exact missing product decision;
 2. the implementation choice that would otherwise be made for the user;
 3. the likely consequence of guessing; and
 4. the recommendation to use [Ora Specification](ora-specification.md).
 
-The user may explicitly ask to continue on a reduced basis. Do useful planning where the known requirements permit it, record the exact limitation, and do not call a Plan passed or executable while the missing WHAT still prevents responsible execution.
-
-For commissioned work, return a missing WHAT to the assignment owner for Specification under the shared correction route. Reviewed detail within delegated discretion does not automatically require user interruption; changes to reserved decisions still do.
+- On an explicit user request to continue on a reduced basis: plan where the known requirements permit, record the exact limitation, and never call a Plan passed or executable while the missing WHAT still prevents responsible execution.
+- For commissioned work, return a missing WHAT to the assignment owner for Specification under the shared correction route. Reviewed detail within delegated discretion does not automatically require user interruption; changes to reserved decisions still do.
 
 ## Inspect before choosing HOW
 
@@ -33,13 +49,14 @@ Inspect enough of the real starting state to make evidence-based choices. Where 
 - Git and working-tree state, including unrelated user work to protect; and
 - live automation or consequential external effects that shape the finish line.
 
-For a new project, inspect the actual target environment and supplied constraints. Stop discovery when facts are sufficient. Another pass needs a specific unanswered question capable of materially changing the Plan.
-
-If choosing HOW would decide who the product serves, required visible behavior, accepted or produced content or data, essential failure behavior, permissions, product boundaries, material quality, or which substantively different product to build, return the smallest decision to Specification. Do not hide it in a recommendation.
+- For a new project, inspect the actual target environment and supplied constraints.
+- Stop discovery when facts are sufficient; another pass needs a specific unanswered question capable of materially changing the Plan.
+- If choosing HOW would decide who the product serves, required visible behavior, accepted or produced content or data, essential failure behavior, permissions, product boundaries, material quality, or which substantively different product to build, return the smallest decision to Specification. Do not hide it in a recommendation.
 
 ## Choose and review the HOW
 
-Resolve ordinary reversible technical choices through professional judgment. Ask the user only when the choice materially changes outcome, scope, risk, cost, authority, external effects, a maintainability concern they care about, or the finish line.
+- Resolve ordinary reversible technical choices through professional judgment.
+- Ask the user only when the choice materially changes outcome, scope, risk, cost, authority, external effects, a maintainability concern they care about, or the finish line.
 
 Use the released Gear products through their available documented interface, or prepare a complete handoff to a recipient where they are available. A native command is only a convenience. Do not copy their implementation:
 
@@ -57,15 +74,65 @@ Choose the smallest useful working pattern for each phase:
 - A bounded consultant using the relevant skill for a distinct question, returning to the caller with useful execution context preserved.
 - One writer for a coupled foundation until independent acceptance; then path-exclusive parallel lanes with one writer per shared integration surface. Freeze all edit lanes before cumulative review.
 
-Each assignment supplies the role contract's complete brief, prerequisites, waiting dependencies, expected evidence, and next owner. Plan integration and verification where outputs join, and show the critical path through finishing work. Use existing coordination to take only ready, unowned work; create no scheduler or parallel tracking system.
+Each assignment supplies the role contract's complete brief, prerequisites, waiting dependencies, expected evidence, and next owner.
 
-Balance possible parallel speed against handoff cost, coupling, duration, context needs, and independent-review requirements. Select capable models and harnesses according to current availability and authorized cost, separately from roles. Do not impose a fixed model, context/token threshold, permanent team size, or an extra coordinator/secretary where the existing loop and an explicit document custodian suffice.
+- Plan integration and verification where outputs join; show the critical path through finishing work.
+- Use existing coordination to take only ready, unowned work; create no scheduler or parallel tracking system.
+
+Balance and staffing:
+
+- Balance possible parallel speed against handoff cost, coupling, duration, context needs, and independent-review requirements.
+- Select capable models and harnesses according to current availability and authorized cost, separately from roles.
+- Do not impose a fixed model, context/token threshold, permanent team size, or an extra coordinator/secretary where the existing loop and an explicit document custodian suffice.
 
 ## Review costly foundations early
 
-Identify foundations whose misunderstanding could discard substantial downstream work. Define a complete reviewable pass, the evidence needed to accept it, the responsible reviewer, and work that waits for that acceptance. Use machine review for delegated technical judgment. Where visual or personal intent is consequential, provide realistic mockups, prototypes, or implemented slices; a conceptual diagram alone does not establish that intent.
+- Identify foundations whose misunderstanding could discard substantial downstream work.
+- For each: define a complete reviewable pass, the evidence needed to accept it, the responsible reviewer, and the work that waits for that acceptance.
+- Use machine review for delegated technical judgment.
+- Where visual or personal intent is consequential, provide realistic mockups, prototypes, or implemented slices; a conceptual diagram alone does not establish that intent.
 
-Before unattended execution, show the rework risk and offer and strongly recommend human review of such evidence. Establish whether the user retains the checkpoint or explicitly delegates its judgment. Carry that choice into assignments. Silence never waives a retained checkpoint; unaffected authorized work continues, and other phases need no automatic user gate.
+Before unattended execution:
+
+- Show the rework risk; offer and strongly recommend human review of such evidence.
+- Establish whether the user retains the checkpoint or explicitly delegates its judgment; carry that choice into assignments.
+- Silence never waives a retained checkpoint; unaffected authorized work continues, and other phases need no automatic user gate.
+
+## Size the run
+
+Deliver the approved scope in the fewest runs that can each succeed and be independently verified. Every split adds handoff, review, and replanning cost.
+
+Split when any of these holds:
+
+- a material choice or foundation must be settled before dependent work; or
+- independently testable outcomes have a stable boundary between them.
+
+Keep work together when either holds:
+
+- its behavior can only be verified jointly; or
+- the interface between parts would be defined by the implementation itself.
+
+Weigh against splitting:
+
+- a shared edit surface;
+- a fragment whose check would only restate its diff; or
+- a split that saves neither context nor capability.
+
+Checkpoints and run boundaries:
+
+- A runnable or inspectable intermediate state is a checkpoint inside the run.
+- It becomes its own run only when it also forms a stable boundary for planning and verifying what follows.
+
+When the approved scope exceeds one run:
+
+- rank the natural finish lines;
+- record which finish line this Plan delivers and what returns for later planning; and
+- design a verification point into any run that would otherwise reach completion unchecked.
+
+Model tier:
+
+- Assign each run the least capable model that can execute it.
+- A cheaper tier requires all of: mechanical work; bounded context; literal references governing every precision requirement; no material unresolved choice; one writer per shared surface.
 
 ## Required Plan
 
@@ -97,12 +164,30 @@ State that repository or harness instructions may add necessary safety and deliv
 
 The missing-WHAT safeguard reserves user-owned product decisions; detail already delegated follows the shared amendment rules.
 
-Do not reproduce the Specification, preserve rejected designs, transcribe discussion, add a future backlog, or include generic advice that does not direct this implementation. Revise the Plan itself when it changes; do not append amendment history.
+Plan content limits:
 
-When correcting an inadequate Plan within delegated authority, return the proposed amendment for independent review and owner acceptance under the shared custody rules. The accepted change must reach affected workers before resumption. Do not let a consultation answer silently replace the governing Plan, and do not add a second correction loop around a self-contained workflow.
+- Do not reproduce the Specification, preserve rejected designs, transcribe discussion, add a future backlog, or include generic advice that does not direct this implementation.
+- Revise the Plan itself when it changes; do not append amendment history.
 
-The Plan is complete only when it conforms to the approved product; its facts come from inspection; consequential choices are resolved or safely delegated; no material WHAT is hidden; complete assignments let a fresh Programming Loop execute without redesign; checks and their risks are exact; the delivery endpoint and its route are observable; every component passes the irreducible-complexity test; bounded material review is complete; and the full Plan has the required approval under the shared rules.
+Correcting an inadequate Plan within delegated authority:
+
+- Return the proposed amendment for independent review and owner acceptance under the shared custody rules.
+- The accepted change must reach affected workers before resumption.
+- Never let a consultation answer silently replace the governing Plan; never add a second correction loop around a self-contained workflow.
+
+The Plan is complete only when all of these hold:
+
+- it conforms to the approved product, with facts from inspection and no material WHAT hidden;
+- consequential choices are resolved or safely delegated;
+- complete assignments let a fresh Programming Loop execute without redesign;
+- checks and their risks are exact, and the delivery endpoint and its route are observable;
+- every component passes the irreducible-complexity test;
+- bounded material review is complete; and
+- the full Plan has the required approval under the shared rules.
 
 ## Output and stop
 
-Retain one current Implementation Plan and present its truthful review status separately from user approval. In standalone use, after approval recommend [Ora Programming](ora-programming.md) and stop; do not invoke it secretly. A commissioned executor returns the actual Plan or amendment, review evidence, accepted changes, affected dependencies, and any required decision to its owner. Supply the complete Programming handoff when needed; only authorized guided coordination advances the lifecycle.
+- Retain one current Implementation Plan; present its truthful review status separately from user approval.
+- In standalone use: after approval, recommend [Ora Programming](ora-programming.md) and stop; do not invoke it secretly.
+- A commissioned executor returns the actual Plan or amendment, review evidence, accepted changes, affected dependencies, and any required decision to its owner.
+- Supply the complete Programming handoff when needed; only authorized guided coordination advances the lifecycle.
