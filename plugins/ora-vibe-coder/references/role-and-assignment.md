@@ -7,7 +7,7 @@
 - An **assignment** identifies the particular result required, its inputs, constraints, and return destination.
 - The **model and harness** supply the capability to perform that assignment; they are selected separately, according to capability, availability, and authorized cost.
 - These distinctions let the same executor role perform programming, planning, research, or writing by changing its skill and assignment; likewise a verifier can review a plan, a chapter, an implementation, or project progress.
-- Specification, architecture, implementation, and verification are stages of work — not four permanently different kinds of worker.
+- Specification, architecture, implementation, and verification are stages of work—not four permanently different kinds of worker.
 
 ## 2. Instructions every assigned session receives
 
@@ -133,7 +133,7 @@ Existing self-contained workflows retain their correction and escalation procedu
 - **Make completion project-specific.** Depending on the assignment, completion might mean accessible finished files, an approved manuscript, a functioning deployed application, or reviewed code committed, pushed, and merged. None of these is a universal requirement.
 - **Distinguish a deliverable from a checkpoint.** “Deliver a draft ready for my review” can define a completed assignment. “Obtain my review before publishing” defines an intermediate approval point; the larger assignment remains unfinished until publication and its required checks are complete.
 - **Assign finishing work explicitly.** The coordinator ensures that authorized delivery, documentation, and cleanup occur through the responsible workers. Established workflows retain their own finishing procedures; the coordinator does not introduce a second competing sequence.
-- **Confirm the actual delivered result.** Completion requires the agreed output to exist in its intended location and condition, with applicable verification supporting that result. If a finishing action changes the product, resolve any material difference before claiming completion. An earlier PASS cannot certify a different delivered result.
+- **Confirm the actual delivered result.** Completion requires the agreed output to exist in its intended location and condition, with applicable verification supporting that result. If a finishing action changes the product, resolve any material difference before claiming completion. An earlier passing result cannot certify a different delivered result.
 - **End with an explicit user-facing outcome.** The coordinator either requests a genuinely necessary user decision, retained approval, or intervention that cannot be handled within delegated authority; or sends a final notice confirming that the agreed completion conditions have been met. Internal worker handbacks return to their owner and do not automatically require user involvement.
 - **Keep unfinished work truthful and resumable.** A request for approval states what is ready, what decision is needed, what remains, and what will happen afterward. Continue independent authorized work where possible. Do not call a paused or cancelled project complete.
 - **Make the completion notice substantive.** Identify what was delivered, where to inspect or use it, the relevant verification result, and confirmation that the agreed delivery and cleanup obligations were fulfilled. State any remaining limitations without disguising incomplete requirements.
@@ -152,6 +152,8 @@ Vibe Coder must then **use the planned assignments**, not merely describe the re
 - The existing host’s dispatch mechanism supplies the role, skill, assignment, and current inputs when creating a worker.
 - Portable handoffs carry those instructions as accessible files or sufficient included text.
 - The Programming Loop retains ownership of its internal execution and review. An outer coordinator commissions complete loops and receives their results without taking over their workers.
+
+Staffing:
 
 - Four defined roles do not require four permanent sessions.
 - Small work can use the existing self-contained loop without an additional project-level coordinator or dedicated secretary; necessary document custody still needs an explicit owner.

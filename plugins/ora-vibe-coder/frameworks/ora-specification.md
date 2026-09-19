@@ -25,6 +25,8 @@ Read all supplied conversation and files before asking a question. Resolve the a
 - the exact material WHAT still missing, if any; and
 - the recommended next decision or action.
 
+Then:
+
 - Obtain the required artifact-scope approval before creating or revising files.
 - Create or update the Request for material user instructions; keep one current Specification rather than an amendment trail.
 
@@ -42,9 +44,7 @@ Evaluate only concerns that can materially affect this product:
 - real platform, privacy, compatibility, accessibility, deadline, or other constraints; and
 - observable quality needed to trust or use the result.
 
-- This list is not a questionnaire or required heading set.
-- Infer what the evidence safely supports.
-- Ask only when an unanswered user-owned choice could materially change the product or force hidden product judgment downstream.
+This list is not a questionnaire or required heading set. Infer what the evidence safely supports. Ask only when an unanswered user-owned choice could materially change the product or force hidden product judgment downstream.
 
 - Use the user's established delivery preferences before asking them to restate a finish line.
 - Make completion specific to this project: accessible finished files, a reviewed draft, deployed software, or a particular Git endpoint can each be appropriate.
@@ -62,6 +62,8 @@ Use the released Gear products through their available documented interface, or 
 - Ask one informed user-owned decision at a time.
 - Keep ordinary libraries, architecture, storage mechanisms, and other HOW choices out unless the user made a method part of the required outcome or it is a genuine product constraint.
 - Do not add features merely because Gear or the host can imagine them.
+
+Review and approval:
 
 - Before approval, have the complete current Specification reviewed through the bounded Gear path and correct material defects.
 - For initial approval or a user-reserved revision, show the user the full synthesis and separate review status.
@@ -81,6 +83,8 @@ Use whatever structure best fits the product, but ensure the complete Specificat
 - scope and non-goals;
 - observable acceptance conditions; and
 - any user-mandated method that is itself part of the outcome.
+
+Completion authority:
 
 - Include the agreed completion conditions and retained/delegated decisions so a planner can design the whole route to delivery without inventing authority.
 - For an amendment within existing delegated discretion, use the shared review, acceptance, custody, and worker-refresh route; this does not replace explicit approval of the initial complete Specification or of changes reserved to the user.

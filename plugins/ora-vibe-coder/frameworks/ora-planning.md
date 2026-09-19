@@ -2,7 +2,7 @@
 
 ## Purpose and boundary
 
-Turn an approved Specification or substantive equivalent into one executable HOW for the actual project. A fresh Programming Loop must not have to:
+Turn an approved Specification or substantive equivalent into one executable HOW for the actual project. Prevent a fresh Programming Loop from having to:
 
 - redesign the solution;
 - choose a consequential dependency;
@@ -25,7 +25,7 @@ Assignment:
 
 ## Inputs and readiness
 
-Read the current Request and Specification when they exist; otherwise use the substantive equivalents the user supplies. Evaluate product intent by content.
+Read the current Request and Specification when they exist, or the substantive equivalents the user supplies. Evaluate product intent by content.
 
 If a material WHAT is absent, show:
 
@@ -34,7 +34,9 @@ If a material WHAT is absent, show:
 3. the likely consequence of guessing; and
 4. the recommendation to use [Ora Specification](ora-specification.md).
 
-- On an explicit user request to continue on a reduced basis: plan where the known requirements permit, record the exact limitation, and never call a Plan passed or executable while the missing WHAT still prevents responsible execution.
+Reduced basis and commissioned work:
+
+- The user may explicitly ask to continue on a reduced basis; do useful planning where the known requirements permit, record the exact limitation, and never call a Plan passed or executable while the missing WHAT still prevents responsible execution.
 - For commissioned work, return a missing WHAT to the assignment owner for Specification under the shared correction route. Reviewed detail within delegated discretion does not automatically require user interruption; changes to reserved decisions still do.
 
 ## Inspect before choosing HOW
@@ -48,6 +50,8 @@ Inspect enough of the real starting state to make evidence-based choices. Where 
 - focused existing checks and build or deployment behavior;
 - Git and working-tree state, including unrelated user work to protect; and
 - live automation or consequential external effects that shape the finish line.
+
+Discovery rules:
 
 - For a new project, inspect the actual target environment and supplied constraints.
 - Stop discovery when facts are sufficient; another pass needs a specific unanswered question capable of materially changing the Plan.
@@ -96,7 +100,8 @@ Before unattended execution:
 
 - Show the rework risk; offer and strongly recommend human review of such evidence.
 - Establish whether the user retains the checkpoint or explicitly delegates its judgment; carry that choice into assignments.
-- Silence never waives a retained checkpoint; unaffected authorized work continues, and other phases need no automatic user gate.
+
+Silence never waives a retained checkpoint; unaffected authorized work continues, and other phases need no automatic user gate.
 
 ## Size the run
 
@@ -111,6 +116,8 @@ Keep work together when either holds:
 
 - its behavior can only be verified jointly; or
 - the interface between parts would be defined by the implementation itself.
+
+When both a split condition and a keep-together condition apply, the keep-together conditions win; settle the required choice or foundation at a checkpoint inside the run.
 
 Weigh against splitting:
 
@@ -143,7 +150,7 @@ Produce one current Plan with only useful project-specific content, in this orde
 3. **Chosen HOW** — the implementation approach and only consequential rationale.
 4. **Execution sequence** — coherent phases and complete assignments, useful parallelism, dependencies, foundation evidence and review boundaries, integration, staffing, document custody, and affected components identified by inspection.
 5. **Exact checks** — the complete authorized testing ceiling and the concrete material risk each check judges.
-6. **Finish line** — the Specification's project-specific endpoint and the complete route through production, verification, documentation, authorized delivery, and cleanup, with responsible owners, evidence of the delivered condition, and retained approvals. A verification pass is a checkpoint when finishing work remains.
+6. **Finish line** — the Specification's project-specific endpoint and the complete route through production, verification, documentation, authorized delivery, and cleanup, with responsible owners, evidence of the delivered condition, and retained approvals — or, when Size the run limits this Plan to part of the approved scope, the recorded finish line for this run and the scope returned for later planning, which is not a future backlog. A verification pass is a checkpoint when finishing work remains.
 7. **Implementation safeguards** — include the exact block below without weakening it.
 
 > **Implementation safeguards**

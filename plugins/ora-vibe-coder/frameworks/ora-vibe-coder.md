@@ -15,11 +15,7 @@ Guide the complete fixed lifecycle while preserving the independent contracts of
 ## Find the real starting point
 
 - Establish the starting state from current conversation, accessible artifacts, code, documentation, check evidence, findings, and Git state. A staffed coordinator delegates substantive inspection and reads the returned evidence.
-- Determine the earliest incomplete or invalid stage by substance (list below).
-- Also identify the agreed completion endpoint and any delivery or cleanup still outstanding; a passed stage or REPORT does not erase that work.
-- Do not infer readiness from a filename, file existence, old status, prior claim, or harness.
-- Explain the earliest useful stage, what is missing, and the likely consequence. This is advisory: when the user explicitly accepts weak upstream quality, record the reduced basis and continue as far as the remaining stage contracts truthfully allow.
-- A missing required companion cannot be overridden.
+- Determine the earliest incomplete or invalid stage by substance:
 
 1. **Specification** — product intent is complete, materially reviewed, shown in full, and approved by the user.
 2. **Planning** — the real project was inspected; the HOW is executable, materially reviewed, shown in full, and approved by the user.
@@ -27,10 +23,17 @@ Guide the complete fixed lifecycle while preserving the independent contracts of
 4. **Verification** — one fresh independent reviewer cumulatively inspected the entire current candidate and all authorized checks pass with no material finding.
 5. **REPORT** — the certifying artifact describes that exact passed candidate.
 
+Also:
+
+- Identify the agreed completion endpoint and any delivery or cleanup still outstanding; a passed stage or REPORT does not erase that work.
+- Do not infer readiness from a filename, file existence, old status, prior claim, or harness.
+- Explain the earliest useful stage, what is missing, and the likely consequence. This is advisory: when the user explicitly accepts weak upstream quality, record the reduced basis and continue as far as the remaining stage contracts truthfully allow.
+- A missing required companion cannot be overridden.
+
 ## Run the fixed lifecycle
 
 - Use the selected stage's actual canonical body and give each fresh recipient one complete clean handoff under the shared context table.
-- A native entry may load it when genuinely available; otherwise show a complete manual handoff — what to open, what to paste, and the expected next result.
+- A native entry may load that handoff when genuinely available; otherwise show a complete manual handoff, what to open, what to paste, and the expected next result.
 - Do not assume native commands, hidden sibling context, or automatic delivery; preparation or copying alone does not advance a stage.
 - Do not reproduce a stage's method here or build a configurable stage graph.
 - Dispatch the Plan's ready assignments through the host mechanism described in the shared contract. Supply each role, selected skill, complete assignment, current accepted sources, dependency boundary, and return owner in the actual request.
@@ -75,6 +78,8 @@ Send the owner one consolidated current finding set and controlling artifacts/ev
 - incorporation by document custody; and
 - notification/refresh before affected workers resume.
 
+For every correction:
+
 - Delegated detail needs no automatic user interruption; changed goals, constraints, reserved decisions, or effects do.
 - Preserve initial stage approvals and each self-contained workflow's correction procedures.
 - Repeat affected authorized downstream work and fresh whole-candidate review.
@@ -87,6 +92,9 @@ After `PASSED` and REPORT:
 - Assign any remaining authorized finishing work to its responsible workers through the existing delivery procedure.
 - Obtain evidence that the agreed output exists at its intended location and final condition, with required documentation and cleanup complete.
 - Resolve any material difference introduced by delivery through the applicable owner and verification before claiming completion.
+
+Cleanup:
+
 - Remove only task-owned temporary material no longer needed; preserve user files, other tasks, and companion qualification records.
 
 Ending:
