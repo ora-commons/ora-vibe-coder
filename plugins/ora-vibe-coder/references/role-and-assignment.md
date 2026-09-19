@@ -2,17 +2,12 @@
 
 ## 1. What this contract defines
 
-A **role** defines what an agent is responsible for and what it must not do.
-
-A **skill** supplies the method for performing a kind of work.
-
-An **assignment** identifies the particular result required, its inputs, constraints, and return destination.
-
-The **model and harness** supply the capability to perform that assignment. They are selected separately, according to capability, availability, and authorized cost.
-
-These distinctions let the same executor role perform programming, planning, research, or writing by changing its skill and assignment. Likewise, a verifier can review a plan, a chapter, an implementation, or project progress.
-
-Specification, architecture, implementation, and verification are stages of work. They are not four permanently different kinds of worker.
+- A **role** defines what an agent is responsible for and what it must not do.
+- A **skill** supplies the method for performing a kind of work.
+- An **assignment** identifies the particular result required, its inputs, constraints, and return destination.
+- The **model and harness** supply the capability to perform that assignment; they are selected separately, according to capability, availability, and authorized cost.
+- These distinctions let the same executor role perform programming, planning, research, or writing by changing its skill and assignment; likewise a verifier can review a plan, a chapter, an implementation, or project progress.
+- Specification, architecture, implementation, and verification are stages of work — not four permanently different kinds of worker.
 
 ## 2. Instructions every assigned session receives
 
@@ -88,7 +83,7 @@ The verifier independently evaluates the assigned result or process against its 
 - Stay within the authorized checking scope. Stop when the required evidence and material review are satisfied.
 - **Do not implement corrections while acting as verifier.** Return findings to the producing workflow through its owner.
 - Respect decisions reserved to the user. Technical conformance cannot establish that the user approves an interface they have never seen.
-- State what was checked, the conclusion, its limitations, and the necessary next action. A local PASS does not automatically establish whole-project completion.
+- State what was checked, the conclusion, its limitations, and the necessary next action. A local passing result does not automatically establish whole-project completion.
 
 ## 5. The assignment
 
@@ -158,6 +153,8 @@ Vibe Coder must then **use the planned assignments**, not merely describe the re
 - Portable handoffs carry those instructions as accessible files or sufficient included text.
 - The Programming Loop retains ownership of its internal execution and review. An outer coordinator commissions complete loops and receives their results without taking over their workers.
 
-Four defined roles do not require four permanent sessions. Small work can use the existing self-contained loop without an additional project-level coordinator or dedicated secretary. Necessary document custody still needs an explicit owner. **Whenever a coordinator is staffed, it remains a coordinator—not a spare implementer.**
+- Four defined roles do not require four permanent sessions.
+- Small work can use the existing self-contained loop without an additional project-level coordinator or dedicated secretary; necessary document custody still needs an explicit owner.
+- **Whenever a coordinator is staffed, it remains a coordinator—not a spare implementer.**
 
 This contract requires no new permissions platform, agent engine, database, or permanent tracking ledger.
