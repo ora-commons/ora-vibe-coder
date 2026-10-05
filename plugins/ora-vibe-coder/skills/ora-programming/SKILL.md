@@ -1,6 +1,6 @@
 ---
 name: ora-programming
-description: Hand approved or reduced-basis requirements to the host's existing Programming Loop. Use to implement and document a product without creating a second execution workflow.
+description: Hand available requirements to a capable implementing recipient, offering the host's Programming Loop as one structured method. Use to implement a product and save a truthful Programming Result without creating a second execution workflow.
 ---
 
 # Ora Programming

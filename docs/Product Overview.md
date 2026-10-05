@@ -1,31 +1,31 @@
 # Ora Vibe Coder Product Overview
 
-Ora Vibe Coder is for people who want to build software with an AI coding tool while keeping the project understandable and under deliberate control. It turns an idea or existing project into a sequence of clear, inspectable Markdown assignments: define the product, plan the implementation, build it with independent review, and verify the complete result. Vibe runs locally and prepares the handoff; your chosen coding tool still owns conversation, login, permissions, model use, and execution.
+Ora Vibe Coder is for people who want to build software with an AI coding tool while keeping the project understandable and under deliberate control. It turns an idea or existing project into a sequence of clear, inspectable stages: define the product, plan the implementation, build it with independent review, and verify the complete result — presented as three workspaces, Specification, Plan, and Build & verify. You talk to your coding tool inside Vibe — one Send delivers text and images through the bundled Agent Bridge while your documents stay visible and current beside the conversation — and a complete portable Markdown handoff remains available for terminal recovery and external recipients. Vibe runs locally; your chosen coding tool still owns login, permissions, model use, and execution.
 
 ## The problem it solves
 
 AI coding work often begins easily and becomes hard to govern. Product decisions get mixed with technical choices. Important constraints live in old chats. A new session cannot tell which version is current. “The model ran” gets mistaken for “the product is finished.” Reviews see a summary instead of the real candidate. A useful result can remain on a branch or in an unused document. Vibe addresses that problem with a small set of durable boundaries:
 
-- current requirements and plans live in ordinary project documents;
-- each lifecycle stage has one clear purpose;
-- your exact instruction appears before framework text;
-- the complete prepared assignment is visible before delivery;
-- execution and review use separate contexts;
+- your projects are found automatically in your Documents folder through their own `Project.md` definition, and current requirements and plans live in ordinary project documents, found automatically when you open the folder;
+- each workspace has one clear purpose backed by a portable method;
+- your exact message is saved before it is shown, and your exact instruction appears before framework text in every prepared packet;
+- the conversation, documents, and results sit in one resizable split that refreshes as files change;
+- execution and review use separate contexts, and assessment verdicts are recorded separately from your own acceptance;
 - status comes from explicit fields, not inferred activity; and
-- preparation, launch, receipt, execution, review, and delivery remain distinct facts.
+- sending, launch, receipt, execution, review, approval, and delivery remain distinct facts.
 
 The goal is not more process. The goal is less hidden judgment and less confusion about what actually happened.
 ## Who it is for
 
 ### People with an idea but no technical plan
 
-Start with Specification or **Help me get started**. The method helps turn intent into observable behavior and boundaries without requiring you to choose frameworks, code structure, or infrastructure prematurely.
+Start in the Specification workspace. The method helps turn intent into observable behavior and boundaries without requiring you to choose frameworks, code structure, or infrastructure prematurely. A simple question does not need a Specification at all — ask it in the project conversation.
 ### Project owners with an existing codebase
 
-Open the directory, link its current requirements and documentation, and choose the stage that matches the real gap. Vibe does not require renaming files or migrating the repository into a proprietary project format.
+Open the directory; Vibe finds its Markdown documents automatically and shows which file it chose, with a manual override. Vibe does not require renaming files or migrating the repository into a proprietary project format.
 ### Developers using several coding tools
 
-The same Vibe stages can prepare work for Codex, Claude Code, ZCode, Hermes, Qwen Code, or MiniMax Code. Host-specific mechanics stay in small adapters; every host receives the same reviewed Programming Loop method plus its matching adapter from the vendored product files.
+The same Vibe methods can prepare work for Codex, Claude Code, ZCode, Hermes, Qwen Code, or MiniMax Code. Host-specific mechanics stay in small adapters; every host receives the same reviewed Programming Loop method plus its matching adapter from the vendored product files.
 ### Teams that need an inspectable handoff
 
 `Handoff.md` is a complete current snapshot that can be reviewed, copied, versioned, or delivered manually. It starts with the exact user request and labels instructions, project facts, source material, authority, and expected output.
@@ -35,36 +35,39 @@ The same Vibe stages can prepare work for Codex, Claude Code, ZCode, Hermes, Qwe
 ```text
 Idea or current project
         ↓
-Specification — decide WHAT the product must be
+Specification workspace — decide WHAT the product must be
+        ↓  (optional Review stage assessment: COMPLETE / INCOMPLETE)
+Plan workspace — inspect the project and decide HOW to build it
+        ↓  (optional Review stage assessment: COMPLETE / INCOMPLETE)
+Build & verify workspace — implement, check, review, correct, and deliver
         ↓
-Planning — inspect the project and decide HOW to build it
+Verification — independently inspect the accessible candidate
         ↓
-Programming — implement, check, review, correct, and deliver
-        ↓
-Verification — independently inspect the whole candidate
-        ↓
-Report only after PASS
+Verification Report — saved for passing, failing, and incomplete reviews alike
 ```
 
-The flow is fixed, but entry is flexible. A project can begin at the earliest stage its current evidence needs. Existing approved requirements do not need to be recreated. A complete candidate can go directly to Verification. Guided mode helps choose; it does not force every stage to run.
+Every stage stays available throughout: you may create a Plan with an incomplete or missing Specification, start programming with an incomplete or missing Plan, and request verification with whatever evidence exists. A project can begin at whichever workspace its current evidence needs, and existing requirements never need to be recreated. The conversation is available in every workspace, and each of Specification and Plan offers a Review stage action — an in-app second opinion or a portable review packet — whose saved assessment is displayed prominently; it informs your decision, never gates it.
 ## What makes it different
 
+### Conversation inside the workspace
+
+The coding tool works through the bundled Agent Bridge inside Vibe: one Send submits text and images together, the message is saved before it is shown, and the complete answer appears when the turn finishes — honest working status, no streaming. The turn records live under the project's `.vibe/` folder and are reopened with the current Registry plus the last five completed exchanges; each ordinary turn may also carry one validated Registry update the app applies or honestly reports as unapplied. The tool's own login, model, permissions, and approvals are untouched.
 ### Local and file-based
 
-Vibe's browser workspace is served from your computer. Projects remain normal directories. Requirements, plans, guides, and reports remain Markdown. There is no hosted project database or proprietary run record to export later.
+Vibe's browser workspace is served from your computer and opens from a normal desktop launcher on macOS and Windows without a terminal that must stay open. Projects remain normal directories in your Documents folder, found through their own `Project.md` definition rather than imported into a library. Requirements, plans, guides, and reports remain Markdown. There is no hosted project database or proprietary run record to export later.
 ### Preparation before delivery
 
-The complete packet is saved and displayed before Continue or Copy. If the saved file changes, Vibe refuses to copy unseen content. This makes the handoff something you can inspect rather than a hidden prompt assembled at launch time.
+For the portable route, the complete packet is saved and displayed before Continue or Copy; if the saved file changes, Vibe refuses to copy unseen content. For the in-app route, the parallel guarantee is durability and honesty: the message is saved before it is shown, the answer appears only when complete, and the Registry is rewritten only by a validated block. Nothing is sent, claimed, or applied behind your back.
 ### One method, several hosts
 
 The Programming Loop has one universal workflow maintained in its dedicated source and published through its public release. Vibe bundles the matching 17 product files and modes for offline setup and handoffs; the public release separately includes its delivery manifest. Each initiating host gets only the instructions needed to create a fresh worker, retrieve its result, and wait safely. This avoids six drifting versions of what “implement and review” means without turning the Vibe snapshot into another maintained source.
 ### Independent review is structural
 
-The Loop creates a fresh executor, then a different fresh reviewer that receives the approved plan, real cumulative diff, repository access, and exact check evidence. It does not receive the executor's conversation or intended conclusions.
+The Loop creates a fresh executor, then a different fresh reviewer that receives the available plan, real cumulative diff, repository access, and exact check evidence. It does not receive the executor's conversation or intended conclusions. Specification and Plan documents carry their own Current review assessment, so a technical verdict and your own acceptance never blur into one fact. The Loop is offered as one structured method; without it, the implementing tool works directly under its normal approvals.
 
 ### Truthful stopping
 
-A prepared packet is not a sent packet. A launched window is not receipt. Process exit is not completion. Reviewer transport is not reviewer agreement. A Report is not created until current whole-candidate Verification passes. These distinctions keep confidence proportional to evidence.
+A prepared packet is not a sent packet. A launched window is not receipt. Process exit is not completion. Reviewer transport is not reviewer agreement. A Verification Report is saved for every actual verification outcome — passing, failing, and incomplete reviews alike — and an older Report is previous evidence, never proof that newer code passed. These distinctions keep confidence proportional to evidence.
 
 ## Typical uses
 
@@ -74,7 +77,7 @@ Use Specification to clarify intended users, visible workflows, data treatment, 
 
 ### Add a bounded feature
 
-Link the existing product requirement and plan, state the feature outcome and protected work, and hand it to Programming. The Loop proposes a small scope lock, uses exact relevant checks, and keeps unrelated repository changes out of the task.
+With the product requirement and plan in place, state the feature outcome and protected work, and hand it to Programming in Build & verify. The Loop proposes a small scope lock, uses exact relevant checks, and keeps unrelated repository changes out of the task.
 
 ### Recover a stalled AI coding task
 
@@ -82,7 +85,7 @@ Open the actual repository and current documents. Vibe's packet can state the pr
 
 ### Audit a completed candidate
 
-Use Verification with accessible requirements, implementation, documentation, and checks. The verifier reports material findings with evidence and the smallest correction, or creates the Report only after PASS.
+Use Verification with accessible requirements, implementation, documentation, and checks. The verifier reports material findings with evidence and the smallest correction, and saves a truthful Verification Report — for passing, failing, and incomplete reviews alike. Missing formal documents alone are not a failure: the report states what can be checked and what cannot be established.
 
 ### Move a prepared task between tools
 
@@ -94,6 +97,7 @@ Use Copy to deliver the same complete Markdown to a different capable recipient.
 
 - Consequential product decisions remain visible and yours.
 - You see what will be sent before a tool receives it.
+- Assessment verdicts and your own acceptance are recorded separately, and neither ever blocks a stage.
 - Status labels are understandable and conservative.
 - Missing documents and broken links are surfaced rather than guessed around.
 - You can stop at any point without losing the current project files.
@@ -133,9 +137,11 @@ It does not silently install coding tools, authenticate, choose a paid route, pu
 
 ## Prerequisites and conditions
 
-Vibe requires Python 3.10 or later, a browser, and filesystem access to the chosen project directory. Continue additionally requires a supported coding-tool executable and a desktop terminal route. Copy works when Continue is unavailable.
+Vibe requires Python 3.10 or later, a browser, and filesystem access to your Documents folder and project directories. The conversation and Continue additionally require a supported coding-tool executable; Continue also needs a desktop terminal route, while Copy works when it is unavailable.
 
-Specification and Planning require the separately installed Gear 3 and Gear 4 companion; Vibe setup does not install it. Programming requires the Programming Loop, which Vibe setup installs or updates from its bundled product-file snapshot for each coding tool the user selects. If either required companion is unavailable or mismatched, the dependent stage stops honestly: use Gear's own setup instructions for Gear, or rerun Vibe setup with the receiving host selected and restart that host for the Loop. This ordinary update route does not require access to the private authoritative repository. Agent Bridge is optional and serves only an explicitly selected external-review route; without it, that route is unavailable, not silently substituted or described as model diversity, while a qualified fresh internal or complete manual review route remains usable where the stage provides it.
+Desktop launch works from the app icon on macOS and from the desktop shortcut on Windows, without a terminal that must stay open; the existing Linux launch route is preserved. The Windows launcher is delivered and covered by focused unit checks that run on macOS with the Windows shell faked, but no native Windows qualification has been performed. Update lookup is not connected in the current build: the footer's Check for updates deliberately reports unavailable and installs nothing.
+
+Gear 3 and Gear 4 remain an optional, separately installed companion for Specification and Planning; Vibe setup does not install them, and every stage stays available without them — the methods state plainly when an optional aid was unavailable and continue the work directly. The Programming Loop is bundled: Vibe setup installs or updates it from its bundled product-file snapshot for each coding tool the user selects, and it is offered as one structured method — without it, the implementing tool works directly under its normal approvals. The in-app conversation requires the bundled Agent Bridge runtime, which Vibe setup installs and updates beside the application and runs on the interpreter already running Vibe — no separate Bridge installation exists. A missing or mismatched bundled runtime disables the in-app conversation honestly; use Gear's own setup instructions to add Gear when you want it, or rerun Vibe setup with the receiving host selected and restart that host to refresh the Loop. These ordinary update routes do not require access to the private authoritative repository.
 
 The quality of a stage depends on accessible source material. A remote reviewer cannot inspect a local-only path. A visual requirement cannot be established from text alone. A live provider claim cannot be established by a fake test. Vibe preserves and labels these limits rather than converting them into success.
 
@@ -163,18 +169,17 @@ Use Copy when you want the packet discipline without a native launch route. Use 
 
 Do not use Vibe as a reason to share material a recipient should not receive. Its value is making the boundary inspectable so you can choose responsibly.
 
-## Further reading
-
 ## A practical decision guide
 
-- Choose **direct conversation** when the change is genuinely tiny, its desired result is already obvious, no important existing work is at risk, and independent review would add no material confidence. Vibe should reduce ambiguity, not manufacture ceremony.
-- Choose **Specification** when two reasonable implementations could produce meaningfully different products, when users or permissions are unclear, when content or data treatment is unsettled, or when “done” cannot yet be observed. This keeps product choices out of the coder's hidden discretion.
-- Choose **Planning** when the desired product is settled but the real repository, dependency choices, migration, checks, or delivery route require inspection. The Plan should make a fresh executor able to build without redesigning the solution.
-- Choose **Programming** when the task has a usable outcome and implementation direction, including a deliberately acknowledged reduced basis. The Loop still presents a scope lock, protects state, and obtains approval; skipping an upstream quality stage never grants broader effects.
-- Choose **Verification** when the candidate is complete enough to judge and the verifier can directly access the evidence. Use it before consequential release or when implementation confidence and independent evidence need to be separated.
-- Choose **guided mode** when you cannot tell which of those conditions applies. It gives a recipient the full lifecycle vocabulary while preserving your control over approvals and external effects; it is not an “auto-run everything” button.
+- Choose **the project conversation** when the change is genuinely tiny, its desired result is already obvious, no important existing work is at risk, and independent review would add no material confidence. It is the ordinary route in every workspace; Vibe should reduce ambiguity, not manufacture ceremony.
+- Choose the **Specification workspace** when two reasonable implementations could produce meaningfully different products, when users or permissions are unclear, when content or data treatment is unsettled, or when “done” cannot yet be observed. This keeps product choices out of the coder's hidden discretion.
+- Choose the **Plan workspace** when the desired product is settled but the real repository, dependency choices, migration, checks, or delivery route require inspection. The Plan should make a fresh executor able to build without redesigning the solution.
+- Choose **Build & verify** when the task has a usable outcome and implementation direction — or when you want to build ahead of complete documents and let the conversation surface what matters. The implementing tool still presents its scope, protects state, and obtains its normal approvals; proceeding on partial information never grants broader effects.
+- Choose **Review stage** when a document needs a fresh independent reviewer before you approve it and advance, or when a complete candidate needs current independent Verification.
 - Choose **manual Copy** when the coding tool is remote, unsupported, not detected, or should receive the packet through a channel you control. The same inspection benefit remains, but access and receipt must be stated honestly.
 - Choose the **standalone Programming Loop** when you already have suitable requirements and a plan, do not need Vibe's local project reader, and want the executor/reviewer method installed directly in a supported initiating host.
+
+## Further reading
 
 - [User Guide](User%20Guide.md) for setup, ordinary use, document linking, delivery, recovery, stopping, and removal.
 - [Technical Documentation](Technical%20Documentation.md) for architecture, trust boundaries, packet construction, host routes, installation, and maintenance.

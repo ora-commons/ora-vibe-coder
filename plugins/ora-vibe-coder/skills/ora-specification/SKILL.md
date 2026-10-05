@@ -1,6 +1,6 @@
 ---
 name: ora-specification
-description: Turn a software idea, partial brief, or existing requirements into an approved implementation-neutral Specification. Use for the WHAT stage alone; stop before implementation planning.
+description: Turn a software idea, partial brief, or existing requirements into a clear implementation-neutral Specification. Use for the WHAT stage alone; stop before implementation planning.
 ---
 
 # Ora Specification
