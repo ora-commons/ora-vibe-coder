@@ -109,6 +109,8 @@ Planning is read-only toward the target code. If it discovers a missing product 
 
 Implementation and independent Verification share this workspace's display while keeping separate responsibilities and results.
 
+The Build & verify workspace makes the sequence visible: first work on the implementation, then use **Save the Programming Result** to record what was actually done, then request **Independent verification**, and finally request corrections when the Verification Report identifies material findings. Saving a Programming Result is report-only: it records completed and unfinished work, checks, delivery state, and remaining work; it does not start another implementation pass. Independent verification must use a fresh verifier rather than the implementation agent.
+
 Use **Prepare request** to hand the available Plan to the implementing recipient — the released Programming Loop when its companion is present, otherwise a direct implementation conversation under the tool's normal approvals. The Loop inspects the repository, presents a minimum honest scope, and waits for its own approval before edits; it uses a fresh executor and a separate fresh reviewer, runs only the agreed checks, corrects material defects, and reaches the agreed delivery endpoint. The AI saves a truthful **Programming Result** after actual work — including work that stops unfinished: work performed, code location, checks, delivery state, and remaining work.
 
 **Review stage** here requests current independent Verification — it never reviews the verifier. The verdict shown in Build & verify comes from the saved current **Verification Report**, which the AI saves after actual verification for passing, failing, and incomplete reviews alike; without one, the workspace shows "No saved verification result yet." Missing formal documents alone are not a verification failure — the report explains what can be checked and what cannot be established. Neither the report's existence nor an older passing result proves that newer code passed; a retained `Verification` field in `Project.md` is legacy history and does not override the report. Verified findings reach you with evidence and recommended fixes; unrelated findings are reported without extending repair authority. **Prepare correction** carries actual findings and governing scope back through the existing Programming controller or a complete manual handoff.
@@ -123,21 +125,25 @@ When a document is on another machine or inaccessible to the receiving tool, nam
 
 ## What the portable handoff includes
 
-The portable panel's prepared packets are the terminal-recovery and external-recipient route; the ordinary path is the in-app Send. Every prepared packet starts with your exact instruction and a visible boundary before framework instructions. It then contains the selected method, shared working contract, role assignment, project and authority facts, current stage-appropriate materials, known gaps, and the expected next result.
+The portable panel's prepared packets are the Desktop, Terminal, and external-recipient route; the ordinary path is the in-app Send. Every prepared packet starts with your exact instruction and a visible boundary before framework instructions. It then contains the selected method, shared working contract, role assignment, project and authority facts, current stage-appropriate materials, known gaps, and the expected next result.
 
 Specification, Plan, and Create Plan packets name the revision destination — the resolved file to revise, or the expected name for a missing output — and show the type-label example an external save may carry. Assessment packets carry the evidence basis the reviewer records with its verdict, and the exact shape of the Current review section it saves. Every packet names the project's documents folder and repository / code folder accurately — or states honestly that no code folder is selected, with the startup directory described as a conversation starting point.
 
 Programming and Implement Plan packets include the universal Programming Loop framework and exactly one adapter for the selected initiating host. Before building one, Vibe validates its bundled snapshot of the 17 Loop product files and their modes; the public release's separate delivery manifest is not part of that snapshot or the packet. Packets for other purposes do not include the Loop.
 
-The packet excludes an earlier outgoing packet and materials that do not belong at the destination. Preparing is local and makes no provider call.
+The packet excludes an earlier outgoing packet and materials that do not belong at the destination. Preparing is local and makes no provider call. Ordinary prepared requests use `Handoff.md`. An **Implement Plan** request instead uses `<Project name> — Implementation Request.md`; if that implementation request already exists or changed, Vibe leaves it untouched and asks you to inspect it before preparing again.
 
-## Continue and Copy
+## Desktop, Terminal, and Copy
 
 These are the portable panel's delivery routes, beside the in-app conversation.
 
-### Continue
+### Desktop
 
-Continue first confirms that the displayed packet still matches the saved file. It then looks for the selected local coding tool and opens a visible terminal session in the selected repository / code folder — the project documents folder when none is selected.
+On macOS, **Open desktop app** is available only when Vibe finds the selected host's desktop app. For Codex and Claude Code it asks the app to open a new visible chat with a prefilled, unsent prompt that names the saved request and selected code folder. For the other supported desktop apps, Vibe opens the app and gives you the request to paste into a new chat. In either case, inspect and send the request in the coding tool itself: Vibe does not claim that it was received or executed.
+
+### Terminal
+
+Terminal first confirms that the displayed packet still matches the saved file. It then looks for the selected local coding tool and opens a visible terminal session in the selected repository / code folder — the project documents folder when none is selected.
 
 Codex, Claude Code, Hermes, Qwen Code, and MiniMax Code receive a prompt pointing to a permission-restricted temporary copy of the complete assignment. ZCode performs one bounded no-change receipt turn before opening its normal interactive interface. The temporary operation is cleaned after the coding tool exits.
 
@@ -161,7 +167,7 @@ Work started through the portable panel continues in the coding-tool window. Sav
 
 The document panes reread resolved files automatically when they change on disk, preserving your selection and reading position; **Refresh** is the deliberate reread. Vibe does not import a chat transcript, monitor a model, or assume that a process finishing means the task is complete. The displayed verification verdict always comes from the saved current Verification Report.
 
-If a new requirement changes a source document and you are using the portable route, Prepare Again before sending another request. Until then, `Handoff.md` remains the earlier prepared snapshot; it does not prove that anything was sent. Prepare Again deliberately replaces the single `Handoff.md`, so preserve history in Git or make a manual copy first if you need it.
+If a new requirement changes a source document and you are using the portable route, Prepare Again before sending another request. Until then, the saved request remains the earlier prepared snapshot; it does not prove that anything was sent. Ordinary requests deliberately replace the single `Handoff.md`, so preserve history in Git or make a manual copy first if you need it. An implementation request has its separate named file and is not silently replaced when a different existing request is found.
 
 ## Quitting and desktop launch
 

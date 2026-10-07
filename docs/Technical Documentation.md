@@ -158,7 +158,7 @@ If the destination is free-form or no supported adapter can be established, the 
 5. only purpose-appropriate current materials; and
 6. known gaps and the next bounded result.
 
-The supported purposes map to the three workspaces: `specification` and `planning` revise the resolved documents; `review-specification` and `review-plan` commission fresh independent assessments; `create-plan` and `implement-plan` prepare forward assignments like any other — no purpose is gated; `programming` and `verification` serve Build & verify (with `Prepare correction` reusing the programming purpose); the guided packet remains available server-side. Revision packets carry the resolved revision destination — the displayed file to revise, or the expected name for a missing output — plus the closed-frontmatter type-label example (`vibe_document: specification` / `vibe_document: plan`). Assessment packets carry the document's current evidence basis and the exact shape of the Current review section the reviewer saves. Every packet names the documents folder and the repository / code folder (or states honestly that none is selected, with the startup directory described as a conversation starting point) and lists any explicitly selected intake material with its destinations. Continue verifies the saved packet still names the current code location before launching in it.
+The supported purposes map to the three workspaces: `specification` and `planning` revise the resolved documents; `review-specification` and `review-plan` commission fresh independent assessments; `create-plan` and `implement-plan` prepare forward assignments like any other — no purpose is gated; `programming`, `programming-result`, and `verification` serve Build & verify (with `Prepare correction` reusing the programming purpose); the guided packet remains available server-side. `programming-result` is expressly report-only: it records actual completed and unfinished work and does not start implementation. Revision packets carry the resolved revision destination — the displayed file to revise, or the expected name for a missing output — plus the closed-frontmatter type-label example (`vibe_document: specification` / `vibe_document: plan`). Assessment packets carry the document's current evidence basis and the exact shape of the Current review section the reviewer saves. Every packet names the documents folder and the repository / code folder (or states honestly that none is selected, with the startup directory described as a conversation starting point) and lists any explicitly selected intake material with its destinations. Desktop and Terminal verify the saved packet still names the current code location before launching in it.
 
 Guided packets contain the guided coordinator and all four actual stage bodies exactly once. Standalone packets contain only their selected stage body. Programming, guided, and Implement Plan packets contain the Loop; other stage packets do not.
 
@@ -168,7 +168,7 @@ The prepared snapshot includes the package version so a recipient can identify t
 
 ## Save, display, and copy integrity
 
-Preparation writes `Handoff.md` atomically and returns the exact saved text for display. The browser stores the prepared snapshot it showed. Copy compares that displayed text with the current saved file before writing to the system clipboard.
+Preparation writes ordinary requests to `Handoff.md` atomically and returns the exact saved text for display. An `implement-plan` request instead writes `<Project name> — Implementation Request.md`; an existing or changed implementation request causes a visible conflict and is not overwritten. The browser stores the prepared snapshot it showed. Copy compares that displayed text with the current saved file before writing to the system clipboard.
 
 If another process changes the saved handoff, Copy raises a conflict and returns the current content. The user must inspect it and prepare again or deliberately select the expected version. The system never copies a hidden new version or only the visible portion of the textarea.
 
@@ -176,20 +176,20 @@ This comparison protects the handoff boundary without maintaining a version data
 
 ## Interactive host routes
 
-`ora_vibe_coder.hosts` detects these executables:
+`ora_vibe_coder.hosts` detects these terminal executables and, on macOS, separately detects their known desktop applications:
 
 | Host | Command identity | Interactive route |
 |---|---|---|
-| Codex | `codex` | Prompt in a visible terminal, in the selected code folder or the project documents folder. |
-| Claude Code | `claude` | Prompt in a visible terminal, in the selected code folder or the project documents folder. |
+| Codex | `codex` | Desktop opens a new chat with an unsent prefilled request location; Terminal opens a prompt in the selected code folder or the project documents folder. |
+| Claude Code | `claude` | Desktop opens a new chat with an unsent prefilled request location; Terminal opens a prompt in the selected code folder or the project documents folder. |
 | ZCode | `zcode` or inspected macOS application entry | Bounded no-change receipt, then normal interactive TUI. |
 | Hermes | `hermes` | Interactive TUI query route. |
 | Qwen Code | `qwen` | Prompt-interactive route. |
 | MiniMax Code | `mcode` or its user-local executable | Prompt in a visible terminal. |
 
-The complete assignment is written to a permission-restricted temporary operation directory. The command receives a short prompt pointing to that UTF-8 file, which avoids shell interpretation and command-line length limits. The host reads the file as the user's assignment and returns work in its own conversation.
+The complete assignment is written to a permission-restricted temporary operation directory. A Terminal command receives a short prompt pointing to that UTF-8 file, which avoids shell interpretation and command-line length limits. The host reads the file as the user's assignment and returns work in its own conversation. Desktop routes open only a visible application: Codex and Claude Code receive a prefilled but unsent request-location prompt; other detected desktop apps require the user to paste the copied request into a new chat.
 
-macOS uses Terminal and a task-owned command wrapper. Windows creates a new console. Linux chooses a supported desktop terminal. If none is found, Continue fails visibly and leaves Copy available.
+macOS Terminal uses a task-owned command wrapper. Windows creates a new console. Linux chooses a supported desktop terminal. If a requested route is unavailable, it fails visibly and leaves Copy available.
 
 Validation occurs before operation files are created. Launch failures remove task-owned temporary material. Once launched, the visible terminal owns the assignment copy until the coding tool exits, then the operation directory is removed.
 
