@@ -191,6 +191,8 @@ The complete assignment is written to a permission-restricted temporary operatio
 
 macOS Terminal uses a task-owned command wrapper. Windows creates a new console. Linux chooses a supported desktop terminal. If a requested route is unavailable, it fails visibly and leaves Copy available.
 
+When the generated macOS application launches Vibe, it keeps the inherited PATH and appends only existing standard user tool locations that are absent: `~/.local/bin`, `~/.minimax-code/bin`, `~/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`. This lets an icon-launched Vibe find separately installed coding-tool commands even though Finder normally supplies a reduced environment. It does not create those folders, install a tool, or change the PATH for a normal terminal or source-checkout launch.
+
 Validation occurs before operation files are created. Launch failures remove task-owned temporary material. Once launched, the visible terminal owns the assignment copy until the coding tool exits, then the operation directory is removed.
 
 The route reports `launch_requested`, not completed execution. It does not monitor the tool, import its transcript, or infer that process exit means project success.
