@@ -2,10 +2,10 @@
 
 ## Purpose and boundary
 
-Independently judge the accessible current implementation and its available requirements, and record the result truthfully in one Verification Report. The live invoking context coordinates one fresh reviewer; it is not itself the sole reviewer.
+Independently judge the complete current implementation and its documentation. Return one consolidated material correction set or, only after a clean cumulative result, create REPORT. The live invoking context coordinates one fresh reviewer; it is not itself the sole reviewer.
 
 - Use this framework with the complete [shared contract](../references/shared-contract.md) and its required role-and-assignment source; for portable use, supply all three texts.
-- Standalone use needs an accessible candidate; requirements of whatever completeness are supplied as available.
+- Standalone use needs an accessible candidate and substantive specification material.
 - Accept useful Plan, documentation, checks, baseline, or diff without requiring Ora provenance, filenames, Git, or prior status.
 
 Commissioning:
@@ -14,7 +14,7 @@ Commissioning:
 - A staffed coordinator remains the owner and delegates substantive inspection.
 - A session already receiving that verifier assignment performs the review below and returns its result; it does not recursively commission another reviewer or correct the product.
 - Verification is read-only with respect to the candidate, Specification, Plan, documentation, Git state, and external systems.
-- Declared outputs only: the Verification Report, and in a managed project with normal write authority the overview's own `Verification` field. The overview extension does not authorize corrections to candidate artifacts.
+- Declared outputs only: creating REPORT after `PASSED` and, in a managed project with normal write authority, updating only the overview's `Verification` field — subject to the shared artifact-scope and no-overwrite rules. The overview extension does not authorize corrections to candidate artifacts.
 
 ## Establish the review basis
 
@@ -22,18 +22,19 @@ Commissioning:
 - Ground truth: code, generated artifacts, current documentation, runtime behavior, and credible current check output. Not ground truth: summaries, old labels, and prior pass claims.
 - Include the agreed completion conditions, retained human decisions, and any finishing actions still outside this review assignment.
 
-Assemble what exists:
+For the guided path, assemble:
 
-- the available Specification and Plan;
-- the Programming Result's recorded implementation location or delivered revision, and direct candidate access;
-- any project documentation, exact check output, and the relevant cumulative diff; and
-- any available baseline.
+- the approved Specification and Plan when each exists;
+- actual project path, current revision or baseline, and direct candidate access;
+- the complete current User Guide, Technical Documentation, and Product Overview;
+- exact output from every check authorized by the Plan; and
+- the relevant cumulative diff when one exists.
 
 Basis limits:
 
-- Missing formal documents alone are not a verification failure. Explain what can be checked and what cannot be established — for example, whether working code meets an intention that was never sufficiently defined.
 - Exclude raw Request discussion and implementation transcripts.
-- When an upstream artifact was skipped or is thin, disclose the reduced conformance basis and judge everything still judgeable rather than inventing requirements or rejecting the whole review.
+- When an upstream artifact was explicitly skipped, disclose the reduced conformance basis.
+- For standalone use: identify exact omissions and continue everything still judgeable rather than inventing requirements or rejecting the whole review.
 
 ## Obtain one fresh independent review
 
@@ -72,7 +73,7 @@ Require direct inspection of the whole current candidate for:
 - material regressions where an actual baseline exists;
 - unauthorized scope or consequential effects;
 - consistency between implementation and every supplied documentation product; and
-- whether every readiness statement in the Verification Report would be true.
+- whether every readiness statement in REPORT would be true.
 
 These are obligations, not finding quotas. Preferences about wording, abstraction, tracking, extra tests, documentation style, or speculative improvements are not findings. Any actual material defect forces `NOT PASSED`.
 
@@ -96,34 +97,42 @@ In standalone use:
 
 Correction routing:
 
-- Verified findings survive continuation and reach the user with their evidence and recommended fixes. Report findings outside the reviewed scope without extending repair authority; do not silently repair them.
 - Standalone Verification stops with findings and its recommendation; it never invokes a correction stage secretly.
 - In the guided path, return the complete correction set to the owner for the earliest responsible stage.
 - Specification and Plan amendments follow shared review, acceptance, custody, and refresh rules; retained user approvals remain required.
 - Programming corrects implementation and affected documentation; affected authorized checks are refreshed; and the whole current candidate receives another fresh cumulative Verification. Do not review only the last fix or convert an unresolved defect into a final limitation.
 
-## Verdict and the Verification Report
+## PASSED and REPORT
 
-Record the actual verdict — for example `PASSED`, `NOT PASSED`, or a not-passed verdict with its exact reason such as `NOT PASSED — REVIEW INCOMPLETE`. Truthfulness rules:
+Return `PASSED` only when all of these hold:
 
-- `PASSED` only when no material finding or unverified material risk remains, the authorized checks that exist pass, the implementation conforms to the available requirements where they exist, important content and data are preserved, and failure and recovery behavior is sound.
-- Neither the report's existence nor an older passing result proves that newer code passed. A saved verdict describes the implementation actually inspected, not automatically newer code.
-- A fallback, unrepeated, or transport-failed review is never recorded as a completed passing review.
+- no material finding or unverified material risk remains;
+- all required authorized checks pass;
+- implementation conforms to the supplied Specification and Plan where each exists;
+- important content and data are preserved;
+- failure and recovery behavior is sound; and
+- all three guided-path documentation products truthfully describe the same candidate.
 
-Save or update one current Verification Report after actual verification — for passing, failing, and incomplete reviews alike. Update the current report after subsequent verification rather than accumulating superseded ones. It records:
+Only then create `<Project Name> — 07 Report.md` through an authorized report assignment to the verifier or an executor; a staffed coordinator delegates this substantive output. Title it **REPORT**, never “final report.” Certify the current product rather than narrating its construction. Include:
 
-- the implementation and available requirements inspected;
-- the actual verdict and the supporting check evidence;
-- findings and recommended corrections;
-- incomplete evidence and remaining work; and
-- a truthful readiness conclusion and the relevant delivered materials.
+- the verification basis and result;
+- the Specification and Plan used for conformance, when they exist;
+- confirmation of material code, mechanical, silent-failure, preservation, regression, and documentation-truth review;
+- a concise summary of exact check evidence rather than raw logs;
+- the truthful readiness conclusion for the use named by the Specification; and
+- the delivered-material list: Request, Specification, Implementation Plan, product-code path or revision, User Guide, Technical Documentation, Product Overview, and REPORT.
 
-Report limits and handback:
+REPORT limits and handback:
 
-- A report may describe approved limits or a genuinely reduced basis only when its conclusion remains true.
-- The report must not contain a false readiness claim or a claim that its own existence proves success.
-- Return the review, the report, evidence, limitations, remaining dependencies, and delivery state directly to the owner.
+- REPORT may describe approved limits or a genuinely reduced basis only when its conclusion remains true.
+- REPORT must not contain: an unresolved material defect, a reviewer transcript, a construction diary, or a claim that its own existence proves success.
+- Return the review, inspectable REPORT if produced, evidence, limitations, remaining dependencies, and delivery state directly to the owner.
+- `PASSED` completes this review assignment; the owner delegates any remaining authorized delivery, documentation, or cleanup through the existing workflow.
 - Required user approval before publication remains a checkpoint.
-- An earlier saved verdict is retained as history; it is not evidence that the current candidate passed.
+- Confirm the delivered condition with applicable evidence and resolve any material product change before claiming the larger project complete.
 
-If the result is not passed, still save the report with its truthful verdict and findings; present the complete finding set or exact incomplete-review risk and the recommended owner. Under normal write authority, record the actual result in the overview's own `Verification` field using the shared rules.
+If the result is not passed:
+
+- Do not create REPORT. Present the status, complete finding set or exact incomplete-review risk, and recommended owner, then stop.
+- Under normal write authority, record actual start/result in the overview's own `Verification` field using the shared rules.
+- An earlier REPORT is retained but described as a previous result, not proof that this candidate passed.
