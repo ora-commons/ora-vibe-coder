@@ -2,7 +2,7 @@
 
 ## Purpose and boundary
 
-Turn the available Specification — complete or not — or a substantive equivalent into one executable HOW for the actual project. Prevent a fresh Programming Loop from having to:
+Turn an approved Specification or substantive equivalent into one executable HOW for the actual project. Prevent a fresh Programming Loop from having to:
 
 - redesign the solution;
 - choose a consequential dependency;
@@ -25,9 +25,7 @@ Assignment:
 
 ## Inputs and readiness
 
-Read the current Request and Specification when they exist, or the substantive equivalents the user explicitly designates. Evaluate product intent by content.
-
-- When supplied sources contain genuinely conflicting versions and the user has not chosen among them, show the conflict for the user's choice; never silently choose, combine, or prefer the newer text.
+Read the current Request and Specification when they exist, or the substantive equivalents the user supplies. Evaluate product intent by content.
 
 If a material WHAT is absent, show:
 
@@ -36,11 +34,10 @@ If a material WHAT is absent, show:
 3. the likely consequence of guessing; and
 4. the recommendation to use [Ora Specification](ora-specification.md).
 
-Continuing on the available information:
+Reduced basis and commissioned work:
 
-- The user may proceed with whatever requirements exist. Do useful planning where the known requirements permit, record the exact limitation, and report it honestly; never present a Plan as fully grounded while a material WHAT is missing.
-- The recommendation to specify first is advice. Ask useful questions and explain consequential gaps in the normal conversation; when the user chooses to proceed, do so and state the resulting limitations.
-- For commissioned work, return a missing WHAT to the assignment owner for Specification under the shared correction route when the user wants that.
+- The user may explicitly ask to continue on a reduced basis; do useful planning where the known requirements permit, record the exact limitation, and never call a Plan passed or executable while the missing WHAT still prevents responsible execution.
+- For commissioned work, return a missing WHAT to the assignment owner for Specification under the shared correction route. Reviewed detail within delegated discretion does not automatically require user interruption; changes to reserved decisions still do.
 
 ## Inspect before choosing HOW
 
@@ -65,13 +62,13 @@ Discovery rules:
 - Resolve ordinary reversible technical choices through professional judgment.
 - Ask the user only when the choice materially changes outcome, scope, risk, cost, authority, external effects, a maintainability concern they care about, or the finish line.
 
-Use the released Gear products through their available documented interface when they are available to you; they are optional aids, never a prerequisite for this work. A native command is only a convenience. Do not copy their implementation:
+Use the released Gear products through their available documented interface, or prepare a complete handoff to a recipient where they are available. A native command is only a convenience. Do not copy their implementation:
 
-1. Check whether Gear 4 and Gear 3 are available.
-2. When available, use Gear 4 once for meaningful ways to implement the same product. Even when the user has a preference, check for a materially simpler, safer, or better-supported route.
+1. Check only Gear 4 and Gear 3 availability for this stage.
+2. Use Gear 4 once for meaningful ways to implement the same approved product. Even when the user has a preference, check for a materially simpler, safer, or better-supported route.
 3. Move promptly to Gear 3 when evidence eliminates alternatives, the user chooses, or the Plan has one direction. Give each call the complete source material, inspected facts, current Plan, intended ending, and explicit peer choice.
 4. Use Gear 3 to review the complete Plan for material gaps, contradictions, excess complexity, and executability. Use its bounded consensus form when the user has no further substantive input.
-5. Return to Gear 4 only when new evidence reopens a material implementation choice. On technical failure, preserve the Plan and disclose the failure. When a Gear product is unavailable, say so plainly and continue the work directly; an unavailable optional aid never stops the assignment.
+5. Return to Gear 4 only when new evidence reopens a material implementation choice. On technical failure, preserve the Plan, disclose the failure, and use only Gear's own fallback. If the required Gear product is unavailable, state the exact install-or-enable need and stop rather than imitating it.
 
 ## Design assignments and dependencies
 
@@ -110,12 +107,10 @@ Silence never waives a retained checkpoint; unaffected authorized work continues
 
 Deliver the approved scope in the fewest runs that can each succeed and be independently verified. Every split adds handoff, review, and replanning cost.
 
-Split only at a stable boundary for a real execution or dependency benefit:
+Split when any of these holds:
 
 - a material choice or foundation must be settled before dependent work; or
 - independently testable outcomes have a stable boundary between them.
-
-A split never postpones required work to a later run.
 
 Keep work together when either holds:
 
@@ -143,14 +138,14 @@ When the approved scope exceeds one run:
 
 Model tier:
 
-- Stay within the user's selected model configuration. Consider a cheaper model within that configuration when a run needs less capability; never downgrade automatically to another configuration.
-- A cheaper assignment requires all of: mechanical work; bounded context; literal references governing every precision requirement; no material unresolved choice; one writer per shared surface.
+- Assign each run the least capable model that can execute it.
+- A cheaper tier requires all of: mechanical work; bounded context; literal references governing every precision requirement; no material unresolved choice; one writer per shared surface.
 
 ## Required Plan
 
 Produce one current Plan with only useful project-specific content, in this order when applicable:
 
-1. **Controlling product input** — the available Specification and the exact outcome and scope it controls, without copying the Request.
+1. **Controlling product input** — the approved Specification and exact outcome and scope it controls, without copying the Request.
 2. **Inspected starting state** — facts governing the approach and user work that must be protected.
 3. **Chosen HOW** — the implementation approach and only consequential rationale.
 4. **Execution sequence** — coherent phases and complete assignments, useful parallelism, dependencies, foundation evidence and review boundaries, integration, staffing, document custody, and affected components identified by inspection.
@@ -168,7 +163,7 @@ Produce one current Plan with only useful project-specific content, in this orde
 >
 > Add or change tests only for user-visible behavior, a material regression, preservation of important content or data, or essential failure behavior. Stop testing when the approved checks pass and material review is satisfied.
 >
-> Independent review may reject only for a material defect — one that causes or is highly likely to cause wrong user-visible behavior, unmet approved criteria, content or data loss, falsehood or misattribution, a real runtime or deployment failure, unauthorized scope or effects, broken atomicity, failed necessary recovery or rollback, a security exposure, or a required check that does not pass. Preferences about abstraction, style, tracking, or unrequested generality are not defects.
+> Independent review may reject only for a material defect: wrong user-visible behavior, unmet approved criteria, content or data loss, falsehood, a real runtime or deployment failure, unauthorized scope or effects, broken atomicity, failed necessary recovery, security exposure, or a required check that does not pass. Preferences about abstraction, style, tracking, or unrequested generality are not defects.
 >
 > Continue through the approved execution sequence, exact checks, independent review, correction of every in-scope material finding, truthful documentation, task-owned cleanup, and the declared finish line. Do not stop at code written, a partial milestone, or an unreviewed candidate.
 
@@ -187,21 +182,19 @@ Correcting an inadequate Plan within delegated authority:
 - The accepted change must reach affected workers before resumption.
 - Never let a consultation answer silently replace the governing Plan; never add a second correction loop around a self-contained workflow.
 
-The Plan is complete enough for the intended work when all of these hold:
+The Plan is complete only when all of these hold:
 
-- it conforms to the available product input, with facts from inspection and no material WHAT hidden;
+- it conforms to the approved product, with facts from inspection and no material WHAT hidden;
 - consequential choices are resolved or safely delegated;
-- complete assignments let a fresh executor proceed without redesign;
-- checks and their risks are exact, and the delivery endpoint and its route are observable; and
-- every component passes the irreducible-complexity test.
-
-The user's workspace can commission a fresh independent assessment of whether the current Plan sufficiently guides the intended work; its verdict is advisory information and never blocks programming or revision. That assessment can also run as a second opinion — one model authors, a second harness evaluates, the author revises given the evaluation as a guide, optionally iterating up to three rounds before any remaining disagreement is reported for the user to break, with the different-lab or same-lab-fresh-session case labeled honestly. The user may start programming whatever the state of the Plan.
+- complete assignments let a fresh Programming Loop execute without redesign;
+- checks and their risks are exact, and the delivery endpoint and its route are observable;
+- every component passes the irreducible-complexity test;
+- bounded material review is complete; and
+- the full Plan has the required approval under the shared rules.
 
 ## Output and stop
 
-- Retain one current Plan; present its truthful assessment status separately from the user's own acceptance.
-- Revise the document the user's workspace resolved and displays, keeping its filename; use the expected default name only for a missing output.
-- An external revision may carry a small type label in closed opening YAML frontmatter, for example `vibe_document: plan`; the same field is recognized in ordinary opening metadata, and a label never proves completeness.
-- Where a workspace discovers documents automatically — a deliberate association first, then the expected name, a recognized `vibe_document` type label, then role words in the filename, newest within a rank — an explicit file choice overrides discovery. External saves appear when the user rereads the files; discovery identifies a document and never proves approval or completion.
-- In standalone use: recommend [Ora Programming](ora-programming.md) and stop; the user may start programming at any time, whatever the state of this Plan.
-- A commissioned executor returns the actual Plan or amendment, assessment evidence, accepted changes, affected dependencies, and any required decision to its owner.
+- Retain one current Implementation Plan; present its truthful review status separately from user approval.
+- In standalone use: after approval, recommend [Ora Programming](ora-programming.md) and stop; do not invoke it secretly.
+- A commissioned executor returns the actual Plan or amendment, review evidence, accepted changes, affected dependencies, and any required decision to its owner.
+- Supply the complete Programming handoff when needed; only authorized guided coordination advances the lifecycle.

@@ -1,6 +1,6 @@
 ---
 name: ora-verification
-description: Independently inspect an accessible implementation against available requirements and documentation. Use for read-only cumulative Verification that records material findings and a truthful Verification Report for passing, failing, and incomplete reviews alike.
+description: Independently inspect an accessible implementation against substantive requirements and documentation. Use for read-only cumulative Verification that returns material findings or creates REPORT only after `PASSED`.
 ---
 
 # Ora Verification
