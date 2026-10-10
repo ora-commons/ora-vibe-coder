@@ -8,6 +8,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlencode, quote
 
 HOSTS = {
     "codex": ("Codex", "codex"),
@@ -17,10 +18,22 @@ HOSTS = {
     "qwen": ("Qwen Code", "qwen"),
     "minimax": ("MiniMax Code", "mcode"),
 }
-NOTICE = "Implemented route; live host, account, and platform combinations are untested. Your coding tool retains its normal login and approval steps."
+# Makers' own install instructions, shown when a tool's command is not found.
+# Only established maker pages are named; no substitute page is invented for
+# a tool whose maker has no public instructions to link.
+INSTALL_URLS = {
+    "codex": "https://github.com/openai/codex",
+    "claude": "https://github.com/anthropics/claude-code",
+    "qwen": "https://github.com/QwenLM/qwen-code",
+}
+DESKTOP_APPS = {
+    "codex": "ChatGPT.app", "claude": "Claude.app", "zcode": "ZCode.app",
+    "hermes": "Hermes.app", "qwen": "Qwen Code.app", "minimax": "MiniMax Code.app",
+}
+NOTICE = "Live host, account, and platform combinations are untested. Your coding tool retains its normal login and approval steps."
 ROUTE_NOTICES = {
-    "zcode": "Continue uses one bounded, no-change receipt turn before opening ZCode's normal interactive TUI.",
-    "hermes": "Continue uses Hermes 0.18.2's interactive TUI query route.",
+    "zcode": "Terminal uses one bounded, no-change receipt turn before opening ZCode's normal interactive TUI.",
+    "hermes": "Terminal uses Hermes 0.18.2's interactive TUI query route.",
 }
 ZCODE_BOOTSTRAP = (
     "Read the complete attached UTF-8 Markdown as the user's exact assignment. "
@@ -53,8 +66,32 @@ def executable(host):
 
 def discover():
     return [{"id": key, "name": label, "detected": executable(key) is not None,
-             "continuation": True, "notice": " ".join(filter(None, (
+             "desktop": desktop_application(key) is not None,
+             "desktop_request": "prefilled" if key in {"codex", "claude"} else "copy",
+             "continuation": True, "instructions": INSTALL_URLS.get(key),
+             "notice": " ".join(filter(None, (
                  NOTICE, ROUTE_NOTICES.get(key))))} for key, (label, _) in HOSTS.items()]
+
+
+def desktop_application(host, platform=None):
+    if (platform or sys.platform) != "darwin":
+        return None
+    name = DESKTOP_APPS[host]
+    return next((path for path in (Path("/Applications") / name, Path.home() / "Applications" / name)
+                 if path.is_dir()), None)
+
+
+def desktop_arguments(host, packet, folder, app):
+    if host not in {"codex", "claude"}:
+        return ["open", "-a", str(app)]
+    prompt = (f"Read the complete saved Markdown request at {packet}. "
+              "Treat it as my full assignment, then work in this visible chat. "
+              "Read the file before acting; keep your normal approval steps.")
+    if host == "codex":
+        url = "codex://threads/new?" + urlencode({"prompt": prompt, "path": str(folder)}, quote_via=quote)
+    else:
+        url = "claude://code/new?" + urlencode({"q": prompt, "folder": str(folder)}, quote_via=quote)
+    return ["open", "-a", str(app), url]
 
 
 def agent_arguments(host, command, packet):
@@ -72,17 +109,17 @@ def agent_arguments(host, command, packet):
     raise ValueError(f"No inspected interactive prompt entry is available for {HOSTS[host][0]}.")
 
 
-def launch_request(host, command, packet, project):
+def launch_request(host, command, packet, folder):
     if host == "zcode":
         return {
             "kind": "zcode",
-            "cwd": str(project),
+            "cwd": str(folder),
             "command": command,
             "packet": str(packet),
         }
     return {
         "kind": "direct",
-        "cwd": str(project),
+        "cwd": str(folder),
         "argv": agent_arguments(host, command, packet),
     }
 
@@ -104,23 +141,43 @@ def terminal_arguments(operation, platform=None):
     return [terminal, *separator, sys.executable, runner, str(operation)], {}
 
 
-def continue_in(project, displayed, destination, *, launch=None, platform=None):
+def continue_in(project, displayed, destination, *, purpose=None, route="terminal", launch=None, platform=None):
     host = host_id(destination)
     if host is None:
         raise ValueError("Select one of the six coding tools, or use Copy for another recipient.")
-    text = project.copy_snapshot(displayed)
+    text = project.copy_snapshot(displayed, purpose)
+    if route not in {"terminal", "desktop"}:
+        raise ValueError("Choose Desktop or Terminal for this request.")
+    if route == "desktop":
+        app = desktop_application(host, platform)
+        if app is None:
+            raise ValueError(f"{HOSTS[host][0]} desktop app was not found. Copy the request or use Terminal if its tool is ready.")
+        packet = project.root / (project.implementation_request_name() if purpose == "implement-plan" else "Handoff.md")
+        folder = project.code_folder() or project.root
+        args = desktop_arguments(host, packet, folder, app)
+        if launch is not None:
+            launch(args, {})
+        else:
+            subprocess.run(args, check=True, timeout=15, capture_output=True)
+        detail = ("A new desktop chat was requested with the saved file location; the request is prefilled but not sent."
+                  if host in {"codex", "claude"} else
+                  "The desktop app was opened. Paste the request copied to your clipboard into a new chat; the request was not sent.")
+        return {"state": "launch_requested", "message": f"{detail} Confirm the result in {HOSTS[host][0]} itself."}
     command = executable(host)
     if command is None:
-        raise ValueError(f"{HOSTS[host][0]} was not found. Install or enable that coding tool, then try Continue again. Your saved Markdown and Copy remain available.")
+        raise ValueError(f"{HOSTS[host][0]} terminal tool was not found. Install or enable it, then try Terminal again. Your saved Markdown and Copy remain available.")
+    # Launch in the selected code folder; the documents folder is only a
+    # starting point when no code folder is known.
+    folder = project.code_folder() or project.root
     # Validate the selected host before creating any operation files.
-    launch_request(host, command, Path("assignment.md"), project.root)
+    launch_request(host, command, Path("assignment.md"), folder)
     operation = Path(tempfile.mkdtemp(prefix="ora-vibe-continue-"))
     try:
         packet = operation / "assignment.md"
         packet.write_bytes(text.encode("utf-8"))
         packet.chmod(0o600)
         (operation / "launch.json").write_text(
-            json.dumps(launch_request(host, command, packet, project.root)),
+            json.dumps(launch_request(host, command, packet, folder)),
             encoding="utf-8",
         )
         args, options = terminal_arguments(operation, platform)

@@ -1,24 +1,28 @@
 """Shared per-user source installation and desktop launchers."""
 
 import argparse
+import base64
 import hashlib
 import json
 import os
 from pathlib import Path
 import plistlib
 import re
-import shlex
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 
+from . import loop_integrity
 from .launcher import AppLock
 
 ROOT = Path(__file__).resolve().parent.parent
 SKILL_HOMES = {"codex": ".codex", "claude": ".claude", "zcode": ".zcode", "hermes": ".hermes", "qwen": ".qwen", "minimax": ".minimax"}
 IDENTITY = "ora-vibe-install.json"
 LOOP_PROFILE = "programming-loop-reviewer.md"
+EXECUTABLE_NAME = "Ora Vibe Coder"
+BRIDGE_HOME_NAME = "agent-bridge"
 
 
 def digest(data):
@@ -205,12 +209,78 @@ def transaction(targets, action):
             shutil.rmtree(backup)
 
 
+def release_version(value):
+    """One dotted numeric release identity, or None when unreadable."""
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value.strip())
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def refuse_to_replace_newer(home, platform, destination, hosts, skill_names, plugin, version):
+    """Setup never rolls back: a newer installed copy is named, not replaced."""
+    installed = release_version(version)
+    newer = []
+    for label, folder in (
+        ("the Vibe application", destination),
+        ("the bundled Agent Bridge", bridge_home(destination)),
+        ("the Vibe launcher", shortcut_location(home, platform)),
+        *((f"the Vibe entries for {host}", home / SKILL_HOMES[host] / "skills" / name)
+          for host in hosts for name in skill_names),
+    ):
+        try:
+            data = json.loads((folder / IDENTITY).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        recorded = data.get("version") if isinstance(data, dict) else None
+        if release_version(recorded) and installed and release_version(recorded) > installed:
+            newer.append(f"{label} at {folder} records version {recorded}")
+    bundled_loop = release_version(
+        (plugin / "resources/programming-loop/VERSION").read_text(encoding="utf-8"))
+    for host in hosts:
+        try:
+            data = json.loads(
+                (home / SKILL_HOMES[host] / "skills/programming-loop/SOURCE.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        recorded = data.get("version") if isinstance(data, dict) else None
+        if bundled_loop and release_version(recorded) and release_version(recorded) > bundled_loop:
+            newer.append(f"the Programming Loop for {host} records version {recorded}")
+    if newer:
+        raise ValueError(
+            "A newer version is already installed, so setup changed nothing: "
+            + "; ".join(newer)
+            + ". Removing Ora Vibe Coder first allows installing an older version."
+        )
+
+
 def programming_loop_targets(home, hosts):
     targets = []
     for host in hosts:
         root = home / SKILL_HOMES[host]
         targets.extend((root / "skills/programming-loop", root / "agents" / LOOP_PROFILE))
     return targets
+
+
+def bridge_home(destination):
+    """The one Bridge runtime location: beside the application, never per skill."""
+    return Path(destination).parent / BRIDGE_HOME_NAME
+
+
+def bridge_files(source):
+    """The bundled Agent Bridge runtime exactly as pinned, one flat file map."""
+    authority = loop_integrity.bridge_authority_metadata()
+    try:
+        files, _modes, source_tree = loop_integrity.read_bridge_snapshot(
+            Path(source) / authority["vendored_snapshot"])
+    except loop_integrity.LoopIntegrityError as error:
+        raise ValueError(f"{error} The previous installation was preserved.") from error
+    if source_tree != authority["source_tree"]:
+        raise ValueError(
+            "The bundled Agent Bridge does not match its reviewed source tree. "
+            "The previous installation was preserved."
+        )
+    return files
 
 
 def run_loop_installer(installer, action, host, home):
@@ -224,13 +294,173 @@ def run_loop_installer(installer, action, host, home):
     return result.stdout.strip()
 
 
-def launcher_files(app, platform=None, python=None):
+def applet_source(python, launch, settings, home):
+    """Stay-open JXA wrapper: owns the Python child with native argument
+    passing, handles reopen, exits on child termination, reports an unusable
+    installation through a native dialog before exiting, and routes Dock Quit
+    through the input-warning quit check. No shells, no polling."""
+    paths = {"python": str(python), "launch": str(launch), "settings": str(settings), "home": str(home)}
+    for value in paths.values():
+        if "\n" in value or "\r" in value:
+            raise ValueError("Launcher paths cannot contain newlines.")
+    return (
+        "ObjC.import('Foundation')\n"
+        "ObjC.import('stdlib')\n"
+        "const APP = " + json.dumps(paths, ensure_ascii=False) + "\n"
+        "var watched = null\n"
+        "var stopping = false\n"
+        "ObjC.registerSubclass({\n"
+        "  name: 'OraVibeChildWatcher',\n"
+        "  superclass: 'NSObject',\n"
+        "  methods: {\n"
+        "    'childExited:': {\n"
+        "      types: ['void', ['id']],\n"
+        "      implementation: function (self, cmd, note) {\n"
+        "        if (!watched || watched.terminationStatus === 42) { return }\n"
+        "        $.exit(0)\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "})\n"
+        "function runChild(extra) {\n"
+        "  const task = $.NSTask.new\n"
+        "  task.launchPath = APP.python\n"
+        "  const args = [APP.launch, '--settings', APP.settings]\n"
+        "  if (extra) { for (const item of extra) { args.push(item) } }\n"
+        "  task.arguments = ObjC.wrap(args)\n"
+        "  task.currentDirectoryPath = APP.home\n"
+        "  let launched = false\n"
+        "  try { launched = task.launchAndReturnError(null) } catch (error) { launched = false }\n"
+        "  if (!launched) {\n"
+        "    warnUnusableInstall()\n"
+        "    $.exit(1)\n"
+        "  }\n"
+        "  return task\n"
+        "}\n"
+        "function warnUnusableInstall() {\n"
+        "  const current = Application.currentApplication()\n"
+        "  current.includeStandardAdditions = true\n"
+        "  current.displayDialog('Ora Vibe Coder cannot start: the installed program files are missing or damaged. Application folder: ' + APP.home + ' Interpreter: ' + APP.python + ' Launcher: ' + APP.launch + ' Reinstall Ora Vibe Coder, or repair the installation, then open it again.', {withTitle: 'Ora Vibe Coder', buttons: ['OK'], defaultButton: 'OK'})\n"
+        "}\n"
+        "function run(argv) {\n"
+        "  watched = runChild(['--wrapper'])\n"
+        "  $.NSNotificationCenter.defaultCenter.addObserverSelectorNameObject($.OraVibeChildWatcher.new, 'childExited:', $.NSTaskDidTerminateNotification, watched)\n"
+        "}\n"
+        "function reopen() { if (!stopping) { runChild(['--reopen']) } }\n"
+        "function idle() { return 60 }\n"
+        "function quit(event) {\n"
+        "  stopping = true\n"
+        "  const helper = runChild(['--quit'])\n"
+        "  for (let i = 0; i < 36000 && helper.isRunning; i++) {\n"
+        "    $.NSRunLoop.currentRunLoop.runModeBeforeDate('NSDefaultRunLoopMode', $.NSDate.dateWithTimeIntervalSinceNow(0.1))\n"
+        "  }\n"
+        "  if (helper.isRunning || helper.terminationStatus !== 0) { return false }\n"
+        "  for (let i = 0; i < 300 && watched && watched.isRunning; i++) {\n"
+        "    $.NSRunLoop.currentRunLoop.runModeBeforeDate('NSDefaultRunLoopMode', $.NSDate.dateWithTimeIntervalSinceNow(0.1))\n"
+        "  }\n"
+        "  if (watched && watched.isRunning) { $.exit(1) }\n"
+        "  return true\n"
+        "}\n"
+    )
+
+
+def mac_icns(source_png):
+    """A provisional .icns from the local Ora logo through sips and iconutil."""
+    with tempfile.TemporaryDirectory(prefix="ora-vibe-icon-") as directory:
+        iconset = Path(directory) / "Ora Vibe Coder.iconset"
+        iconset.mkdir()
+        sizes = ((16, "icon_16x16.png"), (32, "icon_16x16@2x.png"), (32, "icon_32x32.png"),
+                 (128, "icon_128x128.png"), (256, "icon_128x128@2x.png"),
+                 (256, "icon_256x256.png"), (512, "icon_512x512.png"))
+        for size, name in sizes:
+            subprocess.run(["/usr/bin/sips", "-z", str(size), str(size), str(source_png), "--out", str(iconset / name)],
+                           check=True, capture_output=True, timeout=120)
+        icns = Path(directory) / "applet.icns"
+        subprocess.run(["/usr/bin/iconutil", "-c", "icns", str(iconset), "-o", str(icns)],
+                       check=True, capture_output=True, timeout=120)
+        return icns.read_bytes()
+
+
+def mac_applet_files(app, python, version="0.0.0"):
+    if sys.platform != "darwin":
+        raise ValueError("The Mac application launcher is generated on macOS.")
+    with tempfile.TemporaryDirectory(prefix="ora-vibe-applet-") as directory:
+        source = Path(directory) / "applet.js"
+        source.write_text(applet_source(python, app / "launch.py", app.parent / "settings.json", app), encoding="utf-8")
+        bundle = Path(directory) / f"{EXECUTABLE_NAME}.app"
+        subprocess.run(["/usr/bin/osacompile", "-s", "-l", "JavaScript", "-o", str(bundle), str(source)],
+                       check=True, capture_output=True, timeout=300)
+        executable = bundle / "Contents" / "MacOS" / EXECUTABLE_NAME
+        (bundle / "Contents" / "MacOS" / "applet").rename(executable)
+        logo = ROOT / "ora_vibe_coder" / "static" / "ora-logo.png"
+        (bundle / "Contents" / "Resources" / "applet.icns").write_bytes(mac_icns(logo))
+        # Edit the compiler's own plist: the applet runtime depends on its
+        # stay-open and usage-description keys, so nothing else is replaced.
+        plist_path = bundle / "Contents" / "Info.plist"
+        plist = plistlib.loads(plist_path.read_bytes())
+        plist.update({
+            "CFBundleName": EXECUTABLE_NAME, "CFBundleDisplayName": EXECUTABLE_NAME,
+            "CFBundleIdentifier": "org.ora.vibe-coder", "CFBundleExecutable": EXECUTABLE_NAME,
+            "CFBundleShortVersionString": version,
+        })
+        plist_path.write_bytes(plistlib.dumps(plist))
+        subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(bundle)],
+                       check=False, capture_output=True, timeout=300)
+        return {str(path.relative_to(bundle)): path.read_bytes()
+                for path in sorted(bundle.rglob("*")) if path.is_file()}
+
+
+def windows_icon_bytes(png):
+    """A provisional .ico container holding the local Ora logo PNG."""
+    width = height = 0  # 0 declares a 256-pixel entry; Windows scales the payload.
+    header = struct.pack("<HHH", 0, 1, 1)
+    entry = struct.pack("<BBBBHHII", width, height, 0, 0, 1, 32, len(png), 6 + 16)
+    return header + entry + png
+
+
+def shortcut_command(lnk, target, arguments, working, icon):
+    def literal(text):
+        return "'" + str(text).replace("'", "''") + "'"
+    return "\n".join([
+        "$shell = New-Object -ComObject WScript.Shell",
+        f"$shortcut = $shell.CreateShortcut({literal(lnk)})",
+        f"$shortcut.TargetPath = {literal(target)}",
+        f"$shortcut.Arguments = {literal(arguments)}",
+        f"$shortcut.WorkingDirectory = {literal(working)}",
+        f"$shortcut.IconLocation = {literal(str(icon) + ',0')}",
+        "$shortcut.Save()",
+    ])
+
+
+def ensure_windows_shortcut(home, app, python, icon):
+    """Create the desktop .lnk through built-in PowerShell/WScript.Shell.
+
+    Only runs on an actual Windows installation; paths travel as data inside
+    one encoded command, never through a shell string. Windows splits the
+    shortcut's Arguments value at whitespace, so each path is double-quoted
+    inside that value; default install paths contain spaces.
+    """
+    if os.name != "nt":
+        return None
+    pythonw = Path(python).with_name("pythonw.exe")
+    target = pythonw if pythonw.is_file() else Path(python)
+    lnk = home / "Desktop" / f"{EXECUTABLE_NAME}.lnk"
+    launch_entry, settings_entry = app / "launch.py", app.parent / "settings.json"
+    command = shortcut_command(lnk, target, f'"{launch_entry}" --settings "{settings_entry}"', app, icon)
+    encoded = base64.b64encode(command.encode("utf-16-le")).decode("ascii")
+    result = subprocess.run(["powershell", "-NoProfile", "-EncodedCommand", encoded],
+                            capture_output=True, text=True, timeout=120)
+    if result.returncode:
+        raise ValueError(f"The desktop shortcut could not be created: {result.stderr.strip() or result.stdout.strip()}")
+    return lnk
+
+
+def launcher_files(app, platform=None, python=None, version="0.0.0"):
     platform, python = platform or sys.platform, python or sys.executable
     if any(character in str(python) + str(app) for character in "\r\n"):
         raise ValueError("Launcher paths cannot contain newlines.")
     if platform == "darwin":
-        return {"Contents/Info.plist": plistlib.dumps({"CFBundleName": "Ora Vibe Coder", "CFBundleDisplayName": "Ora Vibe Coder", "CFBundleIdentifier": "org.ora.vibe-coder", "CFBundleExecutable": "Ora Vibe Coder", "CFBundlePackageType": "APPL"}),
-                "Contents/MacOS/Ora Vibe Coder": ("#!/bin/sh\nexec " + shlex.join(["/usr/bin/open", "-a", "Terminal", str(app / "Start Vibe.command")]) + "\n").encode()}
+        return mac_applet_files(app, python, version)
     if platform == "win32":
         # This launcher script has fixed product/interpreter paths, never a user prompt.
         safe_python, safe_app = str(python).replace("%", "%%"), str(app / "launch.py").replace("%", "%%")
@@ -244,7 +474,10 @@ def launcher_files(app, platform=None, python=None):
 
 def install(source=ROOT, *, home=None, destination=None, hosts=(), platform=None):
     if sys.version_info < (3, 10):
-        raise ValueError("Ora Vibe Coder requires Python 3.10 or later.")
+        raise ValueError(
+            "Ora Vibe Coder requires Python 3.10 or later. Get Python 3.10 or later "
+            "from the python.org macOS installer at https://www.python.org/downloads/, "
+            "then open this setup again.")
     source, home, platform = Path(source).resolve(), Path(home or Path.home()).absolute(), platform or sys.platform
     destination = Path(destination or install_location(home, platform)).absolute()
     if source == destination or source.is_relative_to(destination):
@@ -274,8 +507,12 @@ def install_locked(source, home, platform, destination, hosts, plugin, version, 
 
 
 def install_files(source, home, platform, destination, hosts, plugin, version, files):
-    if platform == "darwin":
-        files["Start Vibe.command"] = ("#!/bin/sh\nexec " + shlex.join([sys.executable, str(destination / "launch.py"), "--settings", str(destination.parent / "settings.json")]) + "\n").encode()
+    if platform == "win32":
+        logo = ROOT / "ora_vibe_coder" / "static" / "ora-logo.png"
+        files[f"{EXECUTABLE_NAME}.ico"] = windows_icon_bytes(logo.read_bytes())
+    # Verified before any staging directory is created, so a divergent bundle
+    # aborts with the previous installation untouched.
+    bridge = bridge_files(source)
     replacements = []
     try:
         skills = [skill for skill in (plugin / "skills").iterdir() if skill.is_dir()]
@@ -287,31 +524,43 @@ def install_files(source, home, platform, destination, hosts, plugin, version, f
         for host in hosts:
             if not (plugin / "resources/programming-loop/adapters" / f"{host}.md").is_file():
                 raise ValueError(f"The selected {host} host operations are missing. The previous installation was preserved.")
+        # Setup never rolls back: this runs before the first staging directory
+        # is created, so a newer installed app, launcher, Bridge, Vibe entry,
+        # or installed Programming Loop changes nothing.
+        refuse_to_replace_newer(home, platform, destination, hosts,
+                                [skill.name for skill in skills], plugin, version)
         replacements.append((destination, prepare_replacement(destination, files, version)))
+        replacements.append((bridge_home(destination), prepare_replacement(bridge_home(destination), bridge, version)))
         for host in hosts:
             for skill in skills:
                 native = {"SKILL.md": (skill / "SKILL.md").read_text(encoding="utf-8").replace("../../", "./").encode("utf-8")}
                 for directory in ("frameworks", "references", "resources"):
                     if (plugin / directory).is_dir():
                         native.update({f"{directory}/{name}": data for name, data in file_map(plugin / directory).items()})
-                operations = plugin / "resources" / "programming-loop" / "adapters" / f"{host}.md"
+                operations = plugin / "resources/programming-loop/adapters" / f"{host}.md"
                 if skill.name in {"ora-programming", "ora-vibe-coder"} and operations.is_file():
                     native["SKILL.md"] += f"\nRead the selected host operations at [host operations](./resources/programming-loop/adapters/{host}.md). These operations do not change the common Vibe method.\n".encode()
                 target = home / SKILL_HOMES[host] / "skills" / skill.name
                 replacements.append((target, prepare_replacement(target, native, version)))
         shortcut = shortcut_location(home, platform)
-        replacements.append((shortcut, prepare_replacement(shortcut, launcher_files(destination, platform), version)))
+        replacements.append((shortcut, prepare_replacement(shortcut, launcher_files(destination, platform, version=version), version)))
         for host in hosts:
             run_loop_installer(loop_installer, "install-check", host, home)
+        extra_targets = list(programming_loop_targets(home, hosts))
 
         def apply_complete_install():
             apply_replacements(replacements)
             installed_loop = destination / "plugins" / "ora-vibe-coder" / "resources" / "programming-loop" / "scripts" / "install.py"
             for host in hosts:
                 run_loop_installer(installed_loop, "install", host, home)
+            if platform == "win32":
+                # One owned desktop shortcut; the old launcher stays for release migration.
+                ensure_windows_shortcut(home, destination, sys.executable, destination / f"{EXECUTABLE_NAME}.ico")
 
+        if platform == "win32" and os.name == "nt":
+            extra_targets.append(home / "Desktop" / f"{EXECUTABLE_NAME}.lnk")
         transaction(
-            [target for target, _ in replacements] + programming_loop_targets(home, hosts),
+            [target for target, _ in replacements] + extra_targets,
             apply_complete_install,
         )
     except BaseException:
@@ -324,8 +573,9 @@ def install_files(source, home, platform, destination, hosts, plugin, version, f
         if hosts else
         "The Vibe application was installed without coding-tool entries."
     )
-    return {"app": str(destination), "launcher": str(shortcut), "hosts": list(hosts), "version": version,
-            "note": configured + " Specification and Planning also need the separate Gear companion with its selected supported engine. Account access is checked by your coding tool; no model has been called."}
+    return {"app": str(destination), "bridge": str(bridge_home(destination)),
+            "launcher": str(shortcut), "hosts": list(hosts), "version": version,
+            "note": configured + " The bundled Agent Bridge runtime was installed beside the application for the in-app conversation. Ora AI Boost (Gear 3 and Gear 4) is an optional extra for Specification and Planning — Vibe works without it; its releases are at https://github.com/ora-commons/ora-adversarial-review/releases/latest. Account access is checked by your coding tool; no model has been called."}
 
 
 def preflight_remove_directory(folder):
@@ -391,6 +641,7 @@ def remove(source=ROOT, *, home=None, destination=None, hosts=(), platform=None)
         vibe_targets = [
             *(home / SKILL_HOMES[host] / "skills" / skill.name for host in hosts for skill in skills),
             shortcut_location(home, platform),
+            bridge_home(destination),
             destination,
         ]
         loop_hosts = []
@@ -410,6 +661,7 @@ def remove(source=ROOT, *, home=None, destination=None, hosts=(), platform=None)
                     loop_hosts.append(host)
         for target in vibe_targets:
             preflight_remove_directory(target)
+        desktop_shortcut = home / "Desktop" / f"{EXECUTABLE_NAME}.lnk"
 
         def apply_complete_removal():
             for host in loop_hosts:
@@ -418,9 +670,14 @@ def remove(source=ROOT, *, home=None, destination=None, hosts=(), platform=None)
                     notes.append(note)
             for target in vibe_targets:
                 retained.extend(remove_directory(target))
+            if platform == "win32" and os.name == "nt" and desktop_shortcut.is_file():
+                desktop_shortcut.unlink()
 
+        removal_targets = programming_loop_targets(home, loop_hosts) + vibe_targets
+        if platform == "win32" and os.name == "nt":
+            removal_targets.append(desktop_shortcut)
         transaction(
-            programming_loop_targets(home, loop_hosts) + vibe_targets,
+            removal_targets,
             apply_complete_removal,
         )
         shortcut = shortcut_location(home, platform)

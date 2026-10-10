@@ -2,7 +2,7 @@
 
 ## Purpose and boundary
 
-Make the current Programming Loop available within the Ora lifecycle. This framework is a thin readiness check and clean handoff, not an executor, reviewer, Git process, test runner, monitor, or recovery system.
+Hand programming work to a capable implementing recipient, offering the Programming Loop as one structured method. This framework is a thin readiness check and clean handoff, not an executor, reviewer, Git process, test runner, monitor, or recovery system.
 
 - Use this framework with the complete [shared contract](../references/shared-contract.md) and its required role-and-assignment source; for portable use, supply all three texts.
 - Accept direct use without Ora history, fixed filenames, a Request, a Plan, a Bridge session, a prior status, or Git.
@@ -10,35 +10,34 @@ Make the current Programming Loop available within the Ora lifecycle. This frame
 
 Assignment routing:
 
-- Address the entry assignment to the existing Programming Loop owner; supply the complete role source and assignment through its approved task instructions.
+- When the Programming Loop is used, address the entry assignment to its owner and supply the complete role source and assignment through its approved task instructions.
 - That owner passes applicable role instructions and complete assignments to producing executors and independent verifiers through the Loop's worker briefs and dispatch method.
 - An outer coordinator commissions the complete Loop and receives its handback; it does not take over internal workers or add a second team.
+- Without the Loop, the receiving session implements the assignment directly under its own normal approvals.
 
 ## Transfer Programming ownership
 
 - A session that participated in Specification, Planning, or a failed implementation cannot coordinate Programming. Session history decides this, not task complexity.
-- The initiating session and host adapter automatically deliver one complete handoff and transfer sole Programming ownership to one fresh coordinator that can dispatch and monitor the fresh executor and independent reviewer. A session opened specifically for Programming from approved artifacts is already fresh; do not add another coordinator.
-- The user does not open, copy between, or manage worker conversations. If the actual host cannot preserve these boundaries, report the concrete limitation. Do not collapse roles or add an outer coordination layer. This rule controls Programming worker transfer; initial user delivery of a prepared request remains supported.
+- The initiating session and host adapter automatically deliver one complete handoff and transfer sole Programming ownership to one fresh coordinator that can dispatch and monitor the fresh executor and independent reviewer. A session opened specifically for Programming from the available artifacts is already fresh; do not add another coordinator.
+- The user does not open, copy between, or manage worker conversations. If the actual host cannot preserve these boundaries, report the concrete limitation. Do not collapse roles or add an outer coordination layer. This rule controls Programming worker transfer; the user's own delivery routes — the workspace conversation or a prepared request — remain supported.
 
-## Check the basis and companion
+## Check the basis
 
-Read the supplied Specification and Implementation Plan or substantive equivalents. Judge them by content:
+Read the supplied Specification and Implementation Plan when they exist, or the substantive equivalents. Judge them by content:
 
-- Missing product intent creates hidden product judgment; identify the exact gap, concrete risk, and recommendation for [Ora Specification](ora-specification.md).
-- Missing implementation direction makes Programming redesign the solution while coding; identify the exact gap, concrete risk, and recommendation for [Ora Planning](ora-planning.md).
+- Missing product intent creates hidden product judgment; identify the exact gap and concrete risk, and recommend [Ora Specification](ora-specification.md).
+- Missing implementation direction makes Programming redesign the solution while coding; identify the exact gap and concrete risk, and recommend [Ora Planning](ora-planning.md).
 
-In the initial readiness response:
+These recommendations are advice, never a barrier. In the initial response:
 
 - Name the recommended earlier framework for each material gap and its concrete risk.
-- Explicitly tell the user they may skip the recommended quality stage and continue on the reduced basis; do not wait for the user to discover that choice.
-- If the user chooses to continue, record the reduced basis without calling it an approved Specification or Plan.
-- This skips only the recommended quality stage: the Programming Loop must still inspect the project, present its minimum honest scope lock and exact checks, and obtain approval before editing.
+- Tell the user they may continue with the available information; if they choose to, record the limitation honestly and proceed, reporting the resulting limitations in the result.
+- Whatever the documents' state, the executing session or Loop still inspects the project, presents its minimum honest scope and exact checks, and obtains its normal approval before editing.
 
-Companion check:
+Structured method:
 
-- Confirm the selected recipient can use the released Programming Loop through its documented interface and that the companion is available and substantively current.
-- Native discovery may help when available; it is not a prerequisite for preparing the handoff. Check only this stage's companion.
-- If the companion is missing or materially out of date: identify Programming Loop as the exact install, enable, or update need and stop companion-dependent execution. A complete manual handoff may still be prepared for a recipient with that companion; do not claim it ran or execute through an Ora-authored substitute.
+- The released Programming Loop is the offered structured method when the recipient has it through its documented interface and it is substantively current. Confirm availability when you can; native discovery may help but is not a prerequisite.
+- If the companion is missing or materially out of date, say so plainly. The work still proceeds as a direct implementation conversation under the host's normal approvals, with the limitation reported; never claim the Loop ran and never imitate it with an Ora-authored substitute.
 
 ## Select the initiating host truthfully
 
@@ -63,7 +62,7 @@ Companion check:
 
 Include:
 
-- the approved Specification and Plan when each exists;
+- the available Specification and Plan when each exists;
 - otherwise the available current requirements, exact known gaps, and every consequential unresolved assumption;
 - the actual project path and current state;
 - factual protected state needed to preserve user work; and
@@ -76,15 +75,13 @@ Assignment content:
 - Do not invent a Git or deployment requirement for a project whose agreed endpoint does not include it.
 - Exclude raw Request history, planning discussion, Gear deliberation, rejected alternatives, reviewer transcripts, and claims offered instead of direct inspection.
 
-Tell the Programming Loop that the complete candidate includes product code in its real project structure plus three truthful reader products:
+Tell the Programming recipient that the complete candidate is the product code in its real project structure, plus one truthful reader product:
 
-- **User Guide** — fast start, real prerequisites and setup, ordered normal use, consequential choices, essential failure or recovery help, and a fuller usage explanation after the fast path. Keep architecture, construction history, and nonexistent features out;
-- **Technical Documentation** — actual architecture, responsibilities, control and data flow, safe operation and configuration, interfaces, dependencies, checks, failure behavior, recovery, and safe maintenance. Do not duplicate source code or construction history; and
-- **Product Overview** — a plain-language decision aid beginning with a concise paragraph explaining purpose, intended users, value, and any key condition. Explain the problem, uses, benefits, limits, prerequisites, and expected result without becoming a second User Guide or marketing fiction.
+- **Programming Result** — state near the top whether the programming work completed or stopped unfinished, then record the work performed, code location, checks, delivery state, and remaining work. A short `Status: COMPLETE` or `Status: INCOMPLETE` line is helpful but not required for the app to recognize a clear opening conclusion. Save the result after actual programming work, including work that stops unfinished.
 
 Documentation rules:
 
-- Use the shared default filenames when this is a guided Ora project.
+- Produce additional documentation only when the project calls for it, and maintain existing documentation affected by changes.
 - Do not add another documentation command or copy source code into a Markdown artifact.
 
 ## Respect ownership
