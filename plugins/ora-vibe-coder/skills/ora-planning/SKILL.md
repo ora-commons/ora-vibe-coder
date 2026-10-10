@@ -1,6 +1,6 @@
 ---
 name: ora-planning
-description: Turn approved product requirements and inspected project facts into an executable Implementation Plan. Use for the HOW stage alone; planning is read-only with respect to the target project.
+description: Turn available product requirements and inspected project facts into an executable Implementation Plan. Use for the HOW stage alone; planning is read-only with respect to the target project.
 ---
 
 # Ora Planning

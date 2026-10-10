@@ -2,8 +2,10 @@
 
 ## Vibe and first-party material
 
-Vibe and the bundled Programming Loop are dedicated to the public domain under
-the CC0 1.0 Universal dedication in `LICENSE`.
+Vibe and the bundled Programming Loop and Agent Bridge runtime are dedicated
+to the public domain under the CC0 1.0 Universal dedication in `LICENSE`; each
+bundled component also carries its own license and notice files beside its
+vendored files.
 
 Product and company names used to identify supported AI coding hosts belong to
 their respective owners. Their use describes compatibility and does not imply

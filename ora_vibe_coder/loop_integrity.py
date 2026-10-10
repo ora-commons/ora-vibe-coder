@@ -1,4 +1,4 @@
-"""Verify Vibe's vendored Programming Loop against one reviewed Git identity."""
+"""Verify Vibe's vendored Programming Loop and Agent Bridge against reviewed Git identities."""
 
 from __future__ import annotations
 
@@ -32,13 +32,45 @@ VENDORED_PATHS = (
     "tests/test_distribution.py",
 )
 
+# This is the single maintainer update point for a reviewed Bridge runtime
+# import. The Bridge repository is public and authoritative in one place, so
+# the authoritative and public release repositories name the same source.
+BRIDGE_AUTHORITY = {
+    "authoritative_repository": "ora-commons/agent-bridge",
+    "public_release_repository": "ora-commons/agent-bridge",
+    "source_revision": "6fa124252baa55c5860161ed509321fab8371d83",
+    "source_tree": "5f6fa7605c4db32048e2210d367e0ea757bc7fab",
+    "vendored_snapshot": "components/agent-bridge",
+}
+
+BRIDGE_PATHS = (
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "bridge/__init__.py",
+    "bridge/__main__.py",
+    "bridge/claude.py",
+    "bridge/cli.py",
+    "bridge/codex.py",
+    "bridge/connectors.py",
+    "bridge/errors.py",
+    "bridge/hermes.py",
+    "bridge/locking.py",
+    "bridge/minimax.py",
+    "bridge/peer.py",
+    "bridge/qwen.py",
+    "bridge/record.py",
+    "bridge/runner.py",
+    "bridge/session.py",
+    "bridge/zcode.py",
+)
+
 
 class LoopIntegrityError(ValueError):
     pass
 
 
-def authority_metadata() -> dict[str, str]:
-    """Return a validated copy so consumers never carry their own pins."""
+def _validated_authority(authority: dict[str, str], component: str) -> dict[str, str]:
     required = {
         "authoritative_repository",
         "public_release_repository",
@@ -46,18 +78,28 @@ def authority_metadata() -> dict[str, str]:
         "source_tree",
         "vendored_snapshot",
     }
-    if set(AUTHORITY) != required or not all(
-            isinstance(AUTHORITY[name], str) and AUTHORITY[name]
+    if set(authority) != required or not all(
+            isinstance(authority[name], str) and authority[name]
             for name in required):
-        raise LoopIntegrityError("Programming Loop authority metadata is incomplete")
+        raise LoopIntegrityError(f"{component} authority metadata is incomplete")
     for name in ("source_revision", "source_tree"):
-        if not re.fullmatch(r"[0-9a-f]{40}", AUTHORITY[name]):
-            raise LoopIntegrityError(f"Programming Loop {name} is not a Git SHA-1 identity")
-    vendored = PurePosixPath(AUTHORITY["vendored_snapshot"])
+        if not re.fullmatch(r"[0-9a-f]{40}", authority[name]):
+            raise LoopIntegrityError(f"{component} {name} is not a Git SHA-1 identity")
+    vendored = PurePosixPath(authority["vendored_snapshot"])
     if (vendored.is_absolute() or ".." in vendored.parts
-            or str(vendored) != AUTHORITY["vendored_snapshot"]):
-        raise LoopIntegrityError("Programming Loop vendored snapshot path is invalid")
-    return dict(AUTHORITY)
+            or str(vendored) != authority["vendored_snapshot"]):
+        raise LoopIntegrityError(f"{component} vendored snapshot path is invalid")
+    return dict(authority)
+
+
+def authority_metadata() -> dict[str, str]:
+    """Return a validated copy so consumers never carry their own pins."""
+    return _validated_authority(AUTHORITY, "Programming Loop")
+
+
+def bridge_authority_metadata() -> dict[str, str]:
+    """The Agent Bridge runtime's reviewed identity, validated the same way."""
+    return _validated_authority(BRIDGE_AUTHORITY, "Agent Bridge")
 
 
 def _git_object_id(kind: str, payload: bytes) -> bytes:
@@ -101,11 +143,23 @@ def _tree_id(files: dict[str, bytes], modes: dict[str, str]) -> str:
 
 def read_snapshot(root: Path, *, allowed_extra: set[str] | None = None
                   ) -> tuple[dict[str, bytes], dict[str, str], str]:
-    """Read the exact 17 files and return their bytes, Git modes, and tree ID."""
+    """Read the exact 17 Loop files: their bytes, Git modes, and tree ID."""
+    return _read_exact_snapshot(root, VENDORED_PATHS, allowed_extra, "Programming Loop")
+
+
+def read_bridge_snapshot(root: Path, *, allowed_extra: set[str] | None = None
+                         ) -> tuple[dict[str, bytes], dict[str, str], str]:
+    """Read the exact 19 Bridge runtime files: bytes, Git modes, and tree ID."""
+    return _read_exact_snapshot(root, BRIDGE_PATHS, allowed_extra, "Agent Bridge")
+
+
+def _read_exact_snapshot(root: Path, vendored_paths: tuple[str, ...],
+                         allowed_extra: set[str] | None, component: str
+                         ) -> tuple[dict[str, bytes], dict[str, str], str]:
     root = Path(root)
     if root.is_symlink() or not root.is_dir():
-        raise LoopIntegrityError(f"Programming Loop snapshot is not a plain directory: {root}")
-    expected = set(VENDORED_PATHS)
+        raise LoopIntegrityError(f"{component} snapshot is not a plain directory: {root}")
+    expected = set(vendored_paths)
     allowed = set(allowed_extra or ())
     expected_files = expected | allowed
     expected_directories = {
@@ -119,13 +173,23 @@ def read_snapshot(root: Path, *, allowed_extra: set[str] | None = None
     for item in root.rglob("*"):
         relative = item.relative_to(root)
         if item.is_symlink():
-            raise LoopIntegrityError(f"Programming Loop snapshot contains a symbolic link: {relative}")
-        if item.is_file():
-            actual_files.add(relative.as_posix())
-        elif item.is_dir():
-            actual_directories.add(relative.as_posix())
-        else:
-            raise LoopIntegrityError(f"Programming Loop snapshot contains a special file: {relative}")
+            raise LoopIntegrityError(f"{component} snapshot contains a symbolic link: {relative}")
+        # Generated Python caches are not shipped source: a vendored runtime
+        # creates __pycache__ directories (and .pyc files) the moment it runs,
+        # so both are excluded from the exact-file check. Anything else inside
+        # a cache directory is unexpected content and still fails.
+        if item.is_dir():
+            if item.name != "__pycache__":
+                actual_directories.add(relative.as_posix())
+            continue
+        if not item.is_file():
+            raise LoopIntegrityError(f"{component} snapshot contains a special file: {relative}")
+        if item.suffix == ".pyc":
+            continue
+        if "__pycache__" in relative.parts:
+            raise LoopIntegrityError(
+                f"{component} snapshot contains a non-cache file in __pycache__: {relative}")
+        actual_files.add(relative.as_posix())
     if actual_files != expected_files or actual_directories != expected_directories:
         missing = sorted(expected_files - actual_files)
         extra_files = sorted(actual_files - expected_files)
@@ -138,15 +202,16 @@ def read_snapshot(root: Path, *, allowed_extra: set[str] | None = None
         if extra_directories:
             detail.append("unexpected directories " + ", ".join(extra_directories))
         raise LoopIntegrityError(
-            "Programming Loop snapshot does not contain its exact 17 files: " + "; ".join(detail)
+            f"{component} snapshot does not contain its exact {len(vendored_paths)} files: "
+            + "; ".join(detail)
         )
 
     files, modes = {}, {}
-    for name in VENDORED_PATHS:
+    for name in vendored_paths:
         path = root / name
         data = path.read_bytes()
         if not data.strip():
-            raise LoopIntegrityError(f"Empty Programming Loop snapshot file: {name}")
+            raise LoopIntegrityError(f"Empty {component} snapshot file: {name}")
         files[name] = data
         modes[name] = "100755" if path.stat().st_mode & 0o111 else "100644"
     return files, modes, _tree_id(files, modes)

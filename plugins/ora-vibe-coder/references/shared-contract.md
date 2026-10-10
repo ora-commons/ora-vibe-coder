@@ -100,27 +100,28 @@ User material:
 - The optional app may create a project directory only through the user's explicit New Project action; that does not change direct Markdown use.
 - Infer the project name from supplied material where that is safe.
 
-The default retained filenames are:
+The standard working documents are:
 
-1. `<Project Name> — 01 Request.md`
-2. `<Project Name> — 02 Specification.md`
-3. `<Project Name> — 03 Implementation Plan.md`
-4. `<Project Name> — 04 User Guide.md`
-5. `<Project Name> — 05 Technical Documentation.md`
-6. `<Project Name> — 06 Product Overview.md`
-7. `<Project Name> — 07 Report.md`
+1. `<Project Name>/Registry.md` — notes, background, decisions, and open questions
+2. `<Project Name>/Specification.md` — intended behavior, requirements, and outcomes
+3. `<Project Name>/Plan.md` — implementation approach, steps, and checks
+4. `Programming Result` — saved after actual programming work, including work that stops unfinished
+5. `Verification Report` — saved after actual verification, for passing, failing, and incomplete reviews alike
 
+- These documents are working aids; their presence or completion is never a prerequisite for using a stage.
+- Older documents under names such as `<Project Name> — 01 Request.md` through `<Project Name> — 07 Report.md` remain recognized where they exist; they need no migration or cleanup.
 - Product code stays in its real project structure.
+- Produce additional documentation only when the project calls for it, and maintain existing documentation affected by changes.
 - Before writing: show the resolved directory and intended create-or-update paths, and obtain the approval required by the active harness.
 - Check colliding default filenames.
 - For a clear continuation, revise the current artifact in place so it remains one complete source of truth.
 - For a new-project collision, ask for another project name or directory.
 - Never silently overwrite; never invent a timestamp, ID, suffix, version folder, archive, registry, or retention system.
 
-Keeping the Request current:
+Keeping the current documents useful:
 
-- Update the Request when the user supplies or corrects a material goal, requirement, boundary, fact, authority, or approval during an interactive stage.
-- Organize decisions by subject and preserve enough surrounding meaning to understand the instruction; never turn the Request into a chronological transcript of every turn, analysis, Gear exchange, rejected draft, implementation action, test event, or status poll.
+- Update the Registry when the user supplies or corrects a material goal, requirement, boundary, fact, authority, or decision during an interactive stage.
+- Organize decisions by subject and preserve enough surrounding meaning to understand the instruction; never turn a document into a chronological transcript of every turn, analysis, Gear exchange, rejected draft, implementation action, test event, or status poll.
 - Update the current Specification or Plan too when the correction changes its controlling meaning; keep each as one current synthesis, not an amendment log.
 
 Authorship and custody:
@@ -190,7 +191,7 @@ Assemble a complete Markdown body for each fresh stage, Gear, Bridge, independen
 | Specification | User idea, current Request, existing requirements, relevant corrections | Planning or code choices not required by the outcome |
 | Planning | Current Request, approved Specification, project path, applicable instructions, inspected facts | Rejected designs, review transcripts, unrelated history |
 | Programming | Approved Specification and Plan when available; otherwise current requirements, exact gaps and assumptions; project path and protected state | Raw Request history, planning discussion, Gear deliberation |
-| Verification | Accessible candidate and specification material; Plan, documentation, credible checks, baseline or diff when they exist; every guided-path product | Raw Request history, implementation transcript, prior claims offered as proof |
+| Verification | Accessible candidate and available requirements; Plan, Programming Result, documentation, credible checks, baseline or diff when they exist | Raw Request history, implementation transcript, prior claims offered as proof |
 | Correction | Consolidated current material findings, controlling artifacts, actual candidate, and evidence needed by the owning stage | Superseded findings and unrelated review commentary |
 
 - Give every executor and reviewer the exact current governing instructions, Specification, Plan, approved references, retained decisions, acceptance criteria, baseline, permitted effects, and test ceiling applicable to the assignment. Preserve explicitly approved omissions.
@@ -239,44 +240,42 @@ App display agreement:
 ## Reported fields in ordinary Markdown
 
 - Status labels report separate facts; they are not independent validation or current-revision certification.
-- For managed projects use one field in the opening metadata block, before body sections, for each displayed stage.
-- Do not search body prose, quotations, examples, or code for a success word.
+- A short opening field is useful, but a clear opening statement about the document's own current result is also a truthful report. Do not make a particular field spelling a prerequisite for recognizing that result.
+- Do not search later body prose, quotations, examples, old rounds, or code for a success word; a claim about another stage does not establish this stage's outcome.
 - Plain `Status: APPROVED` and decorated `**Status:** APPROVED` are equivalent labels; normalize line endings, trailing spaces, and Markdown hard breaks — never the meaning of a value.
 
 | Stage | Sole display source | Exact recognized values |
 |---|---|---|
 | Specification | `Status` in the designated Specification | `DRAFT`, `IN PROGRESS`, `AWAITING APPROVAL`, `APPROVED`; legacy `Approved product specification` means reported approval |
 | Planning | `Status` in the designated Plan | `DRAFT`, `IN PROGRESS`, `AWAITING APPROVAL`, `APPROVED`; legacy `Approved Implementation Plan` means reported approval |
-| Programming | `Programming` in `Project.md` | `NOT STARTED`, `IN PROGRESS`, `COMPLETE`, `INCOMPLETE`, `CLOSED BY USER — UNRESOLVED FINDINGS` |
-| Verification | `Verification` in `Project.md` | `NOT STARTED`, `IN PROGRESS`, the quality vocabulary below, and `CLOSED BY USER — UNRESOLVED FINDINGS` |
+| Programming | The saved current Programming Result's opening conclusion, such as `Status: COMPLETE` or `Programming completed` | The result actually reported; no file means no saved Programming Result |
+| Verification | The saved current Verification Report's opening verdict or clear current-verification conclusion | Whatever verdict the report actually records (for example `PASSED`, `NOT PASSED`, `NOT PASSED — REVIEW INCOMPLETE`); no report means no saved verification result |
 
 Recognized fields:
 
-- Require exactly one recognized field.
-- Missing, duplicate, malformed, or unrecognized labels mean Not reported or Unknown — never success; they do not block reading, preparation, copying, or selecting any stage.
+- Conflicting opening conclusions mean Unknown, never success. If no current conclusion can be recognized, say that the result is unclear rather than claiming the document is absent or silent; this never blocks reading, preparation, copying, or selecting any stage.
 - No other legacy text maps to approval.
-- Specification and Planning review quality stays separate from their approval field: `PASSED` from Gear is not user approval, and `APPROVED` is not a claim that review passed.
+- Optional `Programming` and retained `Verification` fields in `Project.md` are overview history; they do not override the saved current result and report. Neither a report's existence nor an older passing result proves that newer code passed: a saved verdict describes the inspected implementation.
+- Specification and Planning completeness comes from their saved Current review assessment (COMPLETE or INCOMPLETE with noted deficiencies) and stays separate from any approval field.
 
 Setting values:
 
 - Set actual start/result state, not a forecast. Opening, reading, selecting a stage, preparing, and copying never change status.
-- Initial Specification and Plan approval, and revisions requiring a new user decision, use `IN PROGRESS` while revising and `AWAITING APPROVAL` when presented; only actual user approval sets `APPROVED`.
-- A reviewed amendment accepted wholly within already delegated discretion may retain the governing approval under the custody rules above; it is not a claim of fresh user approval.
-- An unaccepted proposal never governs downstream work.
 - Programming becomes `COMPLETE` only at its approved execution finish line.
-- Verification becomes `PASSED` only under its independent whole-candidate passing contract; a fallback or unrepeated review is never a final `PASSED` result.
+- Verification records its actual verdict in the Verification Report; a fallback or unrepeated review is never a final `PASSED` result.
 
 Overview field updates:
 
-- Under normal write authority, Programming and Verification may update only their own named overview result field.
+- Under normal write authority, Programming may update its own named overview result field.
 - Reread `Project.md` immediately before the minimal update and preserve its other result, description, goals, associations, and all unowned text.
 - Do not overwrite changes observed since reading; simultaneous app/harness overview writes are unsupported.
 - This grants no permission to correct the candidate, Specification, Plan, or documentation during Verification.
 - If the brief is absent or writing is unavailable or unauthorized: report the result in conversation and leave the UI status unreported without blocking permitted work.
 
-Earlier REPORT:
+Verification Report:
 
-- After a later unsuccessful or incomplete Verification, retain an earlier REPORT without deletion or archival; identify it as a previous report, not current-pass evidence.
+- Save or update one current report after actual verification — passing, failing, or incomplete alike.
+- An earlier saved verdict is retained as history and never treated as current-pass evidence for newer code.
 - Stopping is not successful completion.
 - No status file, consent record, database, hash history, or certification service is required.
 
@@ -286,10 +285,10 @@ Earlier REPORT:
 - Distinguish a completed review or draft assignment from the larger project's endpoint.
 - Assign remaining authorized delivery and cleanup to responsible workers; obtain evidence of the output in its intended location and condition.
 - A changed delivered product needs applicable verification of the material difference.
-- A local passing result, REPORT, or worker handback alone cannot close the project.
+- A local passing result, saved report, or worker handback alone cannot close the project.
 
 Use established status meanings without treating status as user approval or authority. Where applicable, the recognized quality statuses are `PASSED`, `ONE PASS COMPLETE — REVISED, NOT RE-REVIEWED`, `NOT PASSED`, `NOT PASSED — REVIEW INCOMPLETE`, `NOT PASSED — REVISION INCOMPLETE`, and `GEAR 4 UNAVAILABLE — GEAR 3 FALLBACK`. A revised-but-unreviewed result is not passed. A transport failure is not reviewer disagreement. A fallback is not a completed Gear 4 run.
 
-- Silence causes no calls, no cleanup beyond already authorized work, no status change, no REPORT, and no manufactured closure.
+- Silence causes no calls, no cleanup beyond already authorized work, no status change, no manufactured report, and no manufactured closure.
 - On resumption, inspect the actual retained artifacts, candidate, findings, check output, and Git state; never infer a pass from a file or old label.
-- If the user explicitly abandons work with unresolved material findings, the only closure label is `CLOSED BY USER — UNRESOLVED FINDINGS`; do not create REPORT or call the work complete, verified, passed, ready, or successful.
+- If the user explicitly abandons work with unresolved material findings, the only closure label is `CLOSED BY USER — UNRESOLVED FINDINGS`; record the abandonment truthfully in the Verification Report and do not call the work complete, verified, passed, ready, or successful.

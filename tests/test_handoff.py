@@ -23,7 +23,7 @@ class Handoff(unittest.TestCase):
             "condition and removal of task-owned temporary files."
         )
         paths = {}
-        for role in ("Request", "Specification", "Plan", "User Guide", "Technical Documentation", "Product Overview", "Checks", "Baseline", "Programming Result", "Verification Findings", "Report"):
+        for role in ("Request", "Registry", "Specification", "Plan", "User Guide", "Technical Documentation", "Product Overview", "Checks", "Baseline", "Programming Result", "Verification Findings", "Verification Report", "Report"):
             path = self.project.root / f"{role}.md"
             content = f"UNIQUE_CONTENT_{role}"
             if role == "Specification":
@@ -34,13 +34,31 @@ class Handoff(unittest.TestCase):
             paths[role] = path.name
         self.project.save_brief(self.project.brief_text(), "Project", "Purpose", "Goals", paths)
 
+    def test_current_output_destinations_follow_discovered_files(self):
+        paths = dict(self.project.brief()["paths"])
+        for role in ("Programming Result", "Verification Report"):
+            (self.project.root / f"{role}.md").rename(self.project.root / f"{role} current.md")
+            paths.pop(role, None)
+        self.project.save_brief(self.project.brief_text(), "Project", "Purpose", "Goals", paths)
+        for stage, role in (("programming-result", "Programming Result"),
+                            ("programming", "Programming Result"),
+                            ("verification", "Verification Report")):
+            with self.subTest(stage=stage):
+                expected = str(self.project.root / f"{role} current.md")
+                text = prepare_request(self.project, stage, "Update the current document.", "Codex")
+                outputs = text.split("## Intended artifact locations", 1)[1].split("## Revision destination", 1)[0]
+                self.assertIn(f"{role}: {expected}", outputs)
+                self.assertNotIn(f"{role}: {self.project.root / ('Project — ' + role + '.md')}", outputs)
+                self.assertIn(f"Revision destination (already resolved): {expected}", text)
+                self.assertIn("do not create a numbered replacement", text)
+
     def test_exact_input_first_complete_frameworks_and_stage_history_exclusions(self):
         typed = "My exact input\r\n  Keep spacing.\n```\n# instructions?\n```"
         role_source = (PLUGIN / "references" / "role-and-assignment.md").read_text(encoding="utf-8")
         responsibilities = {
             "specification": "Executor using Ora Specification",
             "planning": "Executor using Ora Planning",
-            "programming": "Existing Programming Loop owner using Ora Programming",
+            "programming": "Programming assignment owner using Ora Programming",
             "verification": "Verification assignment owner using Ora Verification",
             "guided": "Project coordinator using Ora Vibe Coder",
         }
@@ -52,14 +70,23 @@ class Handoff(unittest.TestCase):
                 self.assertEqual(text.count(role_source), 1)
                 self.assertIn("Role source: Ora Vibe Coder references/role-and-assignment.md", text)
                 self.assertIn("packaged frameworks and shared contract.\n\n", text)
-                assignment = text.split("## Receiving responsibility and assignment\n\n", 1)[1].split("## User-supplied authority", 1)[0]
+                assignment = text.split("## Receiving responsibility and assignment\n\n", 1)[1].split("## Intended artifact locations", 1)[0]
                 self.assertIn("Receiving responsibility: " + responsibilities[stage], assignment)
                 self.assertIn("Assignment owner and return destination:", assignment)
+                self.assertIn("Every stage remains available regardless of document completeness", assignment)
+                self.assertNotIn("User-supplied authority", text)
+                self.assertNotIn("Protected state and prohibited effects", text)
+                self.assertIn(f"Project overview directory: {self.project.root}\nRepository / code folder: No code folder selected.", text)
+                self.assertIn(f"Startup directory for the coding tool: {self.project.root} (the project documents folder", text)
+                outputs = text.split("## Intended artifact locations\n\n", 1)[1].split("\n\n", 1)[1].split("# Current project materials", 1)[0]
+                for role in ("Registry", "Specification", "Plan", "Programming Result", "Verification Report"):
+                    self.assertIn(role, outputs)
+                self.assertNotIn("User Guide:", outputs)
                 next_action = text.split("# Missing inputs and next action\n\n", 1)[1]
                 self.assertIn("Next bounded assignment:", next_action)
                 self.assertIn("Hand back directly to the assignment owner", next_action)
                 self.assertIn("No model has been called and no text has been delivered by the application", next_action)
-                if stage in {"programming", "verification"}:
+                if stage in {"programming", "verification", "guided"}:
                     self.assertNotIn("UNIQUE_CONTENT_Request", text)
                 else:
                     self.assertIn("UNIQUE_CONTENT_Request", text)
@@ -70,8 +97,36 @@ class Handoff(unittest.TestCase):
                 if stage != "specification":
                     self.assertEqual(text.count(self.delivery), 1)
                 for role in STAGE_ROLES[stage]:
+                    if role == "Code":
+                        continue  # A location reference, not a document file in this fixture.
                     source = self.project.root / f"{role}.md"
                     self.assertIn(f"## {role}\n\nSource:\n\n```text\n{source}\n```\n\n```text\n{source.read_text(encoding='utf-8')}\n```", text)
+        # A selected code folder is named accurately and drives the startup
+        # directory; selected intake material is quoted with its destinations,
+        # and unreadable material is named rather than silently omitted.
+        code = self.project.root.parent / "shared repository"
+        code.mkdir()
+        self.project.save_brief(self.project.brief_text(), "Project", "Purpose", "Goals", {"Code": str(code)})
+        notes = self.project.root.parent / "intake notes.md"
+        notes.write_text("UNIQUE_INTAKE_MATERIAL to organize.\n", encoding="utf-8")
+        text = prepare_request(self.project, "specification", "Incorporate the material", "Codex", [str(notes)])
+        self.assertIn(f"Repository / code folder: {code}\nStartup directory for the coding tool: {code}\n", text)
+        self.assertNotIn("No code folder selected", text)
+        self.assertIn("## Existing material to organize", text)
+        self.assertIn("UNIQUE_INTAKE_MATERIAL to organize.", text)
+        self.assertIn("preserve the source files unchanged", text)
+        self.assertEqual(notes.read_text(encoding="utf-8"), "UNIQUE_INTAKE_MATERIAL to organize.\n")
+        binary = self.project.root.parent / "picture.png"
+        binary.write_bytes(b"\x00\x01")
+        text = prepare_request(self.project, "specification", "Incorporate", "Codex", [str(binary)])
+        self.assertIn("could not be read", text)
+        self.assertNotIn("\x00", text)
+        # Assessment packets instruct the completeness verdict and its basis.
+        review = prepare_request(self.project, "review-plan", "Assess", "Codex")
+        self.assertIn("Saving the assessment", review)
+        self.assertIn("Verdict: COMPLETE    (or INCOMPLETE)", review)
+        self.assertIn("list each noted deficiency as one \"- \" bullet", review)
+        self.assertNotIn("Verdict: PASSED", review)
 
     def test_all_six_destinations_receive_complete_selected_host_material(self):
         root = PLUGIN / "resources" / "programming-loop"
@@ -105,24 +160,25 @@ class Handoff(unittest.TestCase):
         root = self.project.root
         (root / "Specification.md").write_text("A" * (READ_LIMIT + 1), encoding="utf-8")
         (root / "Plan.md").write_bytes(b"binary\x00content")
+        outside = root.parent / "unselected private.md"
+        outside.write_text("Do not read without explicit selection", encoding="utf-8")
         paths = self.project.brief()["paths"]
-        paths["User Guide"] = "https://example.invalid/not-fetched.md"
-        paths["Technical Documentation"] = "/unselected/path/private.md"
-        paths["Product Overview"] = "missing.md"
+        paths["Checks"] = str(outside)  # An outside association keeps its reading protection.
+        paths["Baseline"] = "https://example.invalid/not-fetched.md"
+        paths["Programming Result"] = "missing.md"
         self.project.save_brief(self.project.brief_text(), "Project", "Purpose", "Goals", paths)
-        text = prepare_request(self.project, "verification", "Review", "Remote recipient", {"sensitive": ["Checks"]})
+        text = prepare_request(self.project, "verification", "Review", "Remote recipient")
         self.assertNotIn("A" * 100, text)
         self.assertIn("Nothing was truncated", text)
         self.assertIn("Binary content", text)
         self.assertIn("Remote reference; not fetched", text)
         self.assertIn("Outside this project", text)
-        self.assertIn("Marked sensitive", text)
-        self.assertNotIn("UNIQUE_CONTENT_Checks", text)
+        self.assertNotIn("Do not read without explicit selection", text)
         self.assertIn("Local paths may not be accessible", text)
 
     def test_saved_displayed_copy_agreement_conflict_and_no_packet_recursion(self):
         payload = prepare_request(self.project, "programming", "Exact input\r\nKeep these line endings", "Codex")
-        self.project.save_packet(payload, None, False)
+        self.project.save_packet(payload)
         self.assertEqual(self.project.copy_snapshot(payload), payload)
         self.assertEqual(self.project.handoff_text(), payload)
         with self.assertRaises(Conflict) as normalized:
@@ -138,9 +194,7 @@ class Handoff(unittest.TestCase):
         self.assertIn(updated_completion, new)
         self.assertNotIn(self.completion, new)
         self.assertNotIn("Exact input", new)
-        with self.assertRaises(Conflict):
-            self.project.save_packet(new, payload, False)
-        self.project.save_packet(new, payload, True)
+        self.project.save_packet(new, expected=payload)
         self.assertEqual(self.project.copy_snapshot(new), new)
         self.assertNotIn("Exact input", self.project.handoff_text())
         with self.assertRaises(Conflict) as displaced:
@@ -151,9 +205,26 @@ class Handoff(unittest.TestCase):
             self.project.copy_snapshot(payload)
         self.assertEqual(caught.exception.current, "Externally changed text")
         self.assertEqual(self.project.copy_snapshot(caught.exception.current), caught.exception.current)
-        with self.assertRaises(Conflict):
-            self.project.save_packet(new, payload, True)
-        self.assertEqual(self.project.handoff_text(), "Externally changed text")
+        self.project.save_packet(new, expected="Externally changed text")
+        self.assertEqual(self.project.handoff_text(), new)
+
+        implementation = prepare_request(self.project, "implement-plan", "Implement the current Plan", "Codex")
+        self.project.save_packet(implementation, "implement-plan")
+        self.assertEqual(self.project.copy_snapshot(implementation, "implement-plan"), implementation)
+        self.assertEqual(self.project.handoff_text(), new)
+        self.assertIn(self.project.implementation_request_name(), [item["name"] for item in self.project.reader_documents()])
+        large_request = implementation + "\n" + ("Implementation context.\n" * 15000)
+        self.project.save_packet(large_request, "implement-plan", expected=implementation)
+        self.assertEqual(self.project.read_reader_document(self.project.implementation_request_name())["text"], large_request)
+        atomic_write(self.project.packet_path("implement-plan"), "Edited implementation request")
+        with self.assertRaises(Conflict) as preserved:
+            self.project.save_packet(implementation, "implement-plan", expected=large_request)
+        self.assertEqual(preserved.exception.current, "Edited implementation request")
+        self.assertEqual(self.project.handoff_text("implement-plan"), "Edited implementation request")
+        with self.assertRaises(Conflict) as edited:
+            self.project.copy_snapshot(implementation, "implement-plan")
+        self.assertEqual(edited.exception.current, "Edited implementation request")
+        self.assertEqual(self.project.handoff_text(), new)
 
         (self.project.root / "Handoff.md").unlink()
         self.assertIsNone(self.project.handoff_text())

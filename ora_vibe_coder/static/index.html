@@ -3,37 +3,161 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Ora Vibe Coder</title>
+  <script>try { const t = localStorage.getItem("ovc-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (_) { /* storage unavailable: follow the system appearance */ }</script>
   <link rel="stylesheet" href="/static/style.css">
   <script defer src="/static/vendor/markdown-it.min.js"></script><script defer src="/static/app.js"></script>
 </head>
 <body>
-  <header><div><h1>Ora Vibe Coder</h1><p>Your idea, one clear stage at a time.</p></div><div class="toolbar"><button id="help">Help</button><button id="stop">Stop app</button></div></header>
-  <nav aria-label="Projects"><label>Project <select id="project"><option value="">Choose a project</option></select></label><button id="new">New project</button><button id="open">Open existing</button><button id="overview">Project information</button><button id="edit">Link documents / edit</button></nav>
-  <p id="notice" role="status" aria-live="polite"></p>
-  <section id="setup" class="card modal" hidden><h2>Welcome to Ora Vibe Coder</h2><p id="setup-introduction">Choose the folder where you keep your projects. Opening a folder does not create or change a project. You can then open existing work or deliberately create a new project.</p><button id="choose-home" class="primary">Choose projects folder</button><p>Python 3.10 or later runs this local interface. Your coding tool handles conversations, account login, and approvals.</p><div id="setup-hosts"></div><button id="install-app" class="primary" hidden>Install or update Vibe and selected entries</button><button id="remove-app" hidden>Remove Vibe and selected entries</button><p id="installation-result"></p><button id="close-setup" hidden>Close installer</button></section>
-  <section id="folder-picker" class="card modal" hidden><h2 id="folder-title">Choose a folder</h2><label>Folder location<input id="folder-path"></label><div class="toolbar"><button id="folder-go">Open location</button><button id="folder-up">Parent folder</button></div><div id="folder-list" class="selection-list"></div><p id="folder-note"></p><button id="folder-select" class="primary">Use this folder</button><button id="folder-cancel">Cancel</button></section>
-  <section id="file-picker" class="card modal" hidden><h2 id="file-title">Link an existing document</h2><p>Choose the document that has this role. Its name and contents stay as they are.</p><button id="file-up">Parent folder</button><p id="file-location"></p><div id="file-list" class="selection-list"></div><button id="file-cancel">Cancel</button></section>
-  <section id="help-panel" class="card modal" hidden><h2>Working with Vibe Coder</h2><p>Choose a project, then select any of the four stages. Link existing documents to their roles using <strong>Link documents / edit</strong>; missing links and missing files are different things.</p><p>Write your next instruction and choose a coding tool. <strong>Prepare request</strong> saves and shows the complete Markdown assignment. <strong>Continue</strong> requests a normal interactive conversation in that coding tool. Its login, project rules, and approval steps still apply. Copy is available for manual delivery.</p><p>Return to this page and use <strong>Refresh files</strong> to read saved work. Status labels report fields in your documents; opening a window does not mark a stage complete. Later source changes require Prepare Again.</p><p>Drafts stay in this browser tab while switching projects or stages. Keep the tab open until you have saved or copied your input. Closing the tab does not stop the local process. Use <strong>Stop app</strong> when finished; reopen Ora Vibe Coder from its launcher.</p><p id="home"></p><button id="change-home">Change projects folder</button><button id="help-close">Back to workspace</button></section>
-  <section id="create" class="card modal" hidden><h2>New project</h2><p>Creates one new directory and Project.md only. Existing files are never replaced.</p><label>Name<input id="new-name"></label><label>New child directory<input id="new-directory"></label><p id="new-location"></p><label>Purpose<textarea id="new-description"></textarea></label><label>Goals<textarea id="new-goals"></textarea></label><button id="create-save" class="primary">Create project</button><button id="create-close">Cancel</button></section>
-  <section id="open-form" class="card modal" hidden><h2>Open existing project</h2><label>Directory path<input id="open-path" placeholder="/path/to/project"></label><button id="open-browse">Browse folders</button><p>This selects an existing directory. Link its documents explicitly; no files are renamed or overwritten. Projects directly inside your selected projects folder appear automatically next time; use Open existing again for other locations.</p><button id="open-save" class="primary">Open directory</button><button id="open-close">Cancel</button></section>
-  <section id="editor" class="card modal" hidden><h2>Project information and document links</h2><p id="edit-location"></p><p>Only the overview and associations are edited. Stage documents and reported results stay untouched. Simultaneous overview edits are unsupported.</p><label>Name<input id="edit-name"></label><label>Purpose<textarea id="edit-description"></textarea></label><label>Goals<textarea id="edit-goals"></textarea></label><details id="association-details"><summary>Link existing documents to their roles</summary><p>Browse this project's files, or enter a relative path or an explicit outside reference. Outside references require separate selection before reading. Code is a location only.</p><div id="paths"></div></details><button id="edit-save" class="primary">Save project information</button><button id="edit-close">Back without saving</button><section id="edit-conflict" hidden><h3>Current saved overview</h3><pre id="edit-current"></pre><button id="edit-reviewed">I reviewed this saved version; keep my input for the next Save</button></section></section>
-  <main>
-    <details id="project-overview" class="card project-information"><summary><strong id="project-name">Choose or create a project</strong><span>Purpose, goals, and Request</span></summary><div class="project-information-body"><p id="project-location"></p><div class="project-summary"><section><h3>Purpose</h3><div id="description" class="markdown"></div></section><section><h3>Goals</h3><div id="goals" class="markdown"></div></section></div><button id="guided">Help me get started</button><h3>Request</h3><div id="request" class="markdown">Open a project to read its current Request.</div></div></details>
-    <p id="reported-note" hidden>Statuses are reported document fields, not independent validation of the current work.</p>
-    <div id="stages" hidden>
-      <button class="rail" data-stage="specification" aria-expanded="false"><span class="status-icon">○</span><span class="rail-label">Specification</span><span class="rail-number">01</span></button>
-      <button class="rail" data-stage="planning" aria-expanded="false"><span class="status-icon">○</span><span class="rail-label">Planning</span><span class="rail-number">02</span></button>
-      <button class="rail" data-stage="programming" aria-expanded="false"><span class="status-icon">○</span><span class="rail-label">Programming</span><span class="rail-number">03</span></button>
-      <button class="rail" data-stage="verification" aria-expanded="false"><span class="status-icon">○</span><span class="rail-label">Verification</span><span class="rail-number">04</span></button>
-      <section id="stage-panel" class="card" hidden>
-        <div class="stage-heading"><h2 id="stage-title"></h2><p id="stage-status"></p></div>
-        <div class="stage-workspace">
-          <section class="reading-pane"><div class="toolbar"><label>Read <select id="document"></select></label><button id="refresh">Refresh files</button><button id="back-document">Document</button><button id="request-button">Request</button></div><p id="reader-caption"></p><div id="reader" class="markdown"></div><section id="packet-tools" hidden><div class="toolbar"><button id="continue" class="primary">Continue</button><button id="copy">Copy full Markdown</button></div><p id="delivery-note">Prepared snapshot. Continue opens the selected coding tool; receipt and execution are not confirmed here.</p><details id="raw-details"><summary>Full raw Markdown / manual copy</summary><textarea id="raw" readonly aria-label="Full raw Markdown"></textarea></details></section></section>
-          <section id="input-controls"><div class="compose-scroll"><h3>Your next instruction</h3><label>Coding tool<select id="destination"></select></label><p id="host-note"></p><label>What should this stage do?<textarea id="input" placeholder="Describe the next result you want…"></textarea></label><p class="hint">Enter adds a new line. Control+Enter or Command+Enter prepares the request.</p><details><summary>Authority, protected work, and references</summary><label>Your authority and exact authorized checks<textarea id="authority"></textarea></label><label>Protected work and prohibited effects<textarea id="protected"></textarea></label><label>Additional references and access notes<textarea id="references"></textarea></label><fieldset><legend>Keep these sources reference-only</legend><div id="sensitive"></div></fieldset><p id="code-location"></p></details><details id="outgoing-details"><summary>Outgoing file and replacement</summary><p id="outgoing"></p><label id="existing-label" hidden><input type="checkbox" id="existing">I select the existing Handoff.md as this project's outgoing destination and permit replacing it.</label><button id="inspect-handoff">Inspect existing Handoff.md</button></details><section id="packet-conflict" hidden><h3>Current saved outgoing file</h3><pre id="packet-current"></pre><button id="packet-reviewed">I reviewed this file; use it as the expected version for Prepare Again</button></section></div><div class="compose-actions"><button id="prepare" class="primary">Prepare request</button><p>Shows and saves the complete assignment before you continue.</p></div></section>
+<main class="app">
+  <header id="top" class="top">
+    <div class="brand"><svg class="wordmark" viewBox="0 0 121 256" role="img" aria-label="Ora" stroke-width="5"><circle class="wm-stroke-base" cx="60.5" cy="60.5" r="38"/><circle class="wm-stroke-bright" cx="60.5" cy="60.5" r="25"/><path class="wm-stroke-base" d="M 35.5 141 A 25 25 0 0 1 85.5 141"/><rect class="wm-fill-base" x="33" y="113.5" width="5" height="55"/><rect class="wm-fill-base" x="83" y="180.5" width="5" height="55"/><circle class="wm-stroke-bright" cx="60.5" cy="208" r="25"/></svg></div>
+    <div class="top-main">
+      <div id="project-compact" class="project-compact" hidden>
+        <span id="project-compact-name" class="project-compact-name"></span>
+        <button id="project-options" type="button" aria-controls="project-controls" aria-expanded="false" aria-label="Change project or view project details">Project options</button>
+      </div>
+      <div id="project-controls" class="project-controls">
+        <div class="project-row">
+          <span class="step-number" aria-hidden="true">1</span><label for="project">Choose or start a project</label>
+          <select id="project"><option value="">Choose a project</option></select>
+          <button id="new" type="button">New project</button>
+          <button id="open" type="button">Open existing</button>
         </div>
-      </section>
+        <details id="project-card" class="project-card">
+          <summary><span class="project-label"><span class="step-number" aria-hidden="true">2</span><strong>Project details</strong><span>Purpose, desired outcome, material, and code location</span></span><span id="project-completion" class="assessment complete" hidden>COMPLETE</span></summary>
+          <div class="project-detail">
+            <div class="project-text">
+              <p id="project-name">Choose or create a project</p>
+              <p id="project-location" class="project-meta"></p>
+              <p id="project-code" class="project-meta"></p>
+              <div id="description" class="markdown project-summary-text"></div>
+              <div id="goals" class="markdown project-summary-text"></div>
+              <div id="overview-sources"></div>
+            </div>
+            <div class="project-actions">
+              <button id="edit-info" type="button">Edit project information</button>
+            </div>
+          </div>
+        </details>
+      </div>
     </div>
-  </main>
-  <footer>Local workspace · Your documents stay on this computer · Use Stop app to end the local process</footer>
+  </header>
+  <p id="notice" role="status" aria-live="polite"></p>
+  <section id="setup" class="card modal" hidden><h2>Welcome to Ora Vibe Coder</h2><p id="setup-introduction">Vibe finds your projects automatically inside your Documents folder. This page belongs to the supplied installer; ordinary use starts from the Ora Vibe Coder launcher.</p><p>Python 3.10 or later runs this local interface. Your coding tool handles conversations, account login, and approvals.</p><p>Ora AI Boost (Gear 3 and Gear 4) is an optional extra for Specification and Planning — Vibe works without it. Its releases are at <a href="https://github.com/ora-commons/ora-adversarial-review/releases/latest" target="_blank" rel="noopener noreferrer">Ora AI Boost releases</a>.</p><div id="setup-hosts"></div><button id="install-app" class="primary" hidden>Install or update Vibe and selected entries</button><button id="remove-app" hidden>Remove Vibe and selected entries</button><p id="installation-result"></p><button id="close-setup" hidden>Close installer</button></section>
+  <section id="folder-picker" class="card modal" hidden><h2 id="folder-title">Choose a folder</h2><label>Folder location<input id="folder-path"></label><div class="toolbar"><button id="folder-go">Open location</button><button id="folder-up">Parent folder</button></div><div class="path-row"><input id="folder-new-name" placeholder="New folder name" aria-label="New folder name"><button id="folder-create" type="button">Create new folder</button></div><div id="folder-list" class="selection-list"></div><p id="folder-note"></p><button id="folder-select" class="primary">Use this folder</button><button id="folder-cancel">Cancel</button></section>
+  <section id="file-picker" class="card modal" hidden><h2 id="file-title">Add existing material</h2><p id="file-explain">Choose notes or documents for AI to organize into this project's Registry, Specification, or Plan. Files stay where they are; nothing is copied or sent until you prepare a request.</p><div id="material-chosen"></div><label>Folder location<input id="file-path"></label><div class="toolbar"><button id="file-go">Open location</button><button id="file-up">Parent folder</button></div><p id="file-location"></p><div id="file-list" class="selection-list"></div><p id="file-note" class="hint"></p><button id="file-cancel">Done</button></section>
+  <section id="help-panel" class="card modal" hidden><h2>Working with Vibe Coder</h2><p>Vibe searches this installation's configured projects folder, or your Documents folder when none is configured, for projects with a <strong>Project.md</strong> definition; <strong>Refresh projects</strong>, in Open existing, repeats that search during a session. Open an ordinary folder; its saved documents appear in the reader. Code, Checks, and Baseline stay explicit selections.</p><p>Steps 1–3 choose a project, show its details, and choose a coding tool. Step 4 works on the active stage, regardless of which file is selected in the reader: <strong>Ask AI to work on the Specification, Plan, or implementation</strong> submits your text, up to ten pictures, and up to ten selected Markdown or text files through the selected coding tool. Selected files are included for this message only and stay in place; your message is saved before it is shown, and the complete answer appears when the turn finishes — no streaming. Enter sends; Shift+Enter adds a line; your input-method composition is respected. AI questions arrive in the same conversation and are answered there. One work turn runs per project at a time; reading files and switching projects stay available while it works. A completed turn has a plain status line; Bridge diagnostics needing no action sit under collapsed Technical details, while failures and notices needing your attention stay visible. Copy stage request for another AI prepares the same current-stage instructions without replacing the saved request file.</p><p>The document pane shows your saved files and refreshes them automatically when they change on disk — including saves made by your coding tool. It keeps a file you explicitly selected; otherwise Build &amp; verify shows the Verification Report when available, then the Programming Result. On a wide window the panes stay side by side; drag their divider to adjust their widths. On a narrow window, Show document and Show conversation switch between them. In Specification and Plan, step 5 runs one fresh assessment only when you choose Review, and saves its verdict; drag the divider below the conversation to give replies more room. With <strong>Second opinion</strong> selected, the authoring model assesses, a second harness of your choice evaluates, and the author revises — optionally iterating to agreement (at most three rounds). The interface states lab diversity honestly — different labs, same lab, or unconfirmed when the passes did not report their actual model/provider identity — and reports any disagreement that remains; you break the ties. Sending a chat message alone does not record a review. The advisory assessment — COMPLETE, INCOMPLETE with noted deficiencies, or NOT REVIEWED — is shown by the document. Step 6 prepares the next action as a saved, inspectable request that you can open in an interactive coding-tool session or copy. Before implementation advises you when the Specification or Plan lacks a COMPLETE review for its current version; Continue with implementation still proceeds. The optional external review action prepares an inspectable request; preparing it does not run the review.</p><p>Build &amp; verify has three actions after the implementation conversation: step 5 asks its AI to save a truthful Programming Result, step 6 asks a coordinator to arrange fresh independent verification and save one Verification Report, and step 7 corrects the implementation and updates the Programming Result, then stops; choose step 6 again for fresh independent verification. Each action lets you send one turn without an automatic time limit in Vibe Coder or copy the full instructions into an existing AI chat. A Vibe turn shows status and its final reply here; an external chat remains visible in its coding tool. The implementation agent cannot serve as its own independent verifier. The saved report supplies the displayed verdict; with none saved, Build &amp; verify shows NOT VERIFIED. A saved verdict reflects the work actually reviewed, and the report's presence alone does not mean the implementation passed.</p><p>Readiness of the selected tool is checked in the background without a model call; failures name their own reason, and sign-in or native permissions are resolved in the tool's own window — never labeled as login failures automatically.</p><p>Closing the browser leaves Vibe and external AI work running. <strong>Stop Vibe</strong> warns when a turn is active or you have unsent text or selected files. If you continue, it interrupts the active turn, records that outcome, and ends its owned processes; files already changed remain. Mac app Quit follows the same warning and interruption path. Reopen from the app icon to return to the workspace; an interrupted turn is never replayed automatically.</p><p id="home"></p><button id="help-close">Back to workspace</button></section>
+  <section id="create" class="card modal" hidden><h2>New project</h2><p>Creates one new folder containing Project.md, Registry.md, Specification.md, and Plan.md. Existing files are never replaced.</p><label>Name<input id="new-name"></label><label>New child directory<input id="new-directory"></label><div class="path-row"><label>Create under<input id="new-under" readonly></label><button id="new-under-browse" type="button">Choose folder</button></div><p id="new-location"></p><label>Parent<input id="new-parent"></label><label>Description — optional<input id="new-description"></label><p class="hint under-label">What is this project about? Describe the idea, problem, or reason for doing it.</p><label>Desired outcome — optional<textarea id="new-goals"></textarea></label><p class="hint under-label">What should this project accomplish? Describe what success would look like?</p><div class="field-group"><label>Repository / code folder — optional</label><p class="hint under-label">Where the existing code lives, or where this project's new code will be created.</p><div class="inline-tools"><button id="new-code-browse" type="button">Choose folder</button><button id="new-code-create" type="button">Create new folder</button><button id="new-code-none" type="button">No existing code yet</button></div><p id="new-code-location" class="hint"></p></div><div class="field-group"><label>Add existing material — optional</label><p class="hint under-label">Choose notes or documents for AI to organize into this project's Registry, Specification, or Plan.</p><div class="inline-tools"><button id="new-material" type="button">Choose files</button></div><div id="new-material-list" class="material-list"></div></div><button id="create-save" class="primary">Create project</button><button id="create-close">Cancel</button></section>
+  <section id="open-form" class="card modal" hidden><h2>Open existing project</h2><div class="open-tools"><label class="inline"><input type="checkbox" id="show-archived">Show archived projects</label><button id="refresh-projects" type="button">Refresh projects</button></div><div id="project-list" class="selection-list"></div><p id="scan-notices" class="hint"></p><h3>Recent folders</h3><div id="recent-projects" class="selection-list"></div><p class="hint">Recent folders are remembered here. A moved or missing folder stays a deliberate relocation: browse to its new location; nothing is created or renamed for you.</p><button id="open-browse">Browse folders</button><button id="open-close">Cancel</button></section>
+  <section id="editor" class="card modal" hidden><h2>Project information</h2><p id="edit-location"></p><p>Only the project information is edited. Stage documents and reported results stay untouched. Simultaneous overview edits are unsupported.</p><label>Name<input id="edit-name"></label><label>Parent<input id="edit-parent"></label><label>Project state<select id="edit-state"><option value="ACTIVE">ACTIVE</option><option value="ARCHIVED">ARCHIVED</option></select></label><label>Description — optional<input id="edit-description"></label><p class="hint under-label">What is this project about? Describe the idea, problem, or reason for doing it.</p><label>Desired outcome — optional<textarea id="edit-goals"></textarea></label><p class="hint under-label">What should this project accomplish? Describe what success would look like?</p><div class="field-group"><label>Repository / code folder — optional</label><p class="hint under-label">Where the existing code lives, or where this project's new code will be created.</p><div class="inline-tools"><button id="edit-code-browse" type="button">Choose folder</button><button id="edit-code-create" type="button">Create new folder</button><button id="edit-code-none" type="button">No existing code yet</button></div><p id="edit-code-location" class="hint"></p></div><div class="field-group"><label>Add existing material — optional</label><p class="hint under-label">Choose notes or documents for AI to organize into this project's Registry, Specification, or Plan.</p><div class="inline-tools"><button id="edit-material" type="button">Choose files</button></div><div id="edit-material-list" class="material-list"></div></div><button id="edit-save" class="primary">Save project information</button><button id="edit-close">Back without saving</button><section id="edit-conflict" hidden><h3>Current saved overview</h3><pre id="edit-current"></pre><button id="edit-reviewed">I reviewed this saved version; keep my input for the next Save</button></section></section>
+  <div id="stages" class="stage-shell" hidden>
+    <button class="rail" data-stage="specification" aria-expanded="false"><span class="rail-label">Specification</span><small>01</small><span class="status-icon">○</span></button>
+    <button class="rail" data-stage="plan" aria-expanded="false"><span class="rail-label">Plan</span><small>02</small><span class="status-icon">○</span></button>
+    <button class="rail" data-stage="build" aria-expanded="false"><span class="rail-label">Build &amp; Verify</span><small>03</small><span class="status-icon">○</span></button>
+    <section id="stage-panel" class="workspace" hidden>
+      <header class="workspace-head">
+        <div class="first-step step-card"><span class="step-number" aria-hidden="true">3</span><label class="label" for="destination">Choose a coding tool</label><select id="destination"></select><span id="readiness" class="readiness" hidden></span><button id="recheck" type="button" class="small" hidden>Recheck readiness</button></div>
+        <h2 id="stage-title"></h2>
+      </header>
+      <p id="host-note" class="hint host-note"></p>
+      <div class="split-tools">
+        <button id="single-toggle" type="button">Show document</button>
+      </div>
+      <div class="split" id="split" data-orientation="split" data-mode="split">
+        <section class="pane pane-chat" id="pane-chat" aria-label="Conversation">
+          <section id="work-step" class="step-card work-step">
+            <header><span class="step-number" aria-hidden="true">4</span><span id="work-step-title">Work with AI on this stage</span></header>
+            <div id="work-step-body" class="work-step-body">
+              <div id="conversation" class="conversation" aria-label="Conversation messages"></div>
+              <div id="conversation-divider" class="conversation-divider" role="separator" tabindex="0" aria-orientation="horizontal" aria-label="Resize the upper conversation pane. Drag, or use the up and down arrow keys."></div>
+              <div id="turn-note" class="turn-note" role="status" aria-live="polite"></div>
+              <div class="compose compose-message">
+                <label class="inline" id="build-reply-choice" for="build-reply-stage" hidden>This message is about <select id="build-reply-stage"><option value="programming">Implementation</option><option value="verification">Independent verification</option></select></label>
+                <label class="label" for="message" id="message-label">What should the AI change or explain in this stage?</label>
+                <textarea id="message" title="Enter sends. Shift+Enter adds a new line. Input-method composition is respected."></textarea>
+                <p id="message-suggestion-note" class="hint" hidden>Suggested first message. Press Enter to use it, or type your own message to replace it.</p>
+                <div id="attachment-bar" class="attachment-bar" hidden></div>
+                <div id="message-files" class="attachment-bar" hidden></div>
+                <div class="toolbar-row">
+                  <button id="attach" type="button">Attach images</button>
+                  <input id="image-input" type="file" accept="image/png,image/jpeg" multiple hidden>
+                  <button id="add-message-files" type="button">Add files</button>
+                  <button id="copy-current" class="push" type="button">Copy stage request for another AI</button>
+                  <button id="send" class="primary" type="button">Ask AI to work on this stage</button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+        <div id="split-divider" class="split-divider" role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize the conversation and document panes. Drag, or use the arrow keys."></div>
+        <section class="pane pane-doc" id="pane-doc" aria-label="Document">
+          <article class="result">
+            <header class="result-head">
+              <div><div class="eyebrow" id="result-kind"></div><h3 id="result-title"></h3></div>
+              <div class="result-tools"><label class="label" for="document">Read</label><select id="document"></select><button id="refresh" type="button">Refresh</button></div>
+            </header>
+            <details id="result-step" class="step-card next-step" hidden>
+              <summary><span class="review-label"><span class="step-number" aria-hidden="true">5</span><span>Save the Programming Result</span></span><span id="result-status" class="assessment"></span></summary>
+              <div class="next-step-body"><p class="hint">Ask the implementation AI to record what it actually built, checked, landed, and still needs to do. If that work is in another AI chat, copy the request for that chat.</p><div class="toolbar-row"><button id="request-result" class="primary" type="button">Request the Programming Result</button></div></div>
+            </details>
+            <div id="result-status-note" class="status-explanation" hidden></div>
+            <details id="review-step" class="step-card review-step">
+              <summary><span class="review-label"><span id="review-step-number" class="step-number" aria-hidden="true">5</span><span id="review-step-title">Review this document</span></span><span id="assessment" class="assessment" role="button" tabindex="0" title=""></span></summary>
+              <div class="review-step-body">
+                <p id="review-explain" class="hint"></p>
+                <div class="second-opinion" id="second-opinion" hidden>
+                  <label class="inline"><input type="checkbox" id="opinion-toggle">Second opinion</label>
+                  <label class="inline" for="reviewer">Reviewer</label><select id="reviewer"></select>
+                  <label class="inline"><input type="checkbox" id="iterate-toggle">Iterate to agreement</label>
+                  <span id="opinion-note" class="hint"></span>
+                </div>
+                <div id="verification-choice" hidden>
+                  <label class="label" for="verification-verifier">Independent verifier</label>
+                  <select id="verification-verifier"></select>
+                  <p class="hint">Choose who should verify the implementation, or ask the coordinator to show you the available choices. The verifier must use a fresh session separate from the implementation agent; a tool name alone does not establish a different AI provider.</p>
+                </div>
+                <div class="toolbar-row"><button id="review" class="primary" type="button">Run review</button></div>
+              </div>
+            </details>
+            <div id="assessment-note" class="status-explanation"></div>
+            <details id="next-step" class="step-card next-step">
+              <summary><span id="next-step-number" class="step-number" aria-hidden="true">6</span><span id="next-step-title">Move to the next stage</span></summary>
+              <div class="next-step-body">
+                <p id="next-explain" class="hint"></p>
+                <label class="label" for="input" id="instruction-label">Instruction for the next stage</label>
+                <textarea id="input" title="Enter adds a new line. Control+Enter or Command+Enter prepares the request."></textarea>
+                <div class="toolbar-row"><button id="add-files" type="button">Add files</button><span id="files-note" class="files"></span><button id="transition" class="primary push" type="button"></button></div>
+              </div>
+            </details>
+            <div class="prepared" id="prepared" hidden><strong>Complete request prepared</strong><span id="prepared-status">Nothing has been sent.</span><div class="prepared-actions"><button class="ghost" id="continue" type="button">Open desktop app</button><button id="terminal" type="button">Open in Terminal</button><button id="copy" type="button">Copy full request</button></div><div class="prepared-location"><label for="prepared-path">Saved file</label><input id="prepared-path" readonly><button id="copy-path" type="button">Copy file path</button></div></div>
+            <p id="files-changed" class="status files-changed" title="Saved files changed on disk since the last look" hidden></p>
+            <div class="result-body">
+              <div id="reader" class="markdown"></div>
+              <section id="packet-tools" hidden><div class="toolbar"><button id="back-document">Back to document</button></div><p id="delivery-note">Prepared request. Choose Desktop, Terminal, or Copy above; nothing has been sent.</p><details id="raw-details"><summary>Full raw Markdown / manual copy</summary><textarea id="raw" readonly aria-label="Full raw Markdown"></textarea></details></section>
+            </div>
+          </article>
+        </section>
+      </div>
+      <div class="flow-footer">
+        <details id="portable-handoff" class="portable-handoff step-card">
+          <summary>Optional: prepare a review file when direct review is unavailable</summary>
+          <p class="hint">Save a complete review request for another AI. Preparing this file does not run the review.</p>
+          <button id="prepare" type="button">Prepare external review file</button>
+        </details>
+      </div>
+    </section>
+  </div>
+  <dialog id="implementation-warning" class="warning-dialog"><h2>Before implementation</h2><div id="implementation-warning-text"></div><div class="toolbar-row"><button id="implementation-back" type="button">Keep working on the documents</button><button id="implementation-proceed" class="primary" type="button">Continue with implementation</button></div></dialog>
+  <dialog id="build-action-dialog" class="warning-dialog"><h2 id="build-action-title"></h2><p id="build-action-note"></p><div class="toolbar-row"><button id="build-action-cancel" type="button">Cancel</button><button id="build-action-copy" type="button">Copy for an existing AI chat</button><button id="build-action-send" class="primary" type="button">Send in Vibe Coder</button></div></dialog>
+  <footer class="footer">
+    <span class="local">Local workspace · Saved project files remain on this computer</span>
+    <span class="push">Version <span id="version"></span></span>
+    <button id="check-updates" type="button">Check for updates</button>
+    <span id="update-status" class="update-text">Not checked.</span>
+    <button id="theme-toggle" type="button">Dark mode</button>
+    <button id="help" type="button">Help</button>
+    <button id="stop" type="button">Stop Vibe</button>
+  </footer>
+</main>
 </body>
 </html>
