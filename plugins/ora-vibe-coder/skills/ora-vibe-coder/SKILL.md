@@ -1,6 +1,6 @@
 ---
 name: ora-vibe-coder
-description: Guide one fixed software lifecycle from idea through approved Specification and Plan, Programming Loop execution, independent Verification, correction, and REPORT after `PASSED`.
+description: Guide one fixed software lifecycle from idea through Specification and Plan, programming, independent verification, correction, and a truthful Verification Report — every stage stays available to the user.
 ---
 
 # Ora Vibe Coder

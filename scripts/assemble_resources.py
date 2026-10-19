@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble Vibe's generated Loop context from one explicit component root."""
+"""Assemble Vibe's generated component contexts from explicit component roots."""
 
 from __future__ import annotations
 
@@ -452,8 +452,9 @@ def switch_outputs(transaction: AcquiredDirectory, lock: AcquiredDirectory,
         raise
 
 
-def assemble(loop_source: Path, revision: str | None = None,
-             target: Path | None = None) -> Path:
+def assemble(loop_source: Path | None = None, revision: str | None = None,
+             target: Path | None = None, boost_source: Path | None = None,
+             boost_target: Path | None = None) -> Path:
     # Reserve before reading any output. Cooperating runs cannot prepare stale
     # manifests or enter replacement together. This does not sandbox arbitrary
     # same-user changes to the repository's live output paths.
@@ -467,7 +468,7 @@ def assemble(loop_source: Path, revision: str | None = None,
     lock = None
     try:
         lock = AcquiredDirectory(lock_path)
-        return assemble_locked(loop_source, revision, target, lock)
+        return assemble_locked(loop_source, revision, target, boost_source, boost_target, lock)
     finally:
         if lock is not None:
             try:
@@ -480,8 +481,9 @@ def assemble(loop_source: Path, revision: str | None = None,
             _warn(f"assembly lock could not be opened; preserving {lock_path}")
 
 
-def assemble_locked(loop_source: Path, revision: str | None,
-                    target: Path | None, lock: AcquiredDirectory) -> Path:
+def assemble_locked(loop_source: Path | None, revision: str | None,
+                    target: Path | None, boost_source: Path | None,
+                    boost_target: Path | None, lock: AcquiredDirectory) -> Path:
     try:
         authority = loop_integrity.authority_metadata()
     except loop_integrity.LoopIntegrityError as error:
@@ -490,7 +492,8 @@ def assemble_locked(loop_source: Path, revision: str | None,
         raise AssemblyError(
             "Requested Loop revision conflicts with Vibe's reviewed authoritative source revision"
         )
-    source = Path(loop_source).resolve(strict=True)
+    source = Path(loop_source if loop_source is not None
+                  else ROOT / authority["vendored_snapshot"]).resolve(strict=True)
     target = Path(target) if target else ROOT / "plugins/ora-vibe-coder/resources/programming-loop"
     target = target.absolute()
     if target.is_symlink() or (target.exists() and not target.is_dir()):
@@ -508,6 +511,31 @@ def assemble_locked(loop_source: Path, revision: str | None,
     version = payload["VERSION"].decode("utf-8").strip()
     if not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?", version):
         raise AssemblyError("Loop VERSION must identify a release, such as 1.0.0")
+
+    try:
+        boost_authority = loop_integrity.boost_authority_metadata()
+    except loop_integrity.LoopIntegrityError as error:
+        raise AssemblyError(str(error)) from error
+    boost_root = Path(boost_source if boost_source is not None
+                      else ROOT / boost_authority["vendored_snapshot"]).resolve(strict=True)
+    boost_target = Path(boost_target) if boost_target else ROOT / "plugins/ora-vibe-coder/resources/ora-ai-boost"
+    boost_target = boost_target.absolute()
+    if boost_target.is_symlink() or (boost_target.exists() and not boost_target.is_dir()):
+        raise AssemblyError(f"Generated resource target is not a plain directory: {boost_target}")
+    try:
+        boost_payload, boost_modes, boost_tree = loop_integrity.read_boost_snapshot(boost_root)
+    except loop_integrity.LoopIntegrityError as error:
+        raise AssemblyError(str(error)) from error
+    if boost_tree != boost_authority["source_tree"]:
+        raise AssemblyError(
+            f"Boost snapshot Git tree {boost_tree} does not match reviewed "
+            f"source tree {boost_authority['source_tree']}; no resources were replaced"
+        )
+    boost_match = re.search(rb'VERSION\s*=\s*"([^"]+)"', boost_payload["ora_review/__init__.py"])
+    boost_version = boost_match.group(1).decode("utf-8") if boost_match else ""
+    if not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?", boost_version):
+        raise AssemblyError("Boost VERSION must identify a release, such as 1.0.0")
+
     _, manifest_outputs, manifest_originals = vibe_manifest_outputs()
     identity = {
         **authority,
@@ -519,10 +547,21 @@ def assemble_locked(loop_source: Path, revision: str | None,
             for name, data in sorted(payload.items())
         },
     }
+    boost_identity = {
+        **boost_authority,
+        "component": "ora-adversarial-review",
+        "source": "ora-adversarial-review",
+        "version": boost_version,
+        "files": {
+            name: hashlib.sha256(data).hexdigest()
+            for name, data in sorted(boost_payload.items())
+        },
+    }
 
     lock.require_current()
     target.parent.mkdir(parents=True, exist_ok=True)
-    destinations = tuple((*manifest_outputs.keys(), target))
+    boost_target.parent.mkdir(parents=True, exist_ok=True)
+    destinations = tuple((*manifest_outputs.keys(), target, boost_target))
     transaction_path = Path(tempfile.mkdtemp(prefix=TRANSACTION_PREFIX, dir=ROOT))
     transaction = None
     committed = False
@@ -563,8 +602,32 @@ def assemble_locked(loop_source: Path, revision: str | None,
                 or staged_tree != authority["source_tree"]):
             raise AssemblyError("Staged Loop resources do not preserve the reviewed Git tree")
 
+        boost_index = resource_index + 1
+        staged_boost = new_root / f"output-{boost_index}"
+        for name, data in boost_payload.items():
+            transaction.require_current()
+            destination = staged_boost / name
+            durable_write(destination, data)
+            transaction.require_current()
+            destination.chmod(0o755 if boost_modes[name] == "100755" else 0o644)
+        transaction.require_current()
+        durable_write(
+            staged_boost / "SOURCE.json",
+            (json.dumps(boost_identity, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+        )
+        transaction.require_current()
+        try:
+            staged_boost_payload, staged_boost_modes, staged_boost_tree = loop_integrity.read_boost_snapshot(
+                staged_boost, allowed_extra={"SOURCE.json"}
+            )
+        except loop_integrity.LoopIntegrityError as error:
+            raise AssemblyError(str(error)) from error
+        if (staged_boost_payload != boost_payload or staged_boost_modes != boost_modes
+                or staged_boost_tree != boost_authority["source_tree"]):
+            raise AssemblyError("Staged Boost resources do not preserve the reviewed Git tree")
+
         entries = []
-        kinds = ("file",) * len(staged_manifests) + ("directory",)
+        kinds = ("file",) * len(staged_manifests) + ("directory", "directory")
         for index, (destination, kind) in enumerate(zip(destinations, kinds)):
             transaction.require_current()
             staging = new_root / f"output-{index}"
@@ -628,10 +691,17 @@ def assemble_locked(loop_source: Path, revision: str | None,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--loop-source", required=True, type=Path)
+    parser.add_argument(
+        "--loop-source", type=Path,
+        help="Optional Loop component root; defaults to the repository's vendored snapshot",
+    )
     parser.add_argument(
         "--source-revision",
         help="Optional assertion; must equal the reviewed revision in ora_vibe_coder/loop_integrity.py",
     )
+    parser.add_argument(
+        "--boost-source", type=Path,
+        help="Optional Boost component root; defaults to the repository's vendored snapshot",
+    )
     args = parser.parse_args()
-    print(assemble(args.loop_source, args.source_revision))
+    print(assemble(args.loop_source, args.source_revision, boost_source=args.boost_source))
