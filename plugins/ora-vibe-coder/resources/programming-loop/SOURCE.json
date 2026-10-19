@@ -4,26 +4,26 @@
   "files": {
     "LICENSE": "d08917ad4cf19dc0f4d6cffa9ffd792835a1748070539d7e783abc236cfa2c3c",
     "NOTICE.md": "192e926e1c3b277b624c728c6dfbff565f15c8448a3e833bd33fe3e62b6a4140",
-    "README.md": "672dc844f9f63aa4b0a9ef2370b822663c986c5646b73e8a17eba377fa72d7cb",
-    "VERSION": "f5e5c9534532840fcd45bb002e69ed85c61dba2753450e26b448b7df1481e24d",
+    "README.md": "555a9c765e2e1916184c84248822321b29b35ec93322376cb5cfb7ce6a972b68",
+    "VERSION": "1575e1af4a95f12f70b4ee6a6adce8160953d93ea17dc2611b90883ccc3ad3b8",
     "adapters/claude.md": "51392019479360daa9d2b2992752a5a4931b72f05997ab82a138829366eacb48",
     "adapters/codex.md": "ab22d9451af9a6dd28e0fb515cb43cf14478c201c018ddfaa31b10d9dfb57bbb",
     "adapters/hermes.md": "8d8dac0c6d2c7b7775e5faabbdec8c539db03e7e4627c6c078ac5dc261460ff9",
     "adapters/minimax.md": "89ec4b39477c0b974241c1b151d0a3b4bc19a12131b692b64f4b406e8cd73c0a",
     "adapters/qwen.md": "99ee4cf0f441aade18f218452830ee6fa6b0bddef6aa37f841de6980d96ff96d",
     "adapters/zcode.md": "06fc9f5cae58f3d1b1078c604c67461bfee2e461dbfd56c00efa8842db5eb8d2",
-    "frameworks/programming-loop.md": "73b35a51267d19bc7983b088c4c3799b9374d78ffabde70b1ccf9c4aeed69af0",
+    "frameworks/programming-loop.md": "f1e04433275f6e8d3b6971009417183ae086f7650c4bb60f55802a08420ad3a6",
     "profiles/claude/programming-loop-reviewer.md": "c5aa930a38a9b5795a927b78f96d5f538607e56fd6d82f0cdcbba974caf03a09",
     "profiles/qwen/programming-loop-reviewer.md": "083fdb0244d4061bec893c65d8b4c3f8286387c48953e8df77ff87d8e88ce209",
     "profiles/zcode/programming-loop-reviewer.md": "ea1fbd60f4683fd0fc33394c68b1b4a8ce83778e1ac6974829d5aa5630fa9fed",
-    "scripts/install.py": "f772e4e8246a80fc3efcb99e5aeff112ef3a6c17776f418d3c787ffa54fbcc94",
+    "scripts/install.py": "c81a12794920fad42c45fc78ea1e8c1ac79ca35d2976adf646aa0fb612469671",
     "skills/programming-loop/SKILL.md": "858e9df37aa6b55a125ec8909bfb1ec407144a20bbc233f51c71626e883a28b9",
-    "tests/test_distribution.py": "9c0d7acd69ca592952f881aa85eb66b2d0f44c8fa546e4c89e0bfe22c00f0cbe"
+    "tests/test_distribution.py": "0a841d12cdc2e9070a5f42526c5caea120a73936faab8389b6b55d86e763d0b8"
   },
   "public_release_repository": "ora-commons/ora-programming-loop",
   "source": "programming-loop",
-  "source_revision": "1719eaed5f4c7c5d63dec65e011e6643b46de04c",
-  "source_tree": "f38487dd1937fd666a6839becce26244623cc9ad",
+  "source_revision": "3989d8d448e8eb03de486f4caf325cc3b62692a3",
+  "source_tree": "87645dc13e8cc929ba4350957e81246c1f9de2b1",
   "vendored_snapshot": "components/programming-loop",
-  "version": "1.0.3"
+  "version": "1.1.0"
 }

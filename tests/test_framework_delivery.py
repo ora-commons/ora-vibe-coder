@@ -12,7 +12,7 @@ from unittest import mock
 
 from ora_vibe_coder import handoff, loop_integrity
 from ora_vibe_coder.handoff import HOSTS, LOOP_FILES, framework_text
-from ora_vibe_coder.installer import SKILL_HOMES, install
+from ora_vibe_coder.installer import SKILL_HOMES, BOOST_ENTRIES, boost_wrappers, install
 from ora_vibe_coder.project import ProjectError
 
 
@@ -74,15 +74,25 @@ class FrameworkDeliveryTests(unittest.TestCase):
         target.parent.mkdir()
         shutil.copytree(packaged, target)
         (target / "README.md").write_bytes(b"previous generated resources\n")
-        destinations = (*manifests, target)
+        boost_packaged = PACKAGE / "resources" / "ora-ai-boost"
+        boost_target = plugin / "resources/ora-ai-boost"
+        shutil.copytree(boost_packaged, boost_target)
+        (boost_target / "README.md").write_bytes(b"previous generated boost resources\n")
+        shutil.copytree(
+            PACKAGE.parents[1] / "components" / "ora-ai-boost",
+            private_root / "components/ora-ai-boost",
+        )
+        destinations = (*manifests, target, boost_target)
         before = {path: assembly.snapshot_descriptor(path) for path in destinations}
         return {
             "source": source,
             "packaged": packaged,
+            "boost_packaged": boost_packaged,
             "root": private_root,
             "control_parent": private_root,
             "manifests": manifests,
             "target": target,
+            "boost_target": boost_target,
             "destinations": destinations,
             "before": before,
             "replacements": replacements,
@@ -100,6 +110,10 @@ class FrameworkDeliveryTests(unittest.TestCase):
         self.assertEqual(
             assembly.snapshot_descriptor(fixture["target"]),
             assembly.snapshot_descriptor(fixture["packaged"]),
+        )
+        self.assertEqual(
+            assembly.snapshot_descriptor(fixture["boost_target"]),
+            assembly.snapshot_descriptor(fixture["boost_packaged"]),
         )
 
     def test_generated_loop_resources_are_exact_identified_component_inputs(self):
@@ -162,6 +176,63 @@ class FrameworkDeliveryTests(unittest.TestCase):
                 (PACKAGE / "VERSION").read_text().strip(),
             )
 
+        # The vendored Bridge runtime is exactly its reviewed 19-file import,
+        # and the same shared reader tolerates the caches a running runtime
+        # generates while still failing unexpected non-cache content.
+        bridge = PACKAGE.parents[1] / "components" / "agent-bridge"
+        bridge_authority = loop_integrity.bridge_authority_metadata()
+        bridge_files, _bridge_modes, bridge_tree = loop_integrity.read_bridge_snapshot(bridge)
+        self.assertEqual(bridge_tree, bridge_authority["source_tree"])
+        self.assertEqual(bridge_authority["source_revision"], "f7c5bdb839b7a875e1d70defdb0b7ab93c43ad87")
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            cached = temporary / "agent-bridge"
+            shutil.copytree(bridge, cached)
+            (cached / "bridge" / "__pycache__").mkdir(exist_ok=True)
+            (cached / "bridge" / "__pycache__" / "cli.pyc").write_bytes(b"cache")
+            files, modes, tree = loop_integrity.read_bridge_snapshot(cached)
+            self.assertEqual((files, modes, tree), (bridge_files, _bridge_modes, bridge_tree))
+            (cached / "bridge" / "unexpected.txt").write_bytes(b"unexpected")
+            with self.assertRaisesRegex(loop_integrity.LoopIntegrityError, "unexpected files"):
+                loop_integrity.read_bridge_snapshot(cached)
+
+        # The vendored Boost runtime is exactly its reviewed 31-file import of
+        # released tag v0.3.0, and its generated counterpart carries the same
+        # files under a complete five-field provenance record.
+        boost = PACKAGE.parents[1] / "components" / "ora-ai-boost"
+        boost_authority = loop_integrity.boost_authority_metadata()
+        self.assertEqual(boost_authority["source_revision"], "9a3237fbfd01f9072d1c77279574875a826b2a56")
+        actual_boost = {
+            str(path.relative_to(boost))
+            for path in boost.rglob("*") if path.is_file() and "__pycache__" not in path.parts
+        }
+        self.assertEqual(actual_boost, set(loop_integrity.BOOST_PATHS))
+        boost_files, boost_modes, boost_tree = loop_integrity.read_boost_snapshot(boost)
+        self.assertEqual(boost_tree, boost_authority["source_tree"])
+        self.assertEqual(sorted(set(boost_modes.values())), ["100644"])
+        generated_boost = PACKAGE / "resources" / "ora-ai-boost"
+        generated_files, generated_modes, generated_tree = loop_integrity.read_boost_snapshot(
+            generated_boost, allowed_extra={"SOURCE.json"}
+        )
+        self.assertEqual((generated_files, generated_modes, generated_tree),
+                         (boost_files, boost_modes, boost_tree))
+        boost_identity = json.loads((generated_boost / "SOURCE.json").read_text())
+        self.assertEqual(
+            {name: boost_identity.get(name) for name in boost_authority},
+            boost_authority,
+        )
+        self.assertEqual(boost_identity["component"], "ora-adversarial-review")
+        self.assertEqual(boost_identity["version"], "0.3.0")
+        self.assertEqual(
+            {name: hashlib.sha256(data).hexdigest() for name, data in boost_files.items()},
+            boost_identity["files"],
+        )
+        for entry, function in BOOST_ENTRIES.items():
+            with self.subTest(boost_entry=entry):
+                wrapper = boost_wrappers()[entry]
+                self.assertIn(f"from ora_review.cli import {function}", wrapper.decode())
+                self.assertIn(b'os.environ["AGENT_BRIDGE_HOME"] = str(root.parent / "agent-bridge")', wrapper)
+
     def test_divergent_vendored_snapshot_is_rejected_before_replacement(self):
         source = PACKAGE.parents[1] / "components" / "programming-loop"
         root = PACKAGE / "resources" / "programming-loop"
@@ -203,6 +274,64 @@ class FrameworkDeliveryTests(unittest.TestCase):
                 )
             self.assertEqual(list(temporary.glob(".programming-loop-*")), [])
 
+        # The Bridge runtime import carries the same rejection before any
+        # replacement, and the same cache tolerance: a divergent vendored
+        # bridge is refused while generated caches alone validate.
+        bridge = PACKAGE.parents[1] / "components" / "agent-bridge"
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            from ora_vibe_coder import installer
+            for name, mutate in (
+                ("divergent-bridge", lambda copied: (
+                    (copied / "bridge" / "peer.py").write_bytes(
+                        (copied / "bridge" / "peer.py").read_bytes() + b"\nmodified byte\n"),)),
+                ("cache-only-bridge", lambda copied: (
+                    (copied / "bridge" / "__pycache__").mkdir(exist_ok=True),
+                    (copied / "bridge" / "__pycache__" / "peer.pyc").write_bytes(b"cache"),)),
+            ):
+                with self.subTest(bridge_snapshot=name):
+                    copied = temporary / name / "components" / "agent-bridge"  # A release layout.
+                    copied.mkdir(parents=True)
+                    shutil.copytree(bridge, copied, dirs_exist_ok=True)
+                    mutate(copied)
+                    if name == "divergent-bridge":
+                        with self.assertRaisesRegex(ValueError, "does not match its reviewed source tree"):
+                            installer.bridge_files(copied.parents[1])
+                    else:
+                        files, _modes, tree = loop_integrity.read_bridge_snapshot(copied)
+                        self.assertEqual(tree, loop_integrity.bridge_authority_metadata()["source_tree"])
+                        self.assertEqual(len(installer.bridge_files(copied.parents[1])), 19)
+
+        # A divergent vendored Boost is refused the same way, before any
+        # output of the shared assembler or installer is touched.
+        boost = PACKAGE.parents[1] / "components" / "ora-ai-boost"
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            divergent = temporary / "release" / "components" / "ora-ai-boost"
+            divergent.mkdir(parents=True)
+            shutil.copytree(boost, divergent, dirs_exist_ok=True)
+            (divergent / "ora_review" / "runner.py").write_bytes(
+                (divergent / "ora_review" / "runner.py").read_bytes() + b"\nmodified byte\n"
+            )
+            with self.assertRaisesRegex(ValueError, "bundled Ora AI Boost does not match its reviewed source tree"):
+                installer.boost_files(temporary / "release")
+            boost_target = temporary / "existing-boost-resources"
+            shutil.copytree(PACKAGE / "resources/ora-ai-boost", boost_target)
+            before = {
+                path.relative_to(boost_target): path.read_bytes()
+                for path in boost_target.rglob("*") if path.is_file()
+            }
+            with self.assertRaisesRegex(assembly.AssemblyError, "Boost snapshot Git tree"):
+                assembly.assemble(boost_source=divergent, boost_target=boost_target)
+            self.assertEqual(
+                {
+                    path.relative_to(boost_target): path.read_bytes()
+                    for path in boost_target.rglob("*") if path.is_file()
+                },
+                before,
+            )
+            self.assertEqual(list(temporary.glob(".programming-loop-*")), [])
+
     def test_cache_and_unexpected_directory_content_cannot_validate_as_exact(self):
         source = PACKAGE.parents[1] / "components" / "programming-loop"
         root = PACKAGE / "resources" / "programming-loop"
@@ -214,24 +343,58 @@ class FrameworkDeliveryTests(unittest.TestCase):
                 path.relative_to(target): path.read_bytes()
                 for path in target.rglob("*") if path.is_file()
             }
+            # Generated Python caches validate: a vendored runtime creates
+            # them the moment it runs, so the exact-file check excludes
+            # __pycache__ directories and .pyc files from both snapshots.
             cases = (
                 ("cache-file", lambda copied: (
                     (copied / "__pycache__").mkdir(),
                     (copied / "__pycache__/cached.pyc").write_bytes(b"cache"),
-                ), "exact 17 files"),
+                )),
                 ("empty-cache-directory", lambda copied: (
                     (copied / "__pycache__").mkdir(),
-                ), "unexpected directories"),
-                ("cache-symlink", lambda copied: (
-                    (copied / "__pycache__").mkdir(),
-                    (copied / "__pycache__/alias").symlink_to(copied / "VERSION"),
-                ), "symbolic link"),
+                )),
+                ("stray-pyc", lambda copied: (
+                    (copied / "stray.pyc").write_bytes(b"cache"),
+                )),
             )
-            for name, mutate, message in cases:
+            for name, mutate in cases:
                 with self.subTest(snapshot_item=name):
                     copied = temporary / name
                     shutil.copytree(source, copied)
                     mutate(copied)
+                    _files, _modes, tree = loop_integrity.read_snapshot(copied)
+                    self.assertEqual(tree, loop_integrity.read_snapshot(source)[2])
+                    assembly.assemble(copied, target=target)  # Cache content never blocks assembly.
+                    self.assertEqual(
+                        {
+                            path.relative_to(target): path.read_bytes()
+                            for path in target.rglob("*") if path.is_file()
+                        },
+                        before,
+                    )
+            # Unexpected non-cache content still fails, inside or outside a
+            # cache directory.
+            failures = (
+                ("cache-symlink", lambda copied: (
+                    (copied / "__pycache__").mkdir(),
+                    (copied / "__pycache__/alias").symlink_to(copied / "VERSION"),
+                ), "symbolic link"),
+                ("non-cache-in-cache", lambda copied: (
+                    (copied / "__pycache__").mkdir(),
+                    (copied / "__pycache__/notes.txt").write_bytes(b"notes"),
+                ), "non-cache file in __pycache__"),
+                ("unexpected-file", lambda copied: (
+                    (copied / "extra.txt").write_bytes(b"extra"),
+                ), "exact 17 files"),
+            )
+            for name, mutate, message in failures:
+                with self.subTest(snapshot_item=name):
+                    copied = temporary / name
+                    shutil.copytree(source, copied)
+                    mutate(copied)
+                    with self.assertRaisesRegex(loop_integrity.LoopIntegrityError, message):
+                        loop_integrity.read_snapshot(copied)
                     with self.assertRaisesRegex(assembly.AssemblyError, message):
                         assembly.assemble(copied, target=target)
                     self.assertEqual(
@@ -244,9 +407,9 @@ class FrameworkDeliveryTests(unittest.TestCase):
             copied_resources = temporary / "handoff-resources"
             shutil.copytree(root, copied_resources)
             (copied_resources / "__pycache__").mkdir()
+            (copied_resources / "__pycache__/loop.pyc").write_bytes(b"cache")
             with mock.patch.object(handoff, "LOOP", copied_resources):
-                with self.assertRaisesRegex(ProjectError, "conflicting provenance"):
-                    handoff.loop_resources("programming", "Codex")
+                handoff.loop_resources("programming", "Codex")  # Generated caches keep the provenance valid.
             self.assertEqual(list(temporary.glob(".programming-loop-*")), [])
 
     def test_assembly_contention_precedes_output_reads_and_preserves_collisions(self):
@@ -655,8 +818,11 @@ class FrameworkDeliveryTests(unittest.TestCase):
 
     def test_handoff_reports_public_snapshot_and_rejects_conflicting_provenance(self):
         authority = loop_integrity.authority_metadata()
+        # The packet embeds the vendored snapshot's own VERSION; read that same
+        # authority instead of pinning a release number that drifts on import.
+        loop_version = (PACKAGE.parents[1] / "components" / "programming-loop" / "VERSION").read_text(encoding="utf-8").strip()
         packet = framework_text("programming", "Codex")
-        self.assertIn("Vibe validates its bundled snapshot of Programming Loop 1.0.0's 17 product files and modes", packet)
+        self.assertIn(f"Vibe validates its bundled snapshot of Programming Loop {loop_version}'s 17 product files and modes", packet)
         self.assertIn("This packet includes the universal Loop framework and, for a supported destination, exactly one selected host adapter.", packet)
         self.assertIn(
             f"public release {authority['public_release_repository']}", packet

@@ -33,12 +33,262 @@
     {
       "executable": false,
       "path": "NOTICE.md",
-      "sha256": "be4667b8b510ba73edaca655956384ef6a39c5d9d3b125ce9534884daec62186"
+      "sha256": "e140aa6ceb6a90501514b1952d52b1cc88cc42b22f53fd280e7d7035ce6d35e3"
     },
     {
       "executable": false,
       "path": "README.md",
-      "sha256": "fb2793434187550a9a0f0890693b37e522d56b3c6467e503e1f8a160a14f38c5"
+      "sha256": "bb627f3565fb769d9130cc04cec2e3c5805030fd30124a0a7b54a5df58cef13b"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/LICENSE",
+      "sha256": "1ac7ebc3bd469b4e49b592a5e4d03daed4455a31df4e6980ea5900335aaff4f1"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/NOTICE",
+      "sha256": "2999d1d4097d08788066712bb6ab6f2fa626eef0d5c49a5eb22cd2df254a7ae2"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/README.md",
+      "sha256": "91b0ba547dd9289e9fe68e3af9569b8934769ef1d9b8d5ba79a20067dde742c2"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/__init__.py",
+      "sha256": "23dc2dc61bcf72451c69d924c2e04dcd444e5a91ec97e35f0578c6b37f6a66da"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/__main__.py",
+      "sha256": "6aec31cb2dd88e512b5b4c25cbd0b6740ee5176453e33154c4df1a41080a7f1b"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/claude.py",
+      "sha256": "6a62308068a9be940e0c770d3b777c0f777bd277d8fbec474166ace990378202"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/cli.py",
+      "sha256": "86d3907b6fe7aaa00ab858ff142e9c8d4d9570cc478f072328fb235dade389a1"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/codex.py",
+      "sha256": "606daf1d90c587d8cf83072f49451c460273f7f4ae9b0322cf3113502a8ea78f"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/connectors.py",
+      "sha256": "6865366e4148e8367331ad81c586861c3ca17cd2b99a64a9f51c265ccaba90eb"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/errors.py",
+      "sha256": "22ee28a49581c0caaff4bde08db628b1fb4b02a108a8325a43082292dea992f4"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/hermes.py",
+      "sha256": "63ddb3e6ca49e2cd90a5de3506cc494e04f5b9462965918ea5a9105cf73d3f9c"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/locking.py",
+      "sha256": "7fdd540d2100433a4cdff1d0865510ddd6e29a29a1f8dd42880677cd825037bd"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/minimax.py",
+      "sha256": "45dbf33c5a1524f82f32bd26507778bc2eb8d2bd2bb1298bf892787341f7ea56"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/peer.py",
+      "sha256": "d415e0f22ea044003a8d3a5977ad6af9fc785c31eb23cd08244c9965287156dc"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/qwen.py",
+      "sha256": "6e931a67688c231e82e1f87a6002be9ce2ff97b7d68579e0ebaedc159164b5c7"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/record.py",
+      "sha256": "445a50d5e3cf0fc73839a680322ea99b757832921161c1838c6947137348d50f"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/runner.py",
+      "sha256": "844058f41799e98fe5abf9dccf9056760a94035b5e74a23814be29cedaa10b82"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/session.py",
+      "sha256": "4048b505f699a8f8938d419f9a51e58e2681890a37bc5f9086132bda6e76c4d6"
+    },
+    {
+      "executable": false,
+      "path": "components/agent-bridge/bridge/zcode.py",
+      "sha256": "49860f5c2ba5e32a970ca268ac46f45b671eedf03b37209be59685494eb32109"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/LICENSE",
+      "sha256": "159f6ea1c9b1beb8d9912d937857b7f8b8032af1f71cdb4a07bbd96a201e43af"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/NOTICE",
+      "sha256": "245ec460d48ab3060d6f3d727091e4d3c90a39e1072b2d494b59d43e6adecf9d"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/README.md",
+      "sha256": "00354e842536b7c98a08cee434bc99e46ebff00890431fd6ecdd57112589254d"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/__init__.py",
+      "sha256": "833f3fb2492994b1e520bd41bc5fd7c112c33e41abcdfa07b191688e62d549cf"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/adapters.py",
+      "sha256": "562bcf8f34e31825751c2994a4c2865c4ad9080853e5a73ac244a65e2817b528"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/cli.py",
+      "sha256": "f4550438d6fb00267d6e8d368b76a8bf100c957e58f3742beadfd4331dc44b8a"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/errors.py",
+      "sha256": "ff6d3c3828943d5fbd6902f2538b43b594fba583a9d73cdacf5eb50a204fada5"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/breadth-analytical.md",
+      "sha256": "a7129f43601e68e96a77a467e130fcb9b8f9fbe5972106a927bd88773823ee66"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/breadth-committed.md",
+      "sha256": "b40df7bbac3a198f4417781c103513db5515f1517f6bb77fe183c6260bccb069"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/consolidator.md",
+      "sha256": "938756ebf285700b6bff0b2f5a9fda7f5e38bed811ce756c29aa864110d879cb"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/depth.md",
+      "sha256": "c4fef03ca127ce5a5734ed1728c3044861ea6ec0b96f7cf718b729d358e8bc9c"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/initial-answer.md",
+      "sha256": "558d8a1c8ead5adec6d276d3575d122749a4429cc25c35b6954ba8954355f840"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/output-answer.md",
+      "sha256": "0c5664438e8001c84894a45cd622ffd55e6f8ba24b70ccc78fdd87caff8c0491"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/output-review.md",
+      "sha256": "b9d3e04ff59a4cb51e48be4d57fb1da426733acc4191d4b1a820f304ca365020"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/output-revision.md",
+      "sha256": "48b9044ff149839ac2cc078b1380517773e71ed2fe0e73955d8f2081a606bad6"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/output-validator.md",
+      "sha256": "2f23b5504c81b68d8aab94d39647c4b320b71b18be301e93be3f4c1cbb7df518"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/review-breadth.md",
+      "sha256": "daa4ad4529d7eb287d9234c61ba9a7b951b58afda17875a99a2cba62d92d5231"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/review-consolidated.md",
+      "sha256": "f4223312d0b34702aa5bafbab56feda80627c7fd9e4706f7f2dbf39180ecae83"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/review-depth.md",
+      "sha256": "0f6c7df47ac48395866e78caa95ee36cd9d90e2562640a00d2dd8f20f23b0546"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/reviewer.md",
+      "sha256": "778894147c56d37752e181d9de79a7fbb344840a11fb151012a6420f93d92aaa"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/revise-breadth.md",
+      "sha256": "31234ad65ac170485ee9e4443662d647c30d4f5c09a88d3ff8edaa0dfb0e8aee"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/revise-consolidated.md",
+      "sha256": "ddcffe3697447ba158958c136701466a2df09e898a4bb03ca59124dca7bfc94e"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/revise-depth.md",
+      "sha256": "cb08310a21876190540716d3bb768b0a5f86530b0dbd5d6fd14a2de4b97d2a52"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/reviser.md",
+      "sha256": "cf2b74fc24a82be10e2429f396b0ccace96085ee8fcd3c700d2ae5597d795ed9"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/universal.md",
+      "sha256": "bac355e8e9989150f4636992ff14f7e2346e2be9fcd655836c0295ad95f9fad2"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/instructions/validator.md",
+      "sha256": "03700016e0274e13583b1a8850ef9ec3cb0ab4268d6afe994054e8295abab9ed"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/models.py",
+      "sha256": "0785fc67c86fc1a9a4c8f684450858435402e5d3f813efdef1b9d3f4be11d6aa"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/packet.py",
+      "sha256": "49e35e1f546852c2d386a936519bc8875bb61a8e46d18c94201ab39101fb5470"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/record.py",
+      "sha256": "740124c93fdf4afb14fbf369f962ce02e926d54a444c5263852626dfcde64777"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/runner.py",
+      "sha256": "8f4a8224cc0c5ae78491902605d287259cfab0e4aeb2c6d5229a6727dc476b41"
+    },
+    {
+      "executable": false,
+      "path": "components/ora-ai-boost/ora_review/validator.py",
+      "sha256": "d8a04d89c900dbc5e46f05d7509c765d7e2e3e217e613ef430770fc89b4e3f30"
     },
     {
       "executable": false,
@@ -53,12 +303,12 @@
     {
       "executable": false,
       "path": "components/programming-loop/README.md",
-      "sha256": "672dc844f9f63aa4b0a9ef2370b822663c986c5646b73e8a17eba377fa72d7cb"
+      "sha256": "555a9c765e2e1916184c84248822321b29b35ec93322376cb5cfb7ce6a972b68"
     },
     {
       "executable": false,
       "path": "components/programming-loop/VERSION",
-      "sha256": "f5e5c9534532840fcd45bb002e69ed85c61dba2753450e26b448b7df1481e24d"
+      "sha256": "1575e1af4a95f12f70b4ee6a6adce8160953d93ea17dc2611b90883ccc3ad3b8"
     },
     {
       "executable": false,
@@ -93,7 +343,7 @@
     {
       "executable": false,
       "path": "components/programming-loop/frameworks/programming-loop.md",
-      "sha256": "73b35a51267d19bc7983b088c4c3799b9374d78ffabde70b1ccf9c4aeed69af0"
+      "sha256": "f1e04433275f6e8d3b6971009417183ae086f7650c4bb60f55802a08420ad3a6"
     },
     {
       "executable": false,
@@ -113,7 +363,7 @@
     {
       "executable": false,
       "path": "components/programming-loop/scripts/install.py",
-      "sha256": "f772e4e8246a80fc3efcb99e5aeff112ef3a6c17776f418d3c787ffa54fbcc94"
+      "sha256": "c81a12794920fad42c45fc78ea1e8c1ac79ca35d2976adf646aa0fb612469671"
     },
     {
       "executable": false,
@@ -123,22 +373,22 @@
     {
       "executable": false,
       "path": "components/programming-loop/tests/test_distribution.py",
-      "sha256": "9c0d7acd69ca592952f881aa85eb66b2d0f44c8fa546e4c89e0bfe22c00f0cbe"
+      "sha256": "0a841d12cdc2e9070a5f42526c5caea120a73936faab8389b6b55d86e763d0b8"
     },
     {
       "executable": false,
       "path": "docs/Product Overview.md",
-      "sha256": "a7bf6165553e1d207b81bf77623a352fd27eec22afeea539bc0dbb5a3fe6419f"
+      "sha256": "b1ed3f59535051b4d82ff37391a081db3033878a560c1f327b7c39a65f707c9b"
     },
     {
       "executable": false,
       "path": "docs/Technical Documentation.md",
-      "sha256": "fea426bad031aa310fb0cd8eace8b77d5e4497edac91506c6421ffed92cb4263"
+      "sha256": "42478a427495f1fdea32dfd1f7394474ec018b1dde165246334809f2446412fb"
     },
     {
       "executable": false,
       "path": "docs/User Guide.md",
-      "sha256": "a77d4f05b6dbfb4e63ba32a6b871ef449429c88f0a39403f59b311e40ecbef21"
+      "sha256": "f7193b958132aa34c51cce9ab52395acf2a7bee7384b642932ec26017054155d"
     },
     {
       "executable": false,
@@ -158,57 +408,87 @@
     {
       "executable": false,
       "path": "ora_vibe_coder/__main__.py",
-      "sha256": "3c37cac03b5a43bfab527261cc8ff00c79bee158f4b2ab1f59e87daf19fed52d"
+      "sha256": "6d3775fb1af5eb587bf5b7229ef5b5061310dde9922efd206b4d14155373714e"
+    },
+    {
+      "executable": false,
+      "path": "ora_vibe_coder/conversation.py",
+      "sha256": "e4163966365f291193a4595663fcb7231721d8e43858f7548df42e3cfcc2c744"
     },
     {
       "executable": false,
       "path": "ora_vibe_coder/handoff.py",
-      "sha256": "c81bab4c112c4e27bb00de10e4955217b5cd0d84f8eeb25eb145db119f96a090"
+      "sha256": "ba4e69a31412488f04a2ab1607aee9548e4af6f6539f3a025be7d9eb85b2fcbc"
     },
     {
       "executable": false,
       "path": "ora_vibe_coder/hosts.py",
-      "sha256": "f4d9246d8c43aea429988b6428fecb55f5b576af6b08c3a31437f0f0843bfee7"
+      "sha256": "e26f4cef320550ca97ea1911a071b8eda9b19598879ab5f508b6ceec12e3f416"
     },
     {
       "executable": false,
       "path": "ora_vibe_coder/installer.py",
-      "sha256": "6a17f76950034d1f6e89cc7d1c1e8a46c2a821ea48d7f65edebe91a559260b7c"
+      "sha256": "2ae2e2b84998b3ad772d916ec9c3b81c21c0fa1b307a7627c6fbf77fc958d854"
     },
     {
       "executable": false,
       "path": "ora_vibe_coder/launcher.py",
-      "sha256": "4e53f13b1c5c9f2f49e423dc823aa6cee94404fb8368c5d8f5e571bf951899f3"
+      "sha256": "97d641978be6d85b32c6fd70fa31b363981437eed3a0605167590971a5f908a9"
     },
     {
       "executable": false,
       "path": "ora_vibe_coder/loop_integrity.py",
-      "sha256": "db330f14520edc6610bba02fddf80a280d0df37917534b379609b434db5a3587"
+      "sha256": "98e3381ab9bb1e9b0c95515e27f02b056269321c701d304b9007ee776433c2e6"
     },
     {
       "executable": false,
       "path": "ora_vibe_coder/project.py",
-      "sha256": "0a4b8db1dbbc06c9aa75398c1d4ef5f90dcfe95c152d2957a584b99d7e812943"
+      "sha256": "6dc99a96c75a955df467d55743fe58765ee3e2dc611c85ba97bc334bea3b9ef5"
+    },
+    {
+      "executable": false,
+      "path": "ora_vibe_coder/reliability.py",
+      "sha256": "760cb64139a9961f524acac75e382a489be12913a27bf7912b48f424b06493a2"
+    },
+    {
+      "executable": false,
+      "path": "ora_vibe_coder/run.py",
+      "sha256": "bb73111097bfd813c92b3074724b861f47b8e46969dd6ba9a933f9f8cd4f7c8d"
     },
     {
       "executable": false,
       "path": "ora_vibe_coder/server.py",
-      "sha256": "f90b6bad032f7f724314ff3670c02536f915bcb0eb22b3e9f4f6e3591e86a2c1"
+      "sha256": "5c18d90ea4ca4c30c35727c273933d4ae30fe56b16aef246a08c7b63bf9bb24b"
     },
     {
       "executable": false,
       "path": "ora_vibe_coder/static/app.js",
-      "sha256": "5c149625380dd3660e9723b4e88bbcb6be9c8b7a0472c9f964d49ef9aa1f8b0c"
+      "sha256": "20b6406a0b2eccd4c39a8ddd2621b64cc3dbe866562be54f1f128a10e68a358c"
     },
     {
       "executable": false,
       "path": "ora_vibe_coder/static/index.html",
-      "sha256": "86527ecee829bac310da33eb6733ecbf4ea8e189a28e6012560a2ace26192a42"
+      "sha256": "1eb65a629a4e20deb9e35da138eaea5831e6ee0ed854205512f1f7a93aa5db58"
+    },
+    {
+      "executable": false,
+      "path": "ora_vibe_coder/static/ora-logo.png",
+      "sha256": "1e03061d9477260c2f22d304cc86e2e511bc5a4a0744bda0cd6d8b8062931246"
     },
     {
       "executable": false,
       "path": "ora_vibe_coder/static/style.css",
-      "sha256": "5bfe2bf542cc1db02b1656fb60ade890611c6b2ecbed7590d97efd891a162cec"
+      "sha256": "ddd3bedf5de657bd408bcb7197e5cbf3ea56c81e63b967853c1ea34736acc7bb"
+    },
+    {
+      "executable": false,
+      "path": "ora_vibe_coder/static/vendor/Quicksand.OFL.txt",
+      "sha256": "14d28541780d90f6577bb7abcc6f005bf6969614294e75c82abb8758a696ad46"
+    },
+    {
+      "executable": false,
+      "path": "ora_vibe_coder/static/vendor/Quicksand.ttf",
+      "sha256": "39c9b64223561f56aaff6062a6f04063c4fc86809ad6768722c06614d977e1cc"
     },
     {
       "executable": false,
@@ -223,47 +503,47 @@
     {
       "executable": false,
       "path": "ora_vibe_coder/status.py",
-      "sha256": "a3260acd7ca1649639d5b78a54af6eb06012982867d379f432e0ef52828ef4ee"
+      "sha256": "f5c9d3050f2ddffea4a3e576b969142bbe8a4115ca5ad5f76669fea3ab33a022"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/.claude-plugin/plugin.json",
-      "sha256": "08672e0e7ca33bb55019823e16cc741959c4f6aff9a08ec07bc580e5e7f370bf"
+      "sha256": "d6f2572128fd78d6653d37427e8034dc74a3a9d0f1cfbecc985391f5a354c784"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/.codex-plugin/plugin.json",
-      "sha256": "94edbb68b58a31d01c2b6811f2ba4db7635b324679ca70699c8ee2a60cedf123"
+      "sha256": "8367cf491375406f4952b92a9f9478f77ef5cf4ba89bb2b7955cf0268a6fc8c3"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/VERSION",
-      "sha256": "1725bfa6524c5265e7c171cf06568417d39b947fff49c242f03859479c82334b"
+      "sha256": "d915cc95d6ca8f47ae297713ed46d4e5c5d99ddd29fc3c61e263bdf305f2b5b0"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/frameworks/ora-planning.md",
-      "sha256": "66c286efce2f6038aec2ae3bb529fb0f0fe77106a233868f1beda5bec6842d4b"
+      "sha256": "dc317247d1aecb25e1dc965d34715b4c392f29056862bd63fd1972358ec9f952"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/frameworks/ora-programming.md",
-      "sha256": "98b4b52c5ebd44470e9fa5975372851b7ebc3777fc46163971acc2bb67eb8d5d"
+      "sha256": "d64bfa750ba5cd8f939b248e0f1593a22c742168956a9db5a095d8d01e557189"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/frameworks/ora-specification.md",
-      "sha256": "bdd9496c7616e8f3b0ef38c5d6e3f8f624d8fe5f39e8281ae23c1f3a75db0b85"
+      "sha256": "a1ec644eabfd751b86dac8624c92673707dfa5761011565a9c492efd1a157f09"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/frameworks/ora-verification.md",
-      "sha256": "7374c22aeadc083e7abdae7ac9f678575ebc5dacd54b6d9e1c4eea10902641d7"
+      "sha256": "3e5cfc21d47f947b333614774f2bbb66133ad260adecd260ee949d79274ae0f8"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/frameworks/ora-vibe-coder.md",
-      "sha256": "4e954f9a233a430bd327a168eaa5683afdd7bf213c943056dcddc63cca8d2a3b"
+      "sha256": "f6aeacd63232c0bebbbdcc767b7f3a470f8025ece5daaf51d237e5012675c872"
     },
     {
       "executable": false,
@@ -273,7 +553,167 @@
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/references/shared-contract.md",
-      "sha256": "819bc71e22a767726c3e60a6da73669cd5e7d56f420327be689d7fb58c8fb912"
+      "sha256": "54f7e39d0d231ee6eb71c5d43f3e62cf1e906f180f9ccc2de3a066c0e0d6ffb7"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/LICENSE",
+      "sha256": "159f6ea1c9b1beb8d9912d937857b7f8b8032af1f71cdb4a07bbd96a201e43af"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/NOTICE",
+      "sha256": "245ec460d48ab3060d6f3d727091e4d3c90a39e1072b2d494b59d43e6adecf9d"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/README.md",
+      "sha256": "00354e842536b7c98a08cee434bc99e46ebff00890431fd6ecdd57112589254d"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/SOURCE.json",
+      "sha256": "142f65902b491c4a14992c7e2824cbcbe41279f79abd44f2d82d73c509c76bfa"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/__init__.py",
+      "sha256": "833f3fb2492994b1e520bd41bc5fd7c112c33e41abcdfa07b191688e62d549cf"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/adapters.py",
+      "sha256": "562bcf8f34e31825751c2994a4c2865c4ad9080853e5a73ac244a65e2817b528"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/cli.py",
+      "sha256": "f4550438d6fb00267d6e8d368b76a8bf100c957e58f3742beadfd4331dc44b8a"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/errors.py",
+      "sha256": "ff6d3c3828943d5fbd6902f2538b43b594fba583a9d73cdacf5eb50a204fada5"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/breadth-analytical.md",
+      "sha256": "a7129f43601e68e96a77a467e130fcb9b8f9fbe5972106a927bd88773823ee66"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/breadth-committed.md",
+      "sha256": "b40df7bbac3a198f4417781c103513db5515f1517f6bb77fe183c6260bccb069"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/consolidator.md",
+      "sha256": "938756ebf285700b6bff0b2f5a9fda7f5e38bed811ce756c29aa864110d879cb"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/depth.md",
+      "sha256": "c4fef03ca127ce5a5734ed1728c3044861ea6ec0b96f7cf718b729d358e8bc9c"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/initial-answer.md",
+      "sha256": "558d8a1c8ead5adec6d276d3575d122749a4429cc25c35b6954ba8954355f840"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/output-answer.md",
+      "sha256": "0c5664438e8001c84894a45cd622ffd55e6f8ba24b70ccc78fdd87caff8c0491"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/output-review.md",
+      "sha256": "b9d3e04ff59a4cb51e48be4d57fb1da426733acc4191d4b1a820f304ca365020"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/output-revision.md",
+      "sha256": "48b9044ff149839ac2cc078b1380517773e71ed2fe0e73955d8f2081a606bad6"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/output-validator.md",
+      "sha256": "2f23b5504c81b68d8aab94d39647c4b320b71b18be301e93be3f4c1cbb7df518"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/review-breadth.md",
+      "sha256": "daa4ad4529d7eb287d9234c61ba9a7b951b58afda17875a99a2cba62d92d5231"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/review-consolidated.md",
+      "sha256": "f4223312d0b34702aa5bafbab56feda80627c7fd9e4706f7f2dbf39180ecae83"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/review-depth.md",
+      "sha256": "0f6c7df47ac48395866e78caa95ee36cd9d90e2562640a00d2dd8f20f23b0546"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/reviewer.md",
+      "sha256": "778894147c56d37752e181d9de79a7fbb344840a11fb151012a6420f93d92aaa"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/revise-breadth.md",
+      "sha256": "31234ad65ac170485ee9e4443662d647c30d4f5c09a88d3ff8edaa0dfb0e8aee"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/revise-consolidated.md",
+      "sha256": "ddcffe3697447ba158958c136701466a2df09e898a4bb03ca59124dca7bfc94e"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/revise-depth.md",
+      "sha256": "cb08310a21876190540716d3bb768b0a5f86530b0dbd5d6fd14a2de4b97d2a52"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/reviser.md",
+      "sha256": "cf2b74fc24a82be10e2429f396b0ccace96085ee8fcd3c700d2ae5597d795ed9"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/universal.md",
+      "sha256": "bac355e8e9989150f4636992ff14f7e2346e2be9fcd655836c0295ad95f9fad2"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/instructions/validator.md",
+      "sha256": "03700016e0274e13583b1a8850ef9ec3cb0ab4268d6afe994054e8295abab9ed"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/models.py",
+      "sha256": "0785fc67c86fc1a9a4c8f684450858435402e5d3f813efdef1b9d3f4be11d6aa"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/packet.py",
+      "sha256": "49e35e1f546852c2d386a936519bc8875bb61a8e46d18c94201ab39101fb5470"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/record.py",
+      "sha256": "740124c93fdf4afb14fbf369f962ce02e926d54a444c5263852626dfcde64777"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/runner.py",
+      "sha256": "8f4a8224cc0c5ae78491902605d287259cfab0e4aeb2c6d5229a6727dc476b41"
+    },
+    {
+      "executable": false,
+      "path": "plugins/ora-vibe-coder/resources/ora-ai-boost/ora_review/validator.py",
+      "sha256": "d8a04d89c900dbc5e46f05d7509c765d7e2e3e217e613ef430770fc89b4e3f30"
     },
     {
       "executable": false,
@@ -288,17 +728,17 @@
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/resources/programming-loop/README.md",
-      "sha256": "672dc844f9f63aa4b0a9ef2370b822663c986c5646b73e8a17eba377fa72d7cb"
+      "sha256": "555a9c765e2e1916184c84248822321b29b35ec93322376cb5cfb7ce6a972b68"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/resources/programming-loop/SOURCE.json",
-      "sha256": "33e4a55a9f77ef219600016d201a85838a7bccb9861768ae943821a289709972"
+      "sha256": "8b6dde09cfc1854291ad337ecd620e87976efcf6955f176bd6dc192b4e0e4f90"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/resources/programming-loop/VERSION",
-      "sha256": "f5e5c9534532840fcd45bb002e69ed85c61dba2753450e26b448b7df1481e24d"
+      "sha256": "1575e1af4a95f12f70b4ee6a6adce8160953d93ea17dc2611b90883ccc3ad3b8"
     },
     {
       "executable": false,
@@ -333,7 +773,7 @@
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/resources/programming-loop/frameworks/programming-loop.md",
-      "sha256": "73b35a51267d19bc7983b088c4c3799b9374d78ffabde70b1ccf9c4aeed69af0"
+      "sha256": "f1e04433275f6e8d3b6971009417183ae086f7650c4bb60f55802a08420ad3a6"
     },
     {
       "executable": false,
@@ -353,7 +793,7 @@
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/resources/programming-loop/scripts/install.py",
-      "sha256": "f772e4e8246a80fc3efcb99e5aeff112ef3a6c17776f418d3c787ffa54fbcc94"
+      "sha256": "c81a12794920fad42c45fc78ea1e8c1ac79ca35d2976adf646aa0fb612469671"
     },
     {
       "executable": false,
@@ -363,37 +803,42 @@
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/resources/programming-loop/tests/test_distribution.py",
-      "sha256": "9c0d7acd69ca592952f881aa85eb66b2d0f44c8fa546e4c89e0bfe22c00f0cbe"
+      "sha256": "0a841d12cdc2e9070a5f42526c5caea120a73936faab8389b6b55d86e763d0b8"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/skills/ora-planning/SKILL.md",
-      "sha256": "d6e4f9518b573b2eebe852471cc6dafc7efe3f80a7731d2eb0c649e985257245"
+      "sha256": "fb1c5bdf16c1564f0961e07d0411486a6cfe15ad5a9534df09f0a6ea5d7ba3e7"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/skills/ora-programming/SKILL.md",
-      "sha256": "1845da4d423c88abdc50ec7afd3cb2b88dde1b059cd55fbd21db6c3180f1c78c"
+      "sha256": "e2b71e87cf68e92ae158e96e7d48d9340149aa4b47a1884e62529ea22ec14daa"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/skills/ora-specification/SKILL.md",
-      "sha256": "ff3571e451ce1332f2d9fcbbe623a00c027ade2ff560e6bc4b6351c1b789dcbb"
+      "sha256": "25d2729ad36e8c1a92693b387d1c57ae5f491bfdc5cb514691042c46fa90f1b1"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/skills/ora-verification/SKILL.md",
-      "sha256": "8c82d52d5763ffc41ac3eaae3a206ecd46b8466edaa5c4c84c71fd0ef37c4ec5"
+      "sha256": "63bccd7bf638f90f95f9e0ef8fdd62500c548ebfb6f38d0ae12ec1567c8822ac"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/skills/ora-vibe-coder/SKILL.md",
-      "sha256": "4bcdcd8d6618128d87bd66a558000f88fdc4d523cf0ca9bb5a7327809a93c98c"
+      "sha256": "a714f1ed34d01e4ec649c266b1d2f1a019ae868e754a7cd853e8646c58f3053b"
     },
     {
       "executable": false,
       "path": "scripts/assemble_resources.py",
-      "sha256": "9f6f0f1f9574f0b19e51f50d05e8b844ab82e726fa7564e1ce6165e0de05f1ab"
+      "sha256": "59968f2aa906dfb486ff9505b15ec607cec1d7572beac41aa2d60ff617deb455"
+    },
+    {
+      "executable": true,
+      "path": "scripts/update-hosts.sh",
+      "sha256": "24d6f0909b913d6b90367d2836a90ed957075fe345959638c4b138c64db404d9"
     },
     {
       "executable": false,
@@ -407,28 +852,38 @@
     },
     {
       "executable": false,
+      "path": "tests/test_conversation.py",
+      "sha256": "ce2964e95c8751568cb4a356fa310b07df5d6505bc3d3595faf4256f1681ec87"
+    },
+    {
+      "executable": false,
       "path": "tests/test_framework_delivery.py",
-      "sha256": "fd3ec732b531ea2114016dad4ace7ddafe485945b01123b3289ce97e21049baf"
+      "sha256": "79022cb341b3975f39ef4df1bdcc3c569389dc67bbc70a716317c74dcabe5af1"
     },
     {
       "executable": false,
       "path": "tests/test_handoff.py",
-      "sha256": "3080bea282f233264a385879bfd30ba8057179e1d757e444171a844969a11dd8"
+      "sha256": "ec3a7136b4403c7acae8306e3456c75e42ddb3d076f9835577ea0b17f6dfa6ef"
     },
     {
       "executable": false,
       "path": "tests/test_local_app_boundary.py",
-      "sha256": "77bad045f005fb7e761020471190da698627898a4d0857d824553a223f582839"
+      "sha256": "78140550b1e25bb7a11d0d0d383f7cca599825240bd7db431a7497989996d37d"
     },
     {
       "executable": false,
       "path": "tests/test_project_files.py",
-      "sha256": "0b2f83379344080a64f3ee081c76045aa41b9f8dea701288573dc98cdd1ebf06"
+      "sha256": "f8c6ecd0c1c7c51956f36c8293c8e9dcacdd0d1a28f167091ca5cdd75ca734db"
     },
     {
       "executable": false,
       "path": "tests/test_reported_status.py",
-      "sha256": "510709a6c17ba745acc462072b3da402aa4787ceb910e2a5a80830d5d9324144"
+      "sha256": "d3e55bd9504df7a9d7f73d5e35698ce54934bc1e472b42aca3496dafd0717e1b"
+    },
+    {
+      "executable": false,
+      "path": "tests/test_run.py",
+      "sha256": "129a3b31822c13c2a5ec76640114fff19daf05da6e9a81ea2025aaa4345893b5"
     }
   ],
   "version": 1
