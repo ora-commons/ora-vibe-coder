@@ -466,7 +466,7 @@ def applet_source():
     termination, and resolves the launching user's own installation at runtime
     from that user's per-user installation record — never another user's.
     No shells, no polling, no Finder scripting."""
-    install = "$.NSHomeDirectory() + '/Library/Application Support/Ora Vibe Coder'"
+    install = "ObjC.unwrap($.NSHomeDirectory()) + '/Library/Application Support/Ora Vibe Coder'"
     return (
         "ObjC.import('Foundation')\n"
         "ObjC.import('stdlib')\n"

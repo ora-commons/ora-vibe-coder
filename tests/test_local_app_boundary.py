@@ -2055,6 +2055,9 @@ elif skill.exists():
         self.assertEqual(record["version"], result["version"])
         applet = (launcher / "Contents/Resources/Scripts/main.scpt").read_bytes()
         self.assertIn(b"NSHomeDirectory", applet)
+        # The home directory must be unwrapped to a JS string before any
+        # concatenation; NSString + string yields an unusable path.
+        self.assertIn(b"ObjC.unwrap($.NSHomeDirectory())", applet)
         self.assertIn(b"ora-vibe-install.json", applet)
         self.assertNotIn(b"/Users/", applet)
         self.assertNotIn(str(user).encode(), applet)
