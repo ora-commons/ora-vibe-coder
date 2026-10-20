@@ -2314,6 +2314,24 @@ elif skill.exists():
         loop_source.write_text(json.dumps(marker), encoding="utf-8")
         install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
 
+        # A newer shared Mac launcher alone is refused with truthful guidance:
+        # removal preserves the shared launcher (another account may use it),
+        # so removing Vibe first would not clear it, and setup does not say so.
+        launcher_record = shared / "Ora Vibe Coder.app" / "Contents/Resources/ora-vibe-install.json"
+        launcher_original = launcher_record.read_text(encoding="utf-8")
+        launcher_record.write_text(json.dumps(
+            dict(json.loads(launcher_original), version="9.9.9"), indent=2) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError,
+                                    r"Vibe launcher at .*Ora Vibe Coder\.app records version 9\.9\.9"
+                                    r".*That launcher is shared with other accounts on this Mac, and removing "
+                                    r"Ora Vibe Coder preserves it; install the Ora Vibe Coder release matching "
+                                    r"that newer launcher\.") as refused:
+            install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
+        self.assertNotIn("Removing Ora Vibe Coder first", str(refused.exception))
+        self.assertEqual(json.loads(identity.read_text(encoding="utf-8")), original)
+        self.assertFalse(list(user.rglob(".ora-vibe-install-*")))
+        launcher_record.write_text(launcher_original, encoding="utf-8")
+
         # A renamed shared entry alone (ora-programming-loop, as newer
         # Programming Loop releases install it; no old-name entry) is
         # recognized, reported under its own name, and preserved: setup

@@ -38,7 +38,7 @@
     {
       "executable": false,
       "path": "README.md",
-      "sha256": "c73ff85d9012df8d79b6e4eb1b46be58d27f223eb5cd80566e0e17f03a1d550e"
+      "sha256": "c38ae842d3d75b17fba3bf181ffc2a2d5060f3502361e48e6f321ffdaf348e78"
     },
     {
       "executable": false,
@@ -383,12 +383,12 @@
     {
       "executable": false,
       "path": "docs/Technical Documentation.md",
-      "sha256": "42478a427495f1fdea32dfd1f7394474ec018b1dde165246334809f2446412fb"
+      "sha256": "4f9fbfd3c1b349a06443c353dc61fc889bf1035a8ffa66c892bf7ff5636c881c"
     },
     {
       "executable": false,
       "path": "docs/User Guide.md",
-      "sha256": "f7193b958132aa34c51cce9ab52395acf2a7bee7384b642932ec26017054155d"
+      "sha256": "44d91b8401256e8abe5c278a2b87d2af5b1e80f7beaad7c41880ee982b1fc17b"
     },
     {
       "executable": false,
@@ -428,7 +428,7 @@
     {
       "executable": false,
       "path": "ora_vibe_coder/installer.py",
-      "sha256": "d1a1d7310f318bb6e1e54ab709b99230b8d8433debe742d7238e09450af22c66"
+      "sha256": "44d896d4c889ace21b2927e44c6231d6b86387307ffcc2e10f1223fce7fd4911"
     },
     {
       "executable": false,
@@ -508,17 +508,17 @@
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/.claude-plugin/plugin.json",
-      "sha256": "12943ed87d21bd0314f4c6567e15f510b6afc0b2fab86077e614237e95667d3b"
+      "sha256": "ff9ad86d0638b195d3da39088485bf196a5feaa6aa2a994b72a72fb582d58557"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/.codex-plugin/plugin.json",
-      "sha256": "1ad232d449c74d35b090e40cd1fbec5e83c1c4d95c09fad35c4ffe5d9ef8c47f"
+      "sha256": "55741b3f124d14336c074df2aceb6c114f4746d6c3d94acac9f60ed298909d0e"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/VERSION",
-      "sha256": "7c3850b28d57f77292b6d8e9fe00998daf5823523e40e97a51c79279055cf0a2"
+      "sha256": "b8fb78a7b353142bde1fe524a8b70177586d0a5d2ee980215841e2a4798f6c1b"
     },
     {
       "executable": false,
@@ -868,7 +868,7 @@
     {
       "executable": false,
       "path": "tests/test_local_app_boundary.py",
-      "sha256": "7501d4ce669bc122525d6ff45316194d8ff2b8f3004d8250b7c0e83cddbdecf0"
+      "sha256": "c8105a0fb79c268bd254997f85e3f796f6c8d23a009c1bbe88ac0fcfa7c902b2"
     },
     {
       "executable": false,
