@@ -134,7 +134,7 @@ Authorship and custody:
 Amendments:
 
 - Keep proposed amendments distinct from governing text until the author, required independent review, and applicable approval are established.
-- Initial Specification and Plan approval remain explicit user decisions.
+- Initial Specification and Plan approval remain user decisions, recorded by Approve or the deliberate next-stage request under the reported-field rules below; no passing review is a prerequisite.
 - The owner may accept a reviewed amendment within discretion already delegated by the user; changes beyond it return the actual conflict and recommendation to the user.
 - The custodian incorporates accepted meaning into the current synthesis and notifies the coordinator and affected workers.
 - The coordinator and affected workers refresh their governing inputs before affected work resumes; unaffected authorized work continues.
@@ -239,30 +239,33 @@ App display agreement:
 
 ## Reported fields in ordinary Markdown
 
-- Status labels report separate facts; they are not independent validation or current-revision certification.
-- A short opening field is useful, but a clear opening statement about the document's own current result is also a truthful report. Do not make a particular field spelling a prerequisite for recognizing that result.
-- Do not search later body prose, quotations, examples, old rounds, or code for a success word; a claim about another stage does not establish this stage's outcome.
-- Plain `Status: APPROVED` and decorated `**Status:** APPROVED` are equivalent labels; normalize line endings, trailing spaces, and Markdown hard breaks — never the meaning of a value.
+Use a small opening YAML block for new current documents. A standalone Specification or Plan needs only `status` and `review`; a Programming Result or Verification Report needs only `status`. Preserve pre-existing vault metadata such as nexus, type and tags. Never add fingerprints, serialized audit records, approval ledgers or duplicate finding counts to the YAML.
 
-| Stage | Sole display source | Exact recognized values |
+| Document | Workflow `status` | Assessment `review` |
 |---|---|---|
-| Specification | `Status` in the designated Specification | `DRAFT`, `IN PROGRESS`, `AWAITING APPROVAL`, `APPROVED`; legacy `Approved product specification` means reported approval |
-| Planning | `Status` in the designated Plan | `DRAFT`, `IN PROGRESS`, `AWAITING APPROVAL`, `APPROVED`; legacy `Approved Implementation Plan` means reported approval |
-| Programming | The saved current Programming Result's opening conclusion, such as `Status: COMPLETE` or `Programming completed` | The result actually reported; no file means no saved Programming Result |
-| Verification | The saved current Verification Report's opening verdict or clear current-verification conclusion | Whatever verdict the report actually records (for example `PASSED`, `NOT PASSED`, `NOT PASSED — REVIEW INCOMPLETE`); no report means no saved verification result |
+| Specification and Plan | `DRAFT`, `IN PROGRESS`, `AWAITING APPROVAL`, `APPROVED` | Blank when unreviewed; otherwise `PASSED`, `NOT PASSED`, `INCOMPLETE`, or `CHANGED` |
+| Programming Result and Verification Report | `PASSED`, `NOT PASSED`, or `INCOMPLETE` | No separate review field |
 
-Recognized fields:
+The three assessment/result verdicts have one meaning across stages:
 
-- Conflicting opening conclusions mean Unknown, never success. If no current conclusion can be recognized, say that the result is unclear rather than claiming the document is absent or silent; this never blocks reading, preparation, copying, or selecting any stage.
-- No other legacy text maps to approval.
-- Optional `Programming` and retained `Verification` fields in `Project.md` are overview history; they do not override the saved current result and report. Neither a report's existence nor an older passing result proves that newer code passed: a saved verdict describes the inspected implementation.
-- Specification and Planning completeness comes from their saved Current review assessment (COMPLETE or INCOMPLETE with noted deficiencies) and stays separate from any approval field.
+- `PASSED`: the assigned scope was successfully completed and no required deficiency remains unresolved. Programming describes the execution and approved delivery endpoint; Verification describes an independent inspection. Neither substitutes for the other.
+- `NOT PASSED`: a completed assessment found required deficiencies. Keep their substantive explanation and recommended corrections in the document.
+- `INCOMPLETE`: the work or assessment cannot reach a supported conclusion because evidence, a tool, an essential decision, or required work is missing. Explain exactly what remains and who can resolve it.
 
-Setting values:
+Show PASSED in green, NOT PASSED in red, and INCOMPLETE in amber. A saved verdict describes only its actual scope and inspected delivery; an older passing result does not establish that later work passed. Keep the full assessment and findings under one `## Current review` in a Specification or Plan; it explains the YAML review value. Do not replace the explanation with metadata or counts.
 
-- Set actual start/result state, not a forecast. Opening, reading, selecting a stage, preparing, and copying never change status.
-- Programming becomes `COMPLETE` only at its approved execution finish line.
-- Verification records its actual verdict in the Verification Report; a fallback or unrepeated review is never a final `PASSED` result.
+Approval is the user's decision and is independent of every review state. Pressing Approve, or deliberately requesting the next stage, approves the actual upstream document supplied: Create Plan approves the Specification, and Implement Plan approves the Plan. This holds when the review is absent, NOT PASSED, INCOMPLETE or CHANGED. Record `status: APPROVED` directly in the supplied document; no extra user note or AI inference is needed. Approval does not turn a review into PASSED. Opening a disclosure, selecting a workspace, previewing a request or refreshing files is not approval. The app records approval before dispatch; a later dispatch failure does not undo that real decision. In standalone conversations, an explicit request to create the Plan or implement it is the same approval; preserve the supplied version and report any unavailable write honestly.
+
+Approval binds the substantive version accepted. If requirements, scope, acceptance conditions, implementation approach, checks or delivery change materially, an approved Specification or Plan returns to `status: AWAITING APPROVAL`. If it had a review, set `review: CHANGED` and show it in amber: the actual earlier assessment and findings remain visible in Current review and apply to the earlier version. CHANGED is an applicability state, not a fourth assessment verdict. A new next-stage request approves the current supplied version while leaving CHANGED intact. An unreviewed edited document stays unreviewed. A material Specification change warns that the Plan may need updating; it does not declare the Plan failed.
+
+Recording status, review, dates, Markdown layout and meaning-preserving typo corrections do not withdraw approval or stale a review. Compare actual prior content; changed bytes or a hash mismatch alone cannot establish materiality. Preserve code casing, link destinations and all meaningful obligations. Use retained version snapshots and the existing read-only semantic comparison where needed. If the earlier version is unavailable, or the comparison is pending or fails, say that applicability is unconfirmed; do not invent a change or claim equivalence. Keep all stages available. When editing a document yourself, apply these material-change rules as part of the revision and preserve the actual prior assessment.
+
+Reading existing documents:
+
+- Retain truthful legacy opening fields and explicit current conclusions, including `Status: APPROVED`, decorated fields, legacy approval phrases, and Programming `COMPLETE` as a successful equivalent. A legacy Spec/Plan completeness review `INCOMPLETE` with deficiencies means NOT PASSED; the new YAML `review: INCOMPLETE` means the assessment did not finish. A legacy combined Verification `NOT PASSED — REVIEW INCOMPLETE` or `NOT PASSED — REVISION INCOMPLETE` remains unfinished and displays INCOMPLETE.
+- Prefer the current YAML field. Do not search history, examples, quoted instructions or code for a success word; an explicit current result can follow a quoted introductory note or appear under an explicitly current report heading. A historical failure mentioned in the explanation does not retract a clear current success. Actual competing current conclusions or qualified partial success must remain errors rather than false passes.
+- Untouched empty templates show NOT STARTED neutrally. Substantive Specification and Plan documents without a review show NOT REVIEWED. No Programming Result shows NO RESULT; no Verification Report shows NOT VERIFIED. A substantive result/report with no verdict shows VERDICT MISSING in amber. Malformed, unknown or duplicate current fields show REPORT ERROR with the actual explanation. An unreadable file shows COULD NOT READ and its actual reason.
+- Missing metadata alone is not failure when the substantive result can be read truthfully. Do not silently migrate or rewrite existing projects just to adopt the new fields. Optional Programming and Verification fields in Project.md remain overview history and never override the current saved result/report.
 
 Overview field updates:
 

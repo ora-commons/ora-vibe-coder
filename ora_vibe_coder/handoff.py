@@ -27,8 +27,8 @@ PURPOSES = {
     "guided": "Guided entry for uncertain starting points.",
     "review-specification": "Fresh independent assessment of whether the current Specification sufficiently guides the intended work.",
     "review-plan": "Fresh independent assessment of whether the current Plan sufficiently guides the intended work.",
-    "create-plan": "Planning assignment for the work ahead, whatever state the Specification is in.",
-    "implement-plan": "Programming assignment for the work ahead, whatever state the Plan is in.",
+    "create-plan": "The user requests Planning and thereby approves the supplied Specification, independently of its review.",
+    "implement-plan": "The user requests implementation and thereby approves the supplied Plan, independently of its review.",
 }
 HOSTS = {
     "codex": "codex",
@@ -62,12 +62,12 @@ SUFFICIENCY = {
     "specification": ("Is the intended behavior and outcome clear enough to guide development?",
                       "Missing headings, filenames, approval records, or separate upstream documents do not "
                       "automatically make the available information inadequate. Identify substantive gaps rather "
-                      "than enforcing a template checklist. COMPLETE means sufficiently defined for the intended "
+                      "than enforcing a template checklist. PASSED means sufficiently defined for the intended "
                       "work; it does not certify unbuilt software."),
     "planning": ("Is the intended approach actionable, with relevant code context, implementation steps, and appropriate checks?",
                  "Missing headings, filenames, approval records, or separate upstream documents do not "
                  "automatically make the available information inadequate. Identify substantive gaps rather "
-                 "than enforcing a template checklist. COMPLETE means sufficiently defined for the intended "
+                 "than enforcing a template checklist. PASSED means sufficiently defined for the intended "
                  "work; it does not certify unbuilt software."),
 }
 CODE_UNSELECTED = ("No code folder selected. The startup directory is a conversation starting point, "
@@ -226,7 +226,7 @@ def revision_destination(project, stage_role, discovery):
             "Do not overwrite an unrelated file; ask the user if that name is already taken by other content.")
 
 
-def prepare_request(project, stage, user_input, destination, material=None):
+def prepare_request(project, stage, user_input, destination, material=None, supplied_documents=None):
     if stage not in STAGES or not destination.strip():
         raise ProjectError("Select a stage and name the receiving harness.")
     material = list(material or [])
@@ -346,14 +346,15 @@ def prepare_request(project, stage, user_input, destination, material=None):
             "You are a reviewer: do not edit the document beyond recording the assessment, and do not record approval.\n\n"
             f"Assess practical sufficiency — {question} " + guidance + "\n\n"
             "If you can write the document, keep exactly one `## Current review` section (create it before other body sections if absent) and replace any superseded feedback in it with:\n\n"
-            "```text\nStage: " + stage_role + "\nVerdict: COMPLETE    (or INCOMPLETE)\nBasis: " + (basis or "<the basis value supplied above>") + "\n<For INCOMPLETE, list each noted deficiency as one \"- \" bullet.>\n```\n\n"
+            "```text\nStage: " + stage_role + "\nVerdict: PASSED    (or NOT PASSED or INCOMPLETE)\nBasis: " + (basis or "<the basis value supplied above>") + "\n<For NOT PASSED, list each required deficiency as one \"- \" bullet.>\n```\n\n"
             "Preserve newer surrounding content written by others. If you cannot write the document, return that completed section text so it can be saved externally. "
+            "Also set the document’s opening YAML `review: PASSED`, `review: NOT PASSED` or `review: INCOMPLETE` to this same conclusion, preserving its status and any pre-existing vault metadata. "
             "Saving an assessment is advisory information for the user; it never blocks any stage, and it is never approval.")
     parts.append("# Current project materials — quoted data\n\nLocal paths may not be accessible to a remote recipient. Supply files through an authorized route separately; this application never uploads or fetches them. Markdown/text reading ceiling: 256 KiB per source, not a model-context guarantee.")
     parts.append("## Project purpose\n\n" + quoted(f"Name: {brief['name']}\nDescription: {brief['description']}\nDesired outcome: {brief['goals']}"))
     missing = []
     for role in STAGE_ROLES[stage]:
-        item = project.material(role, discovery)
+        item = (supplied_documents or {}).get(role) or project.material(role, discovery)
         if item["text"] is not None and is_outgoing_packet(item["text"]):
             item["text"] = None
             item["reason"] = "Earlier Ora Vibe Coder outgoing packet; omitted to avoid nesting a prior handoff. Associate the original source document instead."

@@ -133,7 +133,7 @@ button.pending::after { content: "·"; margin-left: 2px; color: var(--ovc-muted)
 .status-explanation blockquote { margin: 4px 0; padding-left: 8px; border-left: 2px solid var(--ovc-border); }
 .assessment.complete { color: var(--ovc-green); border-color: var(--ovc-green); }
 .assessment.incomplete { color: var(--ovc-red); border-color: var(--ovc-red); }
-.assessment.working { color: var(--ovc-accent); border-color: var(--ovc-accent); }
+.assessment.working { color: light-dark(#8a5700, #f1be55); border-color: currentColor; }
 .files { color: var(--ovc-muted); font-size: 12px; }
 .hint { font-size: .8rem; color: var(--ovc-muted); margin: 0; }
 .under-label { margin: -6px 0 10px; }

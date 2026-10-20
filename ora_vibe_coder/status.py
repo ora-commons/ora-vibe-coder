@@ -77,25 +77,158 @@ def metadata(text):
 
 
 def frontmatter_fields(text):
-    """Fields of a closed opening YAML block, without a YAML dependency.
+    """Read opening scalar fields while leaving unrelated vault YAML alone.
 
-    Returns None when there is no closed frontmatter; unparseable or unclosed
-    blocks read as None so ordinary metadata stays the fallback.
+    Nested lists and mappings belong to their own top-level key. This reader
+    does not deserialize or rewrite them; only the report's scalar fields are
+    interpreted here.
     """
-    lines = text.splitlines()
-    if not lines or lines[0].rstrip() != "---":
+    lines = normalized(text).splitlines()
+    if not lines or lines[0] != "---":
         return None
-    fields = {}
+    fields, flow = {}, []
+    scalar_parent = ""
     for line in lines[1:]:
-        if line.rstrip() in {"---", "..."}:
+        if line in {"---", "..."}:
+            if flow:
+                fields.setdefault("__error__", []).append("An opening YAML flow collection is not closed.")
             return fields
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        match = re.fullmatch(r"([A-Za-z][A-Za-z0-9_ -]*?)\s*:\s*(.*)", line.strip())
+        if line[:1].isspace() and not flow:
+            if scalar_parent:
+                fields.setdefault("__error__", []).append(f"YAML {scalar_parent} must be one scalar value, without nested content.")
+            continue
+        match = re.fullmatch(r"([A-Za-z][A-Za-z0-9_ -]*?)\s*:\s*(.*)", line)
+        if flow:
+            value = line.strip()
+        elif not match:
+            fields.setdefault("__error__", []).append("Malformed opening YAML: " + line)
+            continue
+        else:
+            value = match[2].strip()
+            scalar_parent = match[1].casefold() if match[1].casefold() in {"status", "review"} else ""
+        # These are scalar/flow syntax checks, not deserialization: unrelated
+        # mappings and lists still retain their original bytes and ownership.
+        if flow or value.startswith(("[", "{")):
+            tokens = re.findall(r'''"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|\s+#.*|[\[\]{}]''', value)
+            for token in tokens:
+                if token.startswith(("'", '"')) or token.lstrip().startswith("#"):
+                    continue
+                if token in {"[", "{"}:
+                    flow.append(token)
+                elif not flow or flow.pop() != {"]": "[", "}": "{"}[token]:
+                    fields.setdefault("__error__", []).append("Mismatched YAML flow collection delimiters.")
+            if not match:
+                continue
         if not match:
-            return None
-        fields.setdefault(match[1].strip(), []).append(match[2].strip())
-    return None
+            fields.setdefault("__error__", []).append("Malformed opening YAML: " + line)
+            continue
+        if value.startswith(('"', "'")):
+            quoted = re.fullmatch(r'''("(?:[^"\\]|\\.)*"|'(?:[^']|'')*')(?:\s+#.*)?''', value)
+            if quoted:
+                value = quoted[1][1:-1]
+            else:
+                fields.setdefault("__error__", []).append("Malformed quoted YAML scalar: " + line)
+        else:
+            value = re.split(r"\s+#", value, maxsplit=1)[0].rstrip()
+            if not value.startswith(("[", "{")) and re.search(r":(?:\s|$)", value):
+                fields.setdefault("__error__", []).append("Malformed plain YAML scalar: " + line)
+            if match[1].casefold() in {"status", "review"} and value.casefold() in {"null", "~"}:
+                value = ""
+        fields.setdefault(match[1].strip(), []).append(value)
+    return {"__error__": ["The opening YAML block is not closed."]}
+
+
+def yaml_value(text, key):
+    fields = frontmatter_fields(text)
+    if fields is None:
+        return None, ""
+    values = _field_values(fields, key)
+    if fields.get("__error__"):
+        return None, " ".join(fields["__error__"])
+    if len(values) > 1:
+        return None, f"Duplicate {key} fields in opening YAML."
+    return (values[0] if values else None), ""
+
+
+def set_yaml_fields(text, **updates):
+    """Change only owned scalar fields; preserve all other YAML verbatim."""
+    start = body_start(text)
+    if start is None:
+        raise ValueError("The opening YAML block is not closed.")
+    newline = "\r\n" if "\r\n" in text else "\n"
+    front = text[:start].splitlines(keepends=True) if start else ["---" + newline, "---" + newline]
+    for key, value in updates.items():
+        matches = [i for i, line in enumerate(front[1:-1], 1)
+                   if re.match(re.escape(key) + r"\s*:", line, re.I)]
+        if len(matches) > 1:
+            raise ValueError(f"Duplicate {key} fields in opening YAML.")
+        replacement = f"{key}: {value}" + newline
+        if matches:
+            front[matches[0]] = replacement
+        else:
+            front.insert(len(front) - 1, replacement)
+    body = text[start:]
+    # Move bare legacy fields to YAML, but keep any explanation attached to
+    # their scalar. It may contain a scope or delivery obligation.
+    opening = metadata(body)
+    for key in updates:
+        for label in opening:
+            if label.casefold() == key.casefold():
+                pattern = r"(?m)^([*`_]*" + re.escape(label) + r"[*`_]*[^\S\r\n]*:[^\S\r\n]*[*`_]*)([^\r\n]*)(?:\r?\n|$)"
+                def replace(match):
+                    values = VALUES.get("specification", set()) | VALUES.get("planning", set()) if key == "status" else {"PASSED", "NOT PASSED", "INCOMPLETE", "CHANGED"}
+                    scalar = re.match("(?:" + "|".join(re.escape(v) for v in sorted(values, key=len, reverse=True)) + r")\b([*`_]*)(.*)", match[2])
+                    if scalar and scalar[2].strip():
+                        return match[1] + str(updates[key]) + scalar[1] + scalar[2] + newline
+                    return "" if scalar else match[0]
+                body = re.sub(pattern, replace, body, count=1)
+    return "".join(front) + body
+
+
+def canonical_verdict(value, *, legacy_review=False):
+    value = (value or "").upper()
+    if value == "COMPLETE":
+        return "PASSED"
+    if legacy_review and value == "INCOMPLETE":
+        return "NOT PASSED"
+    if value.startswith(("NOT PASSED — REVIEW INCOMPLETE", "NOT PASSED — REVISION INCOMPLETE")):
+        return "INCOMPLETE"
+    return value
+
+
+def meaning_text(text):
+    """Deterministic equivalence only: recording details and Markdown layout.
+
+    Keep code, case, punctuation and link destinations. Other word changes need
+    an actual comparison of meaning, never a hash-based materiality guess.
+    """
+    content = basis_text(text)
+    fence, lines = None, []
+    for line in content.splitlines():
+        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if marker:
+            if fence and marker[1][0] == fence[0]:
+                fence = None
+            elif not fence:
+                fence = marker[1]
+            lines.append(line)
+        elif fence or re.match(r"^(?: {4}|\t)", line):
+            lines.append(line)
+        else:
+            heading = re.match(r"^\s*#{1,6}\s+", line)
+            line = re.sub(r"^\s*#{1,6}\s+", "", line)
+            line = re.sub(r"^\s*[-*+]\s+", "", line)
+            # Only this unambiguous heading decoration is equivalent without
+            # judgment. Preserve code, links, escapes and literal punctuation.
+            if heading and not any(char in line for char in "`[]\\"):
+                emphasis = re.fullmatch(r"(\*\*|__)(\S(?:.*\S)?)\1\s*", line)
+                if emphasis:
+                    line = emphasis[2]
+            if line.strip():
+                lines.append(line if any(char in line for char in "`[]\\") else " ".join(line.split()))
+    return "\n".join(lines)
 
 
 def document_type_values(text):
@@ -119,7 +252,7 @@ def _recorded(line):
     return bool(match) and match[2].strip().lower() in RECORDING_FIELDS
 
 
-def _drop_recorded_opening(text):
+def _drop_recorded_opening(text, preserve_explanations=False):
     """Remove review/acceptance/marker fields from the opening metadata only."""
     lines = text.split("\n")
     kept = []
@@ -142,6 +275,12 @@ def _drop_recorded_opening(text):
             kept.append(line)
             continue
         if _recorded(line):
+            if preserve_explanations:
+                match = re.fullmatch(FIELD, line.strip())
+                if match[2].strip().casefold() == "status":
+                    scalar = re.match(r"[*`_]*(?:" + "|".join(re.escape(value) for value in sorted(VALUES["specification"] | VALUES["planning"], key=len, reverse=True)) + r")\b[*`_]*(.*)", match[3])
+                    if scalar and scalar[1].strip():
+                        kept.append(scalar[1].strip())
             continue
         if re.fullmatch(FIELD, line.strip().removesuffix("\\").rstrip()):
             fields_seen = True
@@ -199,7 +338,7 @@ def basis_text(text):
                  and not re.match(r"\s*date (?:created|modified)\s*:", line, re.I)]
         if inner:
             front = "\n".join(["---", *inner, "---"]) + "\n"
-    return (front + _drop_recorded_opening(text[start:])).strip("\n") + "\n"
+    return (front + _drop_recorded_opening(text[start:], preserve_explanations=True)).strip("\n") + "\n"
 
 
 def legacy_review_basis(text):
@@ -224,12 +363,30 @@ def assessment_facts(stage, text, reviewed_texts=()):
     """
     result = {"present": False, "stage": "", "verdict": "", "basis": "",
               "findings": None, "applies": "", "issues": [], "evidence": [], "reason": ""}
+    yaml_review, yaml_error = yaml_value(text or "", "review")
+    yaml_status, status_error = yaml_value(text or "", "status")
+    if yaml_status is not None and yaml_status not in VALUES[stage]:
+        status_error = "Unknown or empty YAML status value: " + yaml_status
+    yaml_error = yaml_error or status_error
+    if yaml_error:
+        result["present"] = True
+        result["issues"].append(yaml_error)
+        return result
+    if yaml_review not in (None, ""):
+        result.update(present=True, verdict=yaml_review, outcome=yaml_review, applies="unconfirmed")
+        if yaml_review not in {"PASSED", "NOT PASSED", "INCOMPLETE", "CHANGED"}:
+            result["issues"].append("Unknown YAML review value: " + yaml_review)
+            return result
+        if yaml_review == "CHANGED":
+            result.update(applies="earlier", reason="The document changed materially; the retained assessment describes an earlier version.")
     found = [s for s in sections(text or "") if s[0].strip().lower() == REVIEW_HEADING.lower()]
     if not found:
         return result
     result["present"] = True
     if len(found) > 1:
         result["issues"].append("More than one Current review section; resolve the duplicates in the document.")
+        return result
+    if yaml_review == "CHANGED":
         return result
     body = (text or "")[found[0][2]:found[0][3]]
     fields = metadata(body)
@@ -241,7 +398,12 @@ def assessment_facts(stage, text, reviewed_texts=()):
     if len(stage_values) > 1 or (stage_values and not stage_values[0]):
         result["issues"].append("The Current review has conflicting or empty stage labels.")
     result["stage"] = stage_values[0] if stage_values else {"specification": "Specification", "planning": "Plan"}[stage]
-    result["verdict"] = conclusion["label"]
+    result["verdict"] = yaml_review or conclusion["label"]
+    result["outcome"] = yaml_review or canonical_verdict(conclusion["label"], legacy_review=True)
+    if yaml_review and conclusion["present"] and not conclusion["label"]:
+        result["issues"].append(conclusion["reason"] or "The Current review has no clear current conclusion.")
+    if yaml_review and conclusion["label"] and canonical_verdict(conclusion["label"]) != yaml_review:
+        result["issues"].append("YAML review and Current review have conflicting current conclusions.")
     if not result["verdict"]:
         # Preserve a single legacy verdict, but never convert it to completeness.
         legacy = _status_token(conclusion["literal"], QUALITY)
@@ -257,7 +419,7 @@ def assessment_facts(stage, text, reviewed_texts=()):
     if result["stage"].lower() not in STAGE_LABELS.get(stage, set()):
         result["issues"].append(f"The Current review section names stage {result['stage']!r}, not this document's stage.")
         return result
-    if result["verdict"].upper() in {"COMPLETE", "INCOMPLETE"}:
+    if result["verdict"].upper() in {"COMPLETE", "PASSED", "NOT PASSED", "INCOMPLETE"}:
         digest = result["basis"]
         if digest:
             if not re.fullmatch(r"[0-9a-f]{64}", digest):
@@ -274,13 +436,13 @@ def assessment_facts(stage, text, reviewed_texts=()):
                 matched = next((old for old in reviewed_texts
                                 if digest in {review_basis(old), legacy_review_basis(old)}), None)
                 if matched is not None:
-                    result["applies"] = "current" if review_basis(matched) == review_basis(text or "") else "earlier"
+                    result["applies"] = "current" if meaning_text(matched) == meaning_text(text or "") else "unconfirmed"
                     result["reason"] = ("Compared with the retained reviewed document; " +
                                         ("only recording details changed." if result["applies"] == "current"
                                          else "the document content has changed since this review."))
                 elif _field_values(fields, "Basis format") == ["content-v2"]:
-                    result["applies"] = "earlier"
-                    result["reason"] = "The document content has changed since this review."
+                    result["applies"] = "unconfirmed"
+                    result["reason"] = "The text differs from the review basis; materiality is not established without the earlier content."
                 else:
                     result["applies"] = "unconfirmed"
                     result["reason"] = "The saved legacy fingerprint differs; no matching reviewed document is available to establish what changed."
@@ -311,8 +473,8 @@ QUALITY = {
 VALUES = {
     "specification": {"DRAFT", "IN PROGRESS", "AWAITING APPROVAL", "APPROVED", "Approved product specification"},
     "planning": {"DRAFT", "IN PROGRESS", "AWAITING APPROVAL", "APPROVED", "Approved Implementation Plan"},
-    "programming": {"NOT STARTED", "IN PROGRESS", "COMPLETE", "INCOMPLETE", "CLOSED BY USER — UNRESOLVED FINDINGS"},
-    "verification": QUALITY | {"NOT STARTED", "IN PROGRESS", "CLOSED BY USER — UNRESOLVED FINDINGS"},
+    "programming": {"PASSED", "NOT PASSED", "NOT STARTED", "IN PROGRESS", "COMPLETE", "INCOMPLETE", "CLOSED BY USER — UNRESOLVED FINDINGS"},
+    "verification": QUALITY | {"INCOMPLETE", "NOT STARTED", "IN PROGRESS", "CLOSED BY USER — UNRESOLVED FINDINGS"},
 }
 
 
@@ -336,14 +498,52 @@ def _plain(text):
     return re.sub(r"[*`_]", "", text).strip().removesuffix("\\").rstrip()
 
 
-def _qualified_success(text):
+def _current_suffix(text, current_round=None):
+    # Remove only the historical status phrase, not the rest of its sentence.
+    # A later clause can still retract the current success.
+    text = re.sub(r"\b(?:earlier|previous|historical)\s+(?:(?:report|result|revision)\s+(?:was|said|recorded)\s+)?(?:NOT PASSED|INCOMPLETE|IN PROGRESS|COMPLETE|PASSED)\b", "earlier", text, flags=re.I)
+    text = re.sub(r"\b(?:does not|doesn't) (?:verify|certify) (?:working|unbuilt|running|later) software\b", "", text, flags=re.I)
+    # Other-scope references can be ignored only up to an explicit turn back
+    # to the current work. Keep "but ..." and later qualifications intact.
+    clauses = re.split(r"(?<=[.!?])\s+|;\s*", text)
+    kept = []
+    for clause in clauses:
+        # Remove an earlier round's verdict, keeping its explanation: the
+        # explanation may say that its defect still remains unresolved.
+        round_record = re.match(r"\s*round\s+(\d+)\b", clause, re.I)
+        if current_round is not None and round_record and int(round_record[1]) < current_round:
+            clause = re.sub(r"^(\s*round\s+\d+\b(?:\s+(?:returned|recorded|was))?\s*[:—–-]?\s*)(?:NOT PASSED|INCOMPLETE|IN PROGRESS|COMPLETE|PASSED)\b",
+                            r"\1", clause, count=1, flags=re.I)
+        if current_round is not None and round_record and int(round_record[1]) == current_round:
+            clause = re.sub(r"\bresolved\s+(?:the\s+)?(?:one\s+)?(?:remaining|outstanding)\s+evidence\s+gap\b",
+                            "resolved evidence", clause, flags=re.I)
+        # Acceptance of a live answer is a distinct human checkpoint, not a
+        # retraction of the implementation verdict. Keep any later contrast.
+        acceptance = re.match(r"\s*(?:it|this verdict|the verdict) does not establish (?:[^;.!?]*?)(?:acceptance of (?:the|a) (?:flagged |live )*answer)\b", clause, re.I)
+        if acceptance:
+            contrast = re.search(r"\b(?:but|however|except|current|required checks?|failed|failing|failure|incomplete|unfinished|unresolved)\b", clause[acceptance.end():], re.I)
+            if contrast:
+                kept.append(clause[acceptance.end() + contrast.start():])
+            continue
+        if "Project.md" in clause and (re.search(r"\b(?:other|different|later|next)\b.*\bscope\b", clause, re.I)
+                or re.search(r"\bfor that remaining part\b", clause, re.I)):
+            current = re.search(r"\b(?:but|however|current|required checks?)\b", clause, re.I)
+            if current:
+                kept.append(clause[current.start():])
+        else:
+            kept.append(clause)
+    return "; ".join(kept)
+
+
+def _qualified_success(text, current_round=None):
     # Ordinary absence-of-findings wording is not a failure qualification.
+    text = _current_suffix(text, current_round)
     text = re.sub(r"\bno (?:material |remaining |unresolved )*(?:findings?|failures?|defects?|issues?|gaps?)\b", "", text, flags=re.I)
     text = re.sub(r"\bnone (?:remaining|unresolved)\b", "", text, flags=re.I)
-    return bool(re.search(r"\b(?:but|except|however|partially|partial|failed|failure|not|incomplete|unfinished|unresolved|pending|remaining)\b|\b\d+\s+of\s+\d+\b", text, re.I))
+    return bool(re.search(r"\b(?:but|except|however|partially|partial|failed|failing|failure|not|incomplete|unfinished|unresolved|pending|remaining)\b|\b\d+\s+of\s+\d+\b", text, re.I))
 
 
-def _status_token(literal, values):
+def _status_token(literal, values, *, current_round=None):
     """Read a complete conclusion and preserve qualifications outside bold text."""
     literal = _plain(literal)
     for value in sorted(values, key=len, reverse=True):
@@ -351,10 +551,12 @@ def _status_token(literal, values):
             return value
         boundary = re.match(re.escape(value) + r"(?:\s*[—–;:]\s*|\s+\(|\s+-\s+|[.!?](?:\s+|$))", literal, re.I)
         if boundary:
-            suffix = literal[boundary.end():]
+            suffix = _current_suffix(literal[boundary.end():], current_round)
+            if value == "COMPLETE":
+                suffix = re.sub(r"\bverification\s+PASSED\b", "", suffix, flags=re.I)
             alternatives = "|".join(re.escape(item) for item in sorted(values, key=len, reverse=True))
             competing = re.findall(rf"(?<![A-Z])(?:{alternatives})(?![A-Z])", suffix.upper())
-            if any(item != value for item in competing) or (value in {"COMPLETE", "PASSED"} and _qualified_success(suffix)):
+            if any(canonical_verdict(item) != canonical_verdict(value) for item in competing) or (value in {"COMPLETE", "PASSED"} and _qualified_success(suffix, current_round)):
                 return ""
             return value
     return ""
@@ -383,7 +585,9 @@ def _current_regions(text):
         if stripped.startswith(">") or re.match(r"(?: {4}| {0,3}\t)", line):
             if current:
                 regions.append(current)
-            current, active = [], False
+            current = []
+            if not stripped.startswith(">"):
+                active = False
             continue
         heading = re.match(r"^(#+) +(.+)$", stripped)
         if heading:
@@ -397,7 +601,7 @@ def _current_regions(text):
             while ancestors and ancestors[-1][0] >= level:
                 ancestors.pop()
             active = (all(parent_active for _, parent_active in ancestors)
-                      and heading[2].strip().casefold() in CURRENT_HEADINGS)
+                      and (heading[2].strip().casefold() in CURRENT_HEADINGS or bool(re.search(r"\bcurrent report\b", heading[2], re.I))))
             ancestors.append((level, active))
             continue
         if active:
@@ -411,7 +615,9 @@ def _prose_conclusion(stage, paragraph, review=False):
     sentence = _plain(paragraph)
     if review:
         subject = r"(?:(?:the|this|current)\s+)?(?:specification|spec|plan|planning|assessment|review)(?:\s+(?:review|assessment))?"
-        outcomes = ((r"(?:is\s+|was\s+)?(?:incomplete|not\s+complete)", "INCOMPLETE"),
+        outcomes = ((r"(?:has\s+|is\s+|was\s+)?(?:not\s+passed|failed)", "NOT PASSED"),
+                    (r"(?:has\s+|is\s+|was\s+)?(?:passed|succeeded)", "PASSED"),
+                    (r"(?:is\s+|was\s+)?(?:incomplete|not\s+complete)", "INCOMPLETE"),
                     (r"(?:is\s+|was\s+)?(?:complete|sufficient)", "COMPLETE"))
     elif stage == "programming":
         subject = r"(?:(?:the|this|current)\s+)?(?:programming|implementation)(?:\s+work)?"
@@ -432,10 +638,17 @@ def _prose_conclusion(stage, paragraph, review=False):
 
 def read_conclusion(stage, text, *, review=False):
     """One shared save/display interpretation; no current verdict from history."""
-    allowed = {"COMPLETE", "INCOMPLETE"} if review else VALUES[stage]
+    allowed = {"COMPLETE", "PASSED", "NOT PASSED", "INCOMPLETE"} if review else VALUES[stage]
+    candidates, declarations = [], []
+    if not review:
+        yaml_status, error = yaml_value(text, "status")
+        if error or (yaml_status not in (None, "") and yaml_status not in allowed):
+            return {"label": "", "literal": yaml_status or "", "evidence": [],
+                    "present": True, "reason": error or "Unknown YAML status value."}
+        if yaml_status not in (None, ""):
+            candidates.append((yaml_status, yaml_status, f"status: {yaml_status}"))
     names = ({"status", "state", "verdict", "review verdict", "assessment", "current assessment", "result"}
              if review else CONCLUSION_FIELDS[stage])
-    candidates = []
     for lines in _current_regions(text):
         for block in re.split(r"\n\s*\n", "\n".join(lines)):
             narrative = []
@@ -446,9 +659,18 @@ def read_conclusion(stage, text, *, review=False):
                 if stripped.startswith(("- ", "* ", "+ ")):
                     break
                 plain = _plain(stripped)
+                current_field = re.fullmatch(r"Current verdict(?:\s*\(([^)]*)\))?\s*:\s*(.*)", plain, re.I)
+                if current_field and not narrative and not review:
+                    declarations.append("current verdict")
+                    literal = current_field[2].strip()
+                    round_match = re.search(r"\bround\s+(\d+)\b", current_field[1] or "", re.I)
+                    current_round = int(round_match[1]) if round_match else None
+                    candidates.append((_status_token(literal, allowed, current_round=current_round), literal, stripped))
+                    continue
                 field = re.fullmatch(FIELD, plain)
                 if field and not narrative:
-                    if field[2].strip().casefold() in names:
+                    if (field[2].strip().casefold() in names or (not review and re.fullmatch(r"current verdict(?: \(.*\))?", field[2].strip(), re.I))):
+                        declarations.append(field[2].strip().casefold())
                         literal = field[3].strip()
                         candidates.append((_status_token(literal, allowed), literal, stripped))
                     continue
@@ -464,17 +686,19 @@ def read_conclusion(stage, text, *, review=False):
                 token, identified = _prose_conclusion(stage, paragraph, review)
                 if identified:
                     candidates.append((token, _plain(paragraph), paragraph))
-                elif candidates and (not review or any(item[0] == "COMPLETE" for item in candidates)) and re.match(
+                elif candidates and (not review or any(item[0] in {"COMPLETE", "PASSED"} for item in candidates)) and re.match(
                         r"^(?:but|however|except)\b", _plain(paragraph), re.I):
                     candidates.append(("", _plain(paragraph), paragraph))
     evidence = [item[2] for item in candidates]
     result = {"label": "", "literal": candidates[0][1] if candidates else "", "evidence": evidence,
               "reason": "", "present": bool(candidates)}
-    if not candidates:
+    if len(declarations) != len(set(declarations)):
+        result["reason"] = "Duplicate current conclusion fields; keep one authoritative current field."
+    elif not candidates:
         result["reason"] = "No clear current conclusion was found in the opening or a current outcome section."
     elif any(not item[0] for item in candidates):
         result["reason"] = "Unrecognized or qualified current conclusion: " + "; ".join(item[2] for item in candidates if not item[0])
-    elif len({item[0] for item in candidates}) != 1:
+    elif len({canonical_verdict(item[0]) for item in candidates}) != 1:
         result["reason"] = "Conflicting current conclusions: " + "; ".join(evidence)
     else:
         result["label"] = candidates[0][0]
@@ -502,7 +726,10 @@ def reported_status(stage, text, source, field=None):
         values = [literal] if conclusion["present"] else []
     else:
         fields = metadata(text)
-        values = _field_values(fields, key)
+        yaml_status, yaml_error = yaml_value(text, "status")
+        values = [yaml_status] if yaml_status is not None else _field_values(fields, key)
+        if yaml_error:
+            values = [yaml_error]
         literal = values[0] if len(values) == 1 else ""
         recognized = _status_token(literal, VALUES[stage]) if stage in {"programming", "verification"} else literal
     kind = "neutral"

@@ -66,12 +66,12 @@ def main():
     check.add_argument("--mode")
     check.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    session = pathlib.Path(args.session)
     if args.command == "check":
         print(json.dumps({"peer": args.peer, "mode": args.mode or "review", "ready": True,
                           "warnings": [], "work": "supported",
                           "model_switch": "-m" if args.peer == "codex" else None}))
         return 0
+    session = pathlib.Path(args.session)
     body = sys.stdin.read()
     if args.command == "record":
         if os.environ.get("VIBE_FAKE_FAIL_RUN_NOTES") and "Note: run-start" in body:
@@ -248,18 +248,30 @@ class RunCase(unittest.TestCase):
     # -- the scenarios -------------------------------------------------------
 
     def test_run_from_specification_consumes_the_brief_once_and_completes(self):
+        self.addCleanup(self.registry.drain)
         project = self.project()
         root = project.root
-        self.directive(0, reply="Specification drafted.\n", writes={
+        # Run to Completion takes priority over an optional comparison that
+        # was already using the work slot, without pausing for its answer.
+        self.directive(0, reply="MATERIAL\nRequirements changed.\n", delay=30)
+        comparison = conversation.start_aux(self.registry, project, "codex", conversation.PURPOSE_MATERIALITY,
+                                            "specification", "Compare the two retained versions.", {"Key": "old:new"})
+        self.wait_for(lambda: comparison.state == "running" and (self.scenario / "directive.count").is_file()
+                      and (self.scenario / "directive.count").read_text() == "1")
+        self.directive(1, reply="Specification drafted.\n", writes={
             str(root / "Specification.md"): "# One — Specification\n\n## Description\n\nA real product brief.\n"})
-        self.directive(1, reply="Planned.\n", writes={
+        self.directive(2, reply="Planned.\n", writes={
             str(root / "Plan.md"): "# One — Plan\n\n## Approach\n\nSteps are laid out.\n"})
-        self.directive(2, reply="Built.\n", writes={
+        self.directive(3, reply="Built.\n", writes={
             str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-        self.directive(3, reply="Verified.\n", writes={
+        self.directive(4, reply="Verified.\n", writes={
             str(root / "One — Verification Report.md"): report("PASSED")})
         driver = self.start(project, "specification", "Build the small tool from this brief.")
         final = self.settle(driver, lambda status: status["state"] == "complete")
+        self.assertEqual(comparison.state, "interrupted")
+        self.assertFalse(comparison.worker.is_alive())
+        self.assertFalse(comparison.live_children())
+        self.assertNotIn("specification:old:new", conversation.read_aux_answers(project))
         self.assertEqual(final["verdicts"], ["PASSED"])
         requests = self.step_requests(project)
         self.assertEqual(len(requests), 4)
@@ -615,8 +627,26 @@ class RunCase(unittest.TestCase):
 
         _status, created = post("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})
         root = self.home / "Two"
+        plan = root / "Plan.md"
+        original = "---\nstatus: AWAITING APPROVAL\nreview: NOT PASSED\n---\n# Plan\n\n## Approach\nUse the agreed storage.\n"
+        plan.write_text(original)
+        preview_data = {"id": created["id"], "stage": "implement-plan", "input": "Implement.", "destination": "ZCode", "context": {"material": []}}
+        self.assertEqual(post("/api/preview", preview_data)[0], 200)
+        self.assertEqual(plan.read_text(), original)  # Viewing a packet grants no approval.
+        stale = {"path": str(plan), "expected": original}
+        plan.write_text(original.replace("agreed storage", "revised storage"))
+        refused, _notice = post("/api/deliver", {"id": created["id"], "step": "implement-plan", "action": "copy", "tool": "zcode", "text": "Implement.", "upstream": stale})
+        self.assertEqual(refused, 409)
+        self.assertNotIn("status: APPROVED", plan.read_text())
+        plan.write_text(original)
+        original_save = server.store.projects[created["id"]].save_packet
+        def edit_after_packet(*args, **kwargs):
+            result = original_save(*args, **kwargs)
+            plan.write_text(original.replace("agreed storage", "unseen later storage"))
+            return result
         payload = b"tiny png payload for the delivered send"
-        code, delivered = post("/api/deliver", {"id": created["id"], "step": "implement-plan", "action": "send",
+        with mock.patch.object(server.store.projects[created["id"]], "save_packet", side_effect=edit_after_packet):
+            code, delivered = post("/api/deliver", {"id": created["id"], "step": "implement-plan", "action": "send",
                                                 "tool": "zcode", "text": "Implement the Plan.",
                                                 "images": [{"name": "wire.png",
                                                             "data": base64.b64encode(payload).decode("ascii")}],
@@ -632,6 +662,11 @@ class RunCase(unittest.TestCase):
         dispatched = sorted(messages.glob("*-initiator-to-peer.md"))[-1].read_text(encoding="utf-8")
         self.assertIn("Attachment: ", dispatched)
         self.assertIn("0001-wire.png", dispatched)
+        self.assertIn("Use the agreed storage.", dispatched)
+        self.assertNotIn("unseen later storage", dispatched)
+        self.assertIn("status: APPROVED", dispatched)
+        self.assertIn("review: NOT PASSED", dispatched)
+        self.assertIn("Use the agreed storage.", (root / "Two — Implementation Request.md").read_text())
         calls = [json.loads(line) for line in self.argv_log.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(calls[-1]["work_permission"], "full-access")
 

@@ -200,6 +200,7 @@ The user's workspace can commission a fresh independent assessment of whether th
 
 ## Output and stop
 
+- Save opening YAML `status: DRAFT`, `IN PROGRESS` or `AWAITING APPROVAL` as actually applicable, with blank `review:` until assessed. Preserve existing vault metadata. A deliberate request to create this Plan approves the supplied Specification; a request to implement this Plan approves its supplied version, independently of review. Record that approval without asking for another entry. Material revisions after approval follow the shared change rules and preserve the earlier assessment.
 - Retain one current Plan; present its truthful assessment status separately from the user's own acceptance.
 - Revise the document the user's workspace resolved and displays, keeping its filename; use the expected default name only for a missing output.
 - An external revision may carry a small type label in closed opening YAML frontmatter, for example `vibe_document: plan`; the same field is recognized in ordinary opening metadata, and a label never proves completeness.

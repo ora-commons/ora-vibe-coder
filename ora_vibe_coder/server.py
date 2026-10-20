@@ -128,7 +128,7 @@ class LocalServer(HTTPServer):
         # None keeps the real shared Applications folder; the disposable
         # inspection route supplies a test-only root for setup effects.
         self.install_applications = Path(install_applications) if install_applications else None
-        self.store = ProjectStore(home) if home else None
+        self.store = None
         self.token = secrets.token_urlsafe(32)
         # The one network-capable operation, reached only when the user presses
         # Check for updates. A stand-in lookup can be supplied for tests.
@@ -159,9 +159,15 @@ class LocalServer(HTTPServer):
         # is honored after that sweep instead of being silently dropped.
         self.readiness_pending = False
         super().__init__(("127.0.0.1", port), Handler)
+        self.store = ProjectStore(home, background=True) if home else None
         self.host = f"127.0.0.1:{self.server_port}"
         self.origin = f"http://{self.host}"
         self.timeout = 1
+
+    def server_close(self):
+        if self.store is not None:
+            self.store.close()
+        super().server_close()
 
     @property
     def url(self):
@@ -306,6 +312,8 @@ class LocalServer(HTTPServer):
             return
         self.stopping = True
         def finish():
+            if self.store is not None:
+                self.store.close()
             conversation.end_checks()
             self.runs.drain()
             self.conversation.drain()
@@ -451,13 +459,14 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path
         if path == "/api/setup":
             shape(data, [])
+            # Browsing is deliberate; setup must not probe cloud availability.
             documents = documents_location()
             preferences = self.server.preferences()
             recent = [item for item in preferences.get("recent_projects", []) if isinstance(item, str)][:8]
             roles = preferences.get("role_defaults") if isinstance(preferences.get("role_defaults"), dict) else {}
             return {"home": str(self.server.store.home) if self.server.store else None,
-                    "browse_home": str(documents or Path.home()),
-                    "browse_note": "" if documents else "Your Documents folder was not found, so browsing starts at your home folder. No project was created or selected.",
+                    "browse_home": str(documents), "browse_fallback": str(Path.home()),
+                    "browse_note": "",
                     "recent_projects": recent,
                     "last_project": preferences.get("last_project", ""),
                     "last_workspace": preferences.get("last_workspace", ""),
@@ -631,12 +640,11 @@ class Handler(BaseHTTPRequestHandler):
             raise ProjectError("This is the installation interface; no project work has started. Open the installed launcher to work with your projects.")
         if path == "/api/projects":
             shape(data, [])
-            return {"home": str(self.server.store.home), "projects": self.server.store.list(include_archived=True),
-                    "notices": self.server.store.scan_notices, "roles": ROLES}
+            return {**self.server.store.report(), "roles": ROLES}
         if path == "/api/rescan":
             shape(data, [])
-            return {"home": str(self.server.store.home), "projects": self.server.store.rescan(),
-                    "notices": self.server.store.scan_notices, "roles": ROLES}
+            self.server.store.rescan()
+            return {**self.server.store.report(), "roles": ROLES}
         if path == "/api/open":
             shape(data, ["path"])
             strings(data, ["path"])
@@ -653,7 +661,7 @@ class Handler(BaseHTTPRequestHandler):
             return {"id": key}
         allowed = {"/api/project", "/api/save", "/api/read", "/api/read-file", "/api/approve-reference", "/api/prepare", "/api/preview", "/api/handoff", "/api/copy", "/api/continue",
                    "/api/converse", "/api/turn-state", "/api/conversation", "/api/review",
-                   "/api/judgment", "/api/sort-findings", "/api/approve-plan", "/api/repair", "/api/deliver",
+                   "/api/judgment", "/api/sort-findings", "/api/approve-plan", "/api/approve-document", "/api/materiality", "/api/repair", "/api/deliver",
                    "/api/run-start", "/api/run-stop", "/api/run-answer", "/api/run-resume", "/api/run-configure", "/api/run-copy"}
         if path not in allowed:
             raise ProjectError("No such operation; arbitrary file access is not supported.")
@@ -773,7 +781,7 @@ class Handler(BaseHTTPRequestHandler):
             if not facts["present"]:
                 return {"state": "error", "reason": "No assessment is recorded, so there is nothing to judge."}
             if facts["verdict"] and not facts["issues"]:
-                return {"state": "answered", "answer": {"verdict": "PASSED" if facts["verdict"] == "COMPLETE" else "NOT PASSED"},
+                return {"state": "answered", "answer": {"verdict": facts.get("outcome", facts["verdict"])},
                         "tool": "the saved record"}
             basis = review_basis(item["text"])
             assessment = conversation.section_body(item["text"], "Current review") or item["text"]
@@ -802,8 +810,8 @@ class Handler(BaseHTTPRequestHandler):
                 if item["text"] is None:
                     return {"state": "error", "reason": item["reason"] or f"No {role} document is resolved to sort."}
                 facts = assessment_facts(data["stage"], item["text"])
-                if facts["verdict"] != "INCOMPLETE" or facts["issues"]:
-                    return {"state": "error", "reason": "Sorting runs for a current INCOMPLETE review."}
+                if facts.get("outcome", facts["verdict"]) != "NOT PASSED" or facts["issues"]:
+                    return {"state": "error", "reason": "Sorting runs for a current NOT PASSED review."}
                 basis = review_basis(item["text"])
                 findings = conversation.section_body(item["text"], "Current review") or item["text"]
                 tool = next((run_record["tool"] for run_record in reversed(conversation.read_reliability_runs(project))
@@ -816,64 +824,30 @@ class Handler(BaseHTTPRequestHandler):
                                                                        report["text"] if data["stage"] == "verification" else item["text"],
                                                                        findings),
                                           {"Key": basis})
-        if path == "/api/approve-plan":
-            # Approve the Plan: the app records the approval itself, server-side,
-            # reusing the document-saving protections. No AI call, no register.
-            shape(data, ["id"])
-            reference = project.reference("Plan")
-            if not isinstance(reference, Path) or not reference.is_file():
-                raise ProjectError("No Plan document is resolved to approve.")
-            if reference.is_symlink() or not reference.resolve().is_relative_to(project.root.resolve()):
-                raise ProjectError("The resolved Plan is a link or outside the project folder, so it was not changed.")
-            try:
-                current = read_text(reference)
-            except (OSError, ProjectError) as error:
-                raise ProjectError(f"The Plan could not be read: {error}") from error
-            facts = assessment_facts("planning", current)
-            if facts["verdict"] != "COMPLETE" or facts["issues"] or facts.get("unreadable"):
-                raise ProjectError("Approve the Plan is available once the current Plan review verdict is COMPLETE.")
-            lines = current.split("\n")
-            body_at = 0
-            if lines and lines[0].rstrip() == "---":
-                close = next((i for i in range(1, len(lines)) if lines[i].rstrip() in {"---", "..."}), None)
-                body_at = (close + 1) if close is not None else 0
-            # The opening metadata region runs until the first heading, fence,
-            # indented block, or ordinary prose line, mirroring status.metadata.
-            opening_end = body_at
-            seen_title = False
-            for index in range(body_at, len(lines)):
-                line = lines[index]
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                if stripped.startswith(("```", "~~~")) or re.match(r"(?: {4}| {0,3}\t)", line):
-                    break
-                if stripped.startswith("# ") and not seen_title:
-                    seen_title = True
-                    continue
-                if not re.fullmatch(r"[*`_]*[A-Za-z][A-Za-z0-9_ -]*?[*`_]*\s*:\s*.*", stripped):
-                    break
-                opening_end = index + 1
-            status_line = next((index for index in range(body_at, opening_end)
-                                if re.fullmatch(r"[*`_]*Status[*`_]*\s*:\s*.*", lines[index].strip())), None)
-            replacement = current
-            if status_line is None:
-                insertion = body_at
-                while insertion < len(lines) and (not lines[insertion].strip() or lines[insertion].startswith("# ")):
-                    insertion += 1
-                replacement = "\n".join([*lines[:insertion], "Status: APPROVED", *lines[insertion:]]) + ("\n" if current.endswith("\n") else "")
-            else:
-                key = lines[status_line].split(":", 1)[0]
-                lines[status_line] = f"{key}: APPROVED"
-                replacement = "\n".join(lines) + ("\n" if current.endswith("\n") else "")
-            if read_text(reference) != current:
-                raise ProjectError("The Plan changed before the approval was saved; no assessment or approval was written.")
-            atomic_write(reference, replacement)
-            saved = read_text(reference)
-            if saved != replacement or not re.search(r"[*`_]*Status[*`_]*\s*:\s*[*`_]*APPROVED", saved):
-                raise ProjectError("The approval write could not be confirmed by reading the Plan back; the prior file was kept.")
-            self.server.store.refresh_entry(project.root)
-            return {"approved": True, "plan": str(reference)}
+        if path in {"/api/approve-plan", "/api/approve-document"}:
+            shape(data, ["id", "expected", "document"], ["stage"])
+            strings(data, ["expected", "document"])
+            stage = data.get("stage", "planning")
+            if stage not in {"specification", "planning"}:
+                raise ProjectError("Select the Specification or Plan to approve.")
+            saved, warning = project.approve_document(stage, data["expected"], data["document"])
+            return {"approved": True, "document": saved["path"], "plan": saved["path"], "warning": warning, "file_state": conversation.document_fingerprint(project)}
+        if path == "/api/materiality":
+            shape(data, ["id", "stage", "tool"])
+            strings(data, ["stage", "tool"])
+            if data["stage"] not in {"specification", "planning"}:
+                raise ProjectError("Select the Specification or Plan to compare.")
+            change = project.material_change(data["stage"])
+            if not change or change["state"] != "pending":
+                return {"state": "answered", "answer": change or {"materiality": "UNCHANGED"}}
+            result = self.server.aux_report(project, conversation.PURPOSE_MATERIALITY, data["stage"], data["tool"],
+                    conversation.materiality_request(data["stage"], change["before"]["text"], change["after"]["text"]),
+                    {"Key": change["key"]})
+            if result["state"] == "answered":
+                result["change"] = project.material_change(data["stage"])
+                if result.get("change"):
+                    result["change"] = {key: value for key, value in result["change"].items() if key not in {"before", "after"}}
+            return result
         if path == "/api/repair":
             # Request repairs: the remembered AI-can-fix findings go to the
             # step-3 tool as one ordinary work turn on the same stage.
@@ -909,7 +883,7 @@ class Handler(BaseHTTPRequestHandler):
             # request through the existing builders, then starts the next
             # stage's in-app turn; Copy prepares, saves and returns the text;
             # Terminal opens the saved request in the tool's own window.
-            shape(data, ["id", "step", "action", "tool", "text"], ["files", "images", "verifier"])
+            shape(data, ["id", "step", "action", "tool", "text"], ["files", "images", "verifier", "upstream"])
             strings(data, ["step", "action", "tool", "text"])
             if data["step"] not in {"create-plan", "implement-plan", "result", "verification", "correction"}:
                 raise ProjectError("Unknown handoff step.")
@@ -954,24 +928,28 @@ class Handler(BaseHTTPRequestHandler):
                 extra.append(f"Pictures not carried by this request: {', '.join(picture_names)}. "
                              "This request cannot include images; supply them through a route that can, "
                              "if the work needs them.")
+            if data.get("upstream") is not None and not isinstance(data["upstream"], dict):
+                raise ProjectError("Invalid displayed upstream document.")
+            supplied_documents = project.approve_transition(data["step"], data.get("upstream"))
             packet = run_module.step_request(project, data["step"], data["text"], destination, files,
-                                             data.get("verifier", ""), extra)
+                                             data.get("verifier", ""), extra, supplied_documents=supplied_documents)
             # A new one-click delivery deliberately replaces the prior saved
             # request of the same kind; a change between reading and writing
             # still preserves the prior file and reports the conflict.
             project.save_packet(packet, purpose, expected=project.handoff_text(purpose))
             if data["action"] == "copy":
                 return {"text": packet, "path": str(project.packet_path(purpose)),
-                        "pictures": [item.get("name", "") for item in images]}
+                        "pictures": [item.get("name", "") for item in images], "file_state": conversation.document_fingerprint(project)}
             if data["action"] == "terminal":
-                return continue_in(project, packet, destination, purpose=purpose, route="terminal")
+                return {**continue_in(project, packet, destination, purpose=purpose, route="terminal"),
+                        "file_state": conversation.document_fingerprint(project)}
             handle = conversation.start_turn(self.server.conversation, project, data["tool"],
                                              run_module.STEP_STAGE[data["step"]],
                                              run_module.build_input(data["step"], project, data["text"],
                                                                     data.get("verifier", ""), extra),
-                                             images, files)
+                                             images, files, supplied_documents=supplied_documents)
             return {"turn": handle.turn, "operation": handle.snapshot(),
-                    "images": list(handle.retained_images)}
+                    "images": list(handle.retained_images), "file_state": conversation.document_fingerprint(project)}
         if path == "/api/run-start":
             shape(data, ["id", "entry", "text", "images", "files"], ["config", "tool"])
             strings(data, ["entry", "text"])
@@ -1066,13 +1044,15 @@ class Handler(BaseHTTPRequestHandler):
             pictures = driver.pending_pictures()
             extra = ([f"Brief pictures not included: {', '.join(pictures)}. A copy cannot carry pictures; "
                       "supply them through a route that can, if the work needs them."] if pictures else [])
-            packet = run_module.step_request(project, driver.step, driver.pending_brief(), destination, extra=extra)
+            supplied_documents = project.approve_transition(driver.step)
+            packet = run_module.step_request(project, driver.step, driver.pending_brief(), destination, extra=extra,
+                                             supplied_documents=supplied_documents)
             purpose = "implement-plan" if driver.step == "build" else None
             project.save_packet(packet, purpose, expected=project.handoff_text(purpose))
             return {"text": packet, "path": str(project.packet_path("implement-plan" if driver.step == "build" else None)),
                     "pictures": pictures}
         fields = ["id", "stage", "input", "destination", "context"]
-        shape(data, fields, ["expected"])
+        shape(data, fields, ["expected", "upstream"])
         strings(data, ["stage", "input", "destination"])
         if data["stage"] not in STAGES:
             raise ProjectError("Select one of the supported stages.")
@@ -1085,8 +1065,10 @@ class Handler(BaseHTTPRequestHandler):
         if (not isinstance(material, list) or len(material) > 50
                 or any(not isinstance(item, str) or not item for item in material)):
             raise ProjectError("Invalid selected material.")
-        payload = prepare_request(project, data["stage"], data["input"], data["destination"], material)
+        supplied_documents = project.approve_transition(data["stage"], data.get("upstream")) if path == "/api/prepare" and data["stage"] in {"create-plan", "implement-plan"} else {}
+        payload = prepare_request(project, data["stage"], data["input"], data["destination"], material,
+                                  supplied_documents=supplied_documents)
         if path == "/api/prepare":
             project.save_packet(payload, data["stage"], expected=data.get("expected"))
-            return {"text": payload, "path": str(project.packet_path(data["stage"]))}
+            return {"text": payload, "path": str(project.packet_path(data["stage"])), "file_state": conversation.document_fingerprint(project)}
         return {"text": payload}

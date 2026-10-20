@@ -1668,6 +1668,64 @@ class Reliability(ConversationCase):
                     notes.append(fields)
         return notes
 
+    def test_semantic_materiality_uses_existing_read_only_auxiliary_records(self):
+        self.addCleanup(self.registry.drain)
+        project = self.project("SemanticComparison")
+        reply = self.pass_reply("materiality", "UNCHANGED\nOnly the spelling of behavior was corrected.")
+        with patch.dict(os.environ, {"VIBE_FAKE_REPLY_PURPOSE_MATERIALITY": reply}):
+            handle = conversation.start_aux(self.registry, project, "codex", conversation.PURPOSE_MATERIALITY,
+                    "specification", conversation.materiality_request("specification", "Required behaivor.", "Required behavior."),
+                    {"Key": "old:new"})
+            self.assertTrue(handle.done.wait(10))
+        self.assertEqual(handle.state, "finished")
+        answer = conversation.read_aux_answers(project)["specification:old:new"]
+        self.assertEqual(answer["answer"]["materiality"], "UNCHANGED")
+        self.assertEqual(answer["purpose"], "materiality")
+
+        # A pending meaning comparison cannot hold the user's next stage
+        # hostage. Stop its real owned process before starting that work, and
+        # preserve the pending state rather than inventing a comparison answer.
+        code = self.root / "shared-code"
+        code.mkdir()
+        project = self.project("ForegroundComparison", code=code)
+        other = self.project("SharedComparison", code=code)
+        document = project.root / "Specification.md"
+        document.write_text("# Specification\n\n## Behavior\n\nKeep incoming records.\n")
+        approved, warning = project.approve_document("specification")
+        self.assertFalse(warning)
+        document.write_text(approved["text"].replace("Keep incoming records.", "Preserve incoming records."))
+        pending = project.material_change("specification")
+        self.assertEqual(pending["state"], "pending")
+        key = f"specification:{pending['key']}"
+        with patch.dict(os.environ, {"VIBE_FAKE_REPLY_PURPOSE_MATERIALITY": reply,
+                                     "VIBE_FAKE_DELAY": "30"}):
+            comparison = conversation.start_aux(self.registry, project, "codex", conversation.PURPOSE_MATERIALITY,
+                    "specification", conversation.materiality_request("specification", pending["before"]["text"], pending["after"]["text"]),
+                    {"Key": pending["key"]})
+            deadline = time.monotonic() + 10
+            while comparison.state == "starting" and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertEqual(comparison.state, "running")
+            children = comparison.live_children()
+            self.assertTrue(children)
+            with patch.dict(os.environ, {"VIBE_FAKE_DELAY": ".5"}):
+                foreground = conversation.start_turn(self.registry, project, "codex", "planning",
+                                                      "Create a Plan from the supplied Specification.", [])
+                self.assertEqual(comparison.state, "interrupted")
+                self.assertFalse(comparison.worker.is_alive())
+                self.assertTrue(all(child.poll() is not None for child in children))
+                self.assertNotIn(key, conversation.read_aux_answers(project))
+                self.assertEqual(project.material_change("specification")["state"], "pending")
+                self.assertIn("status: APPROVED", document.read_text())
+                # Foreground priority never permits two ordinary writers in
+                # either this project or a project sharing its code folder.
+                with self.assertRaisesRegex(ProjectError, "One work turn"):
+                    conversation.start_turn(self.registry, project, "codex", "specification", "Another edit.", [])
+                with self.assertRaisesRegex(ProjectError, "shared folder or document"):
+                    conversation.start_turn(self.registry, other, "codex", "specification", "A conflicting edit.", [])
+                self.assertTrue(foreground.done.wait(10))
+                self.assertEqual(foreground.state, "finished")
+
     def test_one_model_review_saves_current_verdict_without_extra_passes(self):
         from ora_vibe_coder.status import assessment_facts, review_basis
 
@@ -1688,7 +1746,7 @@ class Reliability(ConversationCase):
                 self.assertEqual((run["reviewer"], run["assessment"], run["output"]),
                                  ("", "applied", answer.split("\n\n", 1)[1].strip()))
                 facts = assessment_facts(stage, document.read_text(encoding="utf-8"))
-                self.assertEqual((facts["verdict"], facts["applies"]), ("COMPLETE", "current"))
+                self.assertEqual((facts["verdict"], facts["applies"]), ("PASSED", "current"))
 
     def test_clear_review_variants_preserve_reasoning_without_extra_passes(self):
         from ora_vibe_coder.status import assessment_facts
@@ -1706,7 +1764,7 @@ class Reliability(ConversationCase):
                 self.assertEqual((handle.snapshot()["state"], handle.snapshot()["maintenance"]), ("finished", "applied"))
                 saved = (project.root / "Specification.md").read_text()
                 self.assertIn(answer.strip().splitlines()[-1], saved)
-                self.assertEqual(assessment_facts("specification", saved)["verdict"], "COMPLETE")
+                self.assertEqual(assessment_facts("specification", saved)["verdict"], "PASSED")
                 if "## Earlier review" in answer:
                     self.assertIn("### Earlier review\n#### Result\nStatus: INCOMPLETE", saved)
                 if "```markdown" in answer:
@@ -1777,11 +1835,14 @@ class Reliability(ConversationCase):
                          ("INCOMPLETE", "current", []))
 
     def test_review_binds_target_and_records_changed_content_as_earlier(self):
-        from ora_vibe_coder.status import assessment_facts
+        from ora_vibe_coder.status import assessment_facts, review_basis
 
-        for selection_changes in (False, True):
-            project = self.project("Selection" if selection_changes else "Content")
+        for scenario in ("Content", "Selection", "LaterApproval", "NewerReview"):
+            selection_changes = scenario == "Selection"
+            project = self.project(scenario)
             document = project.root / "Specification.md"
+            if scenario in {"LaterApproval", "NewerReview"}:
+                project.approve_document("specification", document.read_text(), str(document))
             original = document.read_text()
             alternate = project.root / "Other specification.md"
             alternate.write_text("# Alternate\n\n## Requirements\n\nA different work item.\n")
@@ -1792,17 +1853,45 @@ class Reliability(ConversationCase):
                     self.associate(project, "Specification", alternate)
                 else:
                     document.write_text(original + "\n## Added requirement\n\nPreserve incoming records.\n")
+                    if scenario in {"LaterApproval", "NewerReview"}:
+                        project.approve_document("specification", document.read_text(), str(document))
+                    if scenario == "NewerReview":
+                        reviewed_now = project.material("Specification")
+                        state, _path, _notice = conversation.apply_assessment(
+                            project, "specification", "Verdict: PASSED\n\nThe new record-preservation requirement is assessed.\n",
+                            review_basis(reviewed_now["text"]), reviewed_now)
+                        self.assertEqual(state, "applied")
+                        fresh = document.read_text()
                 self.assertTrue(handle.done.wait(10))
             if selection_changes:
                 self.assertEqual(document.read_text(), original)
                 self.assertNotIn("Current review", alternate.read_text())
                 self.assertEqual(handle.artifact["outcome"], "selection-changed")
                 self.assertNotEqual(handle.maintenance, "applied")
+            elif scenario == "NewerReview":
+                self.assertEqual(document.read_text(), fresh)
+                self.assertIn("status: APPROVED", fresh)
+                self.assertEqual(assessment_facts("specification", fresh)["applies"], "current")
+                self.assertEqual(handle.maintenance, "unsaved")
+                run = conversation.read_reliability_runs(project)[0]
+                self.assertIn("newer Current review", run["notice"])
+                self.assertIn("All required choices are recorded", run["output"])
             else:
                 saved = document.read_text()
                 self.assertIn("Preserve incoming records.", saved)
+                self.assertEqual(assessment_facts("specification", saved)["applies"], "unconfirmed")
+                self.assertEqual(handle.artifact["applies"], "unconfirmed")
+                pending = project.material_change("specification")
+                self.assertEqual(pending["state"], "pending")
+                answer = {f"specification:{pending['key']}": {"purpose": "materiality", "answer": {
+                    "materiality": "MATERIAL", "reason": "Preserving incoming records is a new requirement."}}}
+                with patch("ora_vibe_coder.conversation.read_aux_answers", return_value=answer):
+                    self.assertEqual(project.material_change("specification")["state"], "material")
+                saved = document.read_text()
                 self.assertEqual(assessment_facts("specification", saved)["applies"], "earlier")
-                self.assertEqual(handle.artifact["applies"], "earlier")
+                if scenario == "LaterApproval":
+                    self.assertIn("status: APPROVED", saved)
+                    self.assertIn("review: CHANGED", saved)
 
     def test_review_records_its_own_basis_when_ai_omits_or_mislabels_it(self):
         from ora_vibe_coder.status import assessment_facts, review_basis
@@ -1824,7 +1913,7 @@ class Reliability(ConversationCase):
                 self.assertIn("sufficiently guides", saved)
                 facts = assessment_facts(stage, saved)
                 self.assertEqual((facts["verdict"], facts["applies"], facts["issues"]),
-                                 ("COMPLETE", "current", []))
+                                 ("PASSED", "current", []))
 
     def test_conflicting_ai_verdicts_do_not_become_a_complete_review(self):
         project = self.project()
@@ -1849,9 +1938,9 @@ class Reliability(ConversationCase):
         self.assertEqual(handle.snapshot()["state"], "finished")
         saved = document.read_text(encoding="utf-8")
         self.assertIn("Findings: None", saved)
-        self.assertEqual(saved.count("Verdict: COMPLETE"), 1)
+        self.assertEqual(saved.count("Verdict: PASSED"), 1)
         self.assertEqual((assessment_facts("specification", saved)["verdict"],
-                          assessment_facts("specification", saved)["issues"]), ("COMPLETE", []))
+                          assessment_facts("specification", saved)["issues"]), ("PASSED", []))
 
     def test_one_model_review_keeps_document_when_assessment_is_malformed(self):
         project = self.project()
@@ -1935,7 +2024,7 @@ class Reliability(ConversationCase):
         self.assertEqual((handle.snapshot()["state"], run["agreement"], run["assessment"]),
                          ("finished", "pass", "applied"))
         self.assertEqual((facts["verdict"], facts["applies"], facts["issues"]),
-                         ("COMPLETE", "current", []))
+                         ("PASSED", "current", []))
         self.assertEqual(saved.count("## Current review"), 1)
         self.assertEqual(basis_text(saved), basis_text(original))
         self.assertEqual(run["output"], assessment.strip())

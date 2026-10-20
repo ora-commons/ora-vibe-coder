@@ -125,9 +125,9 @@ class Handoff(unittest.TestCase):
         # Assessment packets instruct the completeness verdict and its basis.
         review = prepare_request(self.project, "review-plan", "Assess", "Codex")
         self.assertIn("Saving the assessment", review)
-        self.assertIn("Verdict: COMPLETE    (or INCOMPLETE)", review)
-        self.assertIn("list each noted deficiency as one \"- \" bullet", review)
-        self.assertNotIn("Verdict: PASSED", review)
+        self.assertIn("Verdict: PASSED    (or NOT PASSED or INCOMPLETE)", review)
+        self.assertIn("list each required deficiency as one \"- \" bullet", review)
+        self.assertIn("review: PASSED", review)
 
     def test_all_six_destinations_receive_complete_selected_host_material(self):
         root = PLUGIN / "resources" / "programming-loop"

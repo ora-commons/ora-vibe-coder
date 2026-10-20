@@ -9,15 +9,49 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from urllib.parse import parse_qs, urlsplit
 from unittest import mock
 
-from ora_vibe_coder import __main__ as app_entry, conversation, hosts
+from ora_vibe_coder import __main__ as app_entry, conversation, hosts, project as project_module
 from ora_vibe_coder.installer import install, launcher_files, remove
 from ora_vibe_coder.launcher import AppLock, Settings, request_quit, serve
 from ora_vibe_coder.project import ProjectStore
 from ora_vibe_coder.server import LocalServer, REQUEST_LIMIT
+
+
+def stalled_inventory_reader():
+    """Run genuine non-returning calls inside the owned discovery process."""
+    original_scandir = project_module.os.scandir
+    original_read = project_module.read_text
+
+    @contextlib.contextmanager
+    def scan(path):
+        root = Path(path)
+        if (root / ".stall-folder").exists():
+            (root / ".entered-folder").touch()
+            threading.Event().wait()  # Only terminating the owned process can cancel this.
+        with original_scandir(path) as items:
+            if (root / ".stall-after-entries").exists():
+                def partial():
+                    yield from items
+                    (root / ".entered-partial").touch()
+                    threading.Event().wait()
+                yield partial()
+            else:
+                yield items
+
+    def read(path, *args, **kwargs):
+        root = Path(path).parent
+        if (root / ".stall-file").exists():
+            (root / ".entered-file").touch()
+            threading.Event().wait()
+        return original_read(path, *args, **kwargs)
+
+    with mock.patch.object(project_module.os, "scandir", side_effect=scan), \
+            mock.patch.object(project_module, "read_text", side_effect=read):
+        project_module._inventory_reader()
 
 
 class LocalBoundary(unittest.TestCase):
@@ -1045,7 +1079,8 @@ elif skill.exists():
         def ready(peer, **kwargs):
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
         with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready), \
-                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
+                mock.patch("ora_vibe_coder.conversation.start_aux", side_effect=ValueError("comparison unavailable in this fixture")), sync_playwright() as playwright:
             if not Path(playwright.chromium.executable_path).is_file():
                 self.skipTest("Playwright's Chromium is not installed for the browser check")
             browser = playwright.chromium.launch(headless=True)
@@ -1070,7 +1105,7 @@ elif skill.exists():
                 # No assessment means NOT REVIEWED, never a failure; an
                 # untouched template is NOT STARTED, its own distinct state.
                 expect(page.locator("#assessment")).to_have_text("NOT STARTED")
-                specification.write_text("# One — Specification\n\n## Description\n\nBehavior to build.\n", encoding="utf-8")
+                specification.write_text("# One — Specification\n\nRequirements: Preserve all records.\n", encoding="utf-8")
                 page.locator("#refresh").click()
                 expect(page.locator("#assessment")).to_have_text("NOT REVIEWED")
 
@@ -1089,6 +1124,14 @@ elif skill.exists():
                         return
                     route.fulfill(json={"turn": f"turn-{len(sends)}", "operation": {"turn": f"turn-{len(sends)}", "state": "finished", "elapsed_seconds": 0}, "images": [], "path": str(root / "Handoff.md")})
                 page.route("**/api/deliver", deliver)
+                # The ordinary operation poll can observe an optional meaning
+                # comparison. It leaves both the composer and next stage
+                # available; the registry safely retires it upon admission.
+                page.evaluate("operation => updateOperation(operation)", {
+                    "project": str(root), "turn": "meaning-comparison", "stage": "materiality-specification",
+                    "state": "running", "elapsed_seconds": 1, "last_contact_seconds": 0})
+                expect(page.locator("#send")).to_be_enabled()
+                expect(page.locator("#transition")).to_be_enabled()
                 page.locator("#transition").click()
                 expect(page.locator("#message")).to_have_value("")
                 expect(page.locator("#status-bar")).to_contain_text("Sent to Codex as turn turn-1")
@@ -1107,7 +1150,9 @@ elif skill.exists():
                 # A copy saves the complete request — the unsent text and files
                 # included once — and names pictures it cannot carry.
                 page.evaluate("() => attachments.push({name: 'shot.png', data: 'aGk=', url: 'blob:x'})")
-                page.locator("#copy-request").click()
+                with page.expect_response(lambda response: "/api/deliver" in response.url) as copied_response:
+                    page.locator("#copy-request").click()
+                self.assertEqual(copied_response.value.status, 200, copied_response.value.text())
                 expect(page.locator("#status-bar")).to_contain_text("copied and saved")
                 expect(page.locator("#status-bar")).to_contain_text("Pictures are not carried by a copy: shot.png")
                 expect(page.locator("#message")).to_have_value("")
@@ -1122,6 +1167,8 @@ elif skill.exists():
                 # from the earlier turn.
                 self.assertNotIn("Outside context for the Plan.", handoff)
                 self.assertEqual(page.evaluate("() => window.clipboardText"), handoff)
+                self.assertIn("status: APPROVED", specification.read_text())
+                self.assertNotIn("review: PASSED", specification.read_text())
 
                 # PASSED / NOT PASSED from the saved record; an unclear record
                 # gets one remembered judgment, and a failed call a reading error.
@@ -1131,15 +1178,15 @@ elif skill.exists():
                 expect(page.locator("#assessment")).to_have_text("PASSED")
                 specification.write_text(reviewed.replace("Verdict: COMPLETE", "Verdict: INCOMPLETE").replace("{basis}", review_basis(reviewed.replace("Verdict: COMPLETE", "Verdict: INCOMPLETE"))).replace("Behavior.", "Behavior, changed."), encoding="utf-8")
                 page.locator("#refresh").click()
-                expect(page.locator("#assessment")).to_have_text("NOT PASSED — earlier version")
+                expect(page.locator("#assessment")).to_have_text("NOT PASSED")
                 unclear = "# One — Specification\n\n## Description\n\nBehavior.\n\n## Current review\n\nStage: Specification\nVerdict: COMPLETE and also INCOMPLETE in the summary.\nBasis: {basis}\nBasis format: content-v2\n"
                 unclear = unclear.replace("{basis}", review_basis(unclear))
                 specification.write_text(unclear, encoding="utf-8")
                 with mock.patch("ora_vibe_coder.conversation.bridge_call",
                                 side_effect=Exception("bridge unavailable")):
                     page.locator("#refresh").click()
-                    page.wait_for_function("() => document.getElementById('assessment').textContent === 'READING ERROR'")
-                    self.assertIn("bridge unavailable", page.locator("#assessment").get_attribute("title") or "")
+                    expect(page.locator("#assessment")).to_have_text("REPORT ERROR")
+                    self.assertIn("conclusion", (page.locator("#assessment").get_attribute("title") or "").lower())
 
                 # Approve the Plan is greyed until COMPLETE, then saves
                 # Status: APPROVED preserving the rest of the document and review.
@@ -1147,31 +1194,30 @@ elif skill.exists():
                 plan_text = plan.read_text(encoding="utf-8").replace("{basis}", review_basis(plan.read_text(encoding="utf-8")))
                 plan.write_text(plan_text, encoding="utf-8")
                 page.locator(".rail[data-stage=plan]").click()
-                expect(page.locator("#approve-plan")).to_be_disabled()
-                approved = plan_text.replace("Verdict: INCOMPLETE", "Verdict: COMPLETE")
-                approved = approved.replace(review_basis(plan_text), review_basis(approved))
-                plan.write_text(approved, encoding="utf-8")
-                page.locator("#refresh").click()
                 expect(page.locator("#approve-plan")).to_be_enabled()
-                with mock.patch("ora_vibe_coder.server.atomic_write", side_effect=OSError("disk full")):
+                expect(page.locator("#assessment")).to_have_text("NOT PASSED")
+                with mock.patch("ora_vibe_coder.project.atomic_write", side_effect=OSError("disk full")):
                     page.locator("#approve-plan").click()
                     expect(page.locator("#status-bar"), "the failed save reports and keeps the prior file").to_contain_text("disk full")
                 self.assertIn("Status: AWAITING APPROVAL", plan.read_text(encoding="utf-8"))
                 page.locator("#approve-plan").click()
-                expect(page.locator("#status-bar")).to_contain_text("Status: APPROVED saved")
+                expect(page.locator("#status-bar")).to_contain_text("status: APPROVED saved")
                 saved_plan = plan.read_text(encoding="utf-8")
-                self.assertIn("Status: APPROVED", saved_plan)
+                self.assertIn("status: APPROVED", saved_plan)
                 self.assertIn("## Approach\n\nSteps.", saved_plan)
-                self.assertIn("Verdict: COMPLETE", saved_plan)
+                self.assertIn("Verdict: INCOMPLETE", saved_plan)
                 expect(page.locator("#approve-plan")).to_be_disabled()
-                expect(page.locator("#assessment")).to_have_text("PASSED")
-                expect(page.locator("#reader")).to_contain_text("Status: APPROVED")
+                expect(page.locator("#assessment")).to_have_text("NOT PASSED")
+                expect(page.locator("#reader")).to_contain_text("status: APPROVED")
 
                 # Build's verdicts and next actions: NOT PASSED offers Request
                 # repairs; REVIEW INCOMPLETE offers to finish or rerun; a legacy
                 # combined label shows as REVIEW INCOMPLETE.
                 page.locator(".rail[data-stage=build]").click()
                 expect(page.locator("#assessment")).to_have_text("NOT VERIFIED")
+                (root / "One — Programming Result.md").write_text("# Programming Result\n\nSummary: Implemented record export.\n", encoding="utf-8")
+                page.locator("#refresh").click()
+                expect(page.locator("#result-status")).to_have_text("VERDICT MISSING")
                 (root / "One — Programming Result.md").write_text("# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n", encoding="utf-8")
                 (root / "One — Verification Report.md").write_text("# Verification Report\n\nVerdict: NOT PASSED\n\n- The login check fails.\n", encoding="utf-8")
                 page.locator("#refresh").click()
@@ -1192,7 +1238,7 @@ elif skill.exists():
                 expect(page.locator("#build-action-dialog")).not_to_be_visible()
                 (root / "One — Verification Report.md").write_text("# Verification Report\n\nVerdict: NOT PASSED — REVIEW INCOMPLETE\n\n- A finding and an unfinished check.\n", encoding="utf-8")
                 page.locator("#refresh").click()
-                expect(page.locator("#assessment")).to_have_text("REVIEW INCOMPLETE")
+                expect(page.locator("#assessment")).to_have_text("INCOMPLETE")
                 # An unfinished review directs no source repairs: step 7 offers
                 # finishing or rerunning the verification instead, and no
                 # findings sorting runs for it.
@@ -1207,6 +1253,38 @@ elif skill.exists():
                 (root / "One — Verification Report.md").write_text("# Verification Report\n\nVerdict: PASSED\n\nAll checks passed.\n", encoding="utf-8")
                 page.locator("#refresh").click()
                 expect(page.locator("#assessment")).to_have_text("PASSED")
+                # The canonical states use the same rendered labels and colors
+                # as legacy results, with distinct empty/error displays.
+                report_path = root / "One — Verification Report.md"
+                for contents, label in (
+                    ("# Verification Report\n\n## Findings\n", "NOT STARTED"),
+                    ("---\nstatus:\n---\n# Verification Report\n\n## Findings\n", "NOT STARTED"),
+                    ("---\nstatus: null\n---\n# Verification Report\n\n## Findings\n", "NOT STARTED"),
+                    ("# Verification Report\n\nThe evidence could not be assessed.\n", "VERDICT MISSING"),
+                    ("# Verification Report\n\nSummary: Checked the record export.\n", "VERDICT MISSING"),
+                    ("---\nstatus:\n---\n# Verification Report\n\nRequired evidence is missing.\n", "VERDICT MISSING"),
+                    ("---\nstatus: ~\n---\n# Verification Report\n\nRequired evidence is missing.\n", "VERDICT MISSING"),
+                    ('---\nstatus: "null"\n---\n# Verification Report\n', "REPORT ERROR"),
+                    ("---\nstatus:\nstatus:\n---\n# Verification Report\n", "REPORT ERROR"),
+                    ("---\nstatus:\n  verdict: PASSED\n---\n# Verification Report\n", "REPORT ERROR"),
+                    ("---\nstatus: UNKNOWN\n---\n# Verification Report\n", "REPORT ERROR"),
+                    ("---\nstatus: PASSED\nstatus: PASSED\n---\n# Verification Report\n", "REPORT ERROR"),
+                    ("---\nstatus: PASSED\n---\n# Verification Report\n\n## Current outcome\nVerdict: NOT PASSED\n", "REPORT ERROR"),
+                    ("---\nstatus: PASSED\n---\n# Verification Report\n\n## Current outcome\nVerdict: PASSED — but the required checks failed.\n", "REPORT ERROR"),
+                    ("---\nstatus: INCOMPLETE\n---\n# Verification Report\n\nRequired evidence is unavailable.\n", "INCOMPLETE"),
+                ):
+                    report_path.write_text(contents, encoding="utf-8")
+                    page.locator("#refresh").click()
+                    expect(page.locator("#assessment")).to_have_text(label)
+                    if label != "NOT STARTED":
+                        expect(page.locator("#assessment")).to_have_class("assessment working")
+                report_path.write_bytes(b"\x00unreadable")
+                page.locator("#refresh").click()
+                expect(page.locator("#assessment")).to_have_text("COULD NOT READ")
+                expect(page.locator("#assessment-note")).to_contain_text("Binary content")
+                report_path.write_text("---\nstatus: INCOMPLETE\n---\n# Verification Report\n\nRequired evidence is unavailable.\n", encoding="utf-8")
+                page.locator("#refresh").click()
+                expect(page.locator("#assessment")).to_have_text("INCOMPLETE")
             finally:
                 browser.close()
 
@@ -2702,6 +2780,248 @@ elif skill.exists():
         self.assertIn("delivery is unconfirmed", invalid_output.getvalue())
         self.assertIn("Handoff.md", invalid_output.getvalue())
         self.assertEqual(project.handoff_text(), packet)
+
+    def test_stalled_discovery_keeps_interface_and_readable_projects_available(self):
+        self.close()
+        projects = self.home / "Projects"
+        projects.mkdir()
+        unavailable = projects / "Unavailable folder"
+        definition = projects / "Unavailable definition"
+        readable = projects / "Readable sibling"
+        nested = definition / "Nested project"
+        for folder in (unavailable, definition, readable, nested):
+            folder.mkdir(parents=True, exist_ok=True)
+        for folder, name in ((definition, "Definition"), (readable, "Readable"), (nested, "Nested")):
+            (folder / "Project.md").write_text(f"# Project\n\nName: {name}\n", encoding="utf-8")
+        (projects / ".stall-folder").touch()
+        (unavailable / ".stall-folder").touch()
+        (definition / ".stall-file").touch()
+        settings = Settings(self.home / "settings.json")
+        settings.update(projects_dir=str(projects), last_project=str(definition), last_workspace="build")
+        owned_readers = []
+        original_popen = project_module.subprocess.Popen
+        def start_reader(args, **kwargs):
+            if args[1:] == ["-m", "ora_vibe_coder.project_discovery"]:
+                args = [args[0], "-c", "from tests.test_local_app_boundary import stalled_inventory_reader; stalled_inventory_reader()"]
+                process = original_popen(args, **kwargs)
+                owned_readers.append(process)
+                return process
+            return original_popen(args, **kwargs)
+
+        def wait_for(check):
+            # A bounded test wait ensures a regression cannot strand the harness.
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                value = check()
+                if value:
+                    return value
+                threading.Event().wait(.02)
+            self.fail("The expected discovery state did not arrive.")
+
+        def exercise(server, **kwargs):
+            self.server = server
+            self.thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01})
+            self.thread.start()
+            browser = None
+            playwright = None
+            try:
+                # The normal launcher reached serve while the configured root
+                # itself was blocked; setup and HTTP remain responsive.
+                wait_for(lambda: (projects / ".entered-folder").exists())
+                self.assertEqual(self.request("/", {}, method="GET")[0], 200)
+                setup = self.request("/api/setup", {})[1]
+                self.assertEqual(setup["home"], str(projects))
+                pending = self.request("/api/projects", {})[1]
+                self.assertTrue(pending["scanning"])
+                self.assertFalse(pending["complete"])
+                self.assertIn(str(projects), " ".join(pending["notices"]))
+                controller = server.store._scan_thread
+                for _ in range(4):
+                    self.assertEqual(self.request("/api/rescan", {})[0], 200)
+                    self.assertIs(server.store._scan_thread, controller)
+                wait_for(lambda: not server.store.report()["scanning"])
+                self.assertFalse(server.store.report()["complete"])
+                (projects / ".stall-folder").unlink()
+                (projects / ".stall-after-entries").touch()
+                self.request("/api/rescan", {})
+                wait_for(lambda: not server.store.report()["scanning"])
+                inventory = self.request("/api/projects", {})[1]
+                self.assertEqual({entry["name"] for entry in inventory["projects"]}, {"Readable", "Nested"})
+                notices = " ".join(inventory["notices"])
+                self.assertIn(str(unavailable), notices)
+                self.assertIn(f"{projects} could not be read", notices)
+                self.assertTrue((projects / ".entered-partial").exists())
+                self.assertIn(str(definition / "Project.md"), notices)
+                self.assertTrue((unavailable / ".entered-folder").exists())
+                self.assertTrue((definition / ".entered-file").exists())
+                self.assertEqual(self.request("/api/quit-state", {})[0], 200)
+
+                # Inspect the same UI surfaces used by the normal launcher.
+                # Browser availability is also covered by the separately named
+                # project-picker check; API hard-hang proof runs regardless.
+                try:
+                    from playwright.sync_api import expect, sync_playwright
+                except ImportError:
+                    sync_playwright = None
+                if sync_playwright is not None:
+                    playwright = sync_playwright().start()
+                    if Path(playwright.chromium.executable_path).is_file():
+                        browser = playwright.chromium.launch(headless=True)
+                        page = browser.new_page()
+                        opened = []
+                        page.on("request", lambda request: opened.append(request.url) if request.url.endswith("/api/open") else None)
+                        page.goto(server.url)
+                        expect(page.locator("#project")).to_be_visible()
+                        expect(page.locator("#project option")).to_have_count(3)
+                        self.assertEqual(opened, [])  # Unreadable last_project is never auto-opened.
+                        page.locator("#open").click()
+                        expect(page.locator("#scan-notices")).to_contain_text(str(definition / "Project.md"))
+                        expect(page.locator("#scan-notices")).to_contain_text(str(unavailable))
+                        expect(page.locator("#project-list")).not_to_contain_text("No projects")
+                        defaults = page.evaluate("({home: browseHome, fallback: browseFallback})")
+                        page.evaluate("paths => { browseHome = paths.missing; browseFallback = paths.home; }",
+                                      {"missing": str(self.home / "Missing Documents"), "home": str(self.home)})
+                        page.locator("#open-browse").click()
+                        expect(page.locator("#folder-picker")).to_be_visible()
+                        expect(page.locator("#folder-path")).to_have_value(str(self.home))
+                        self.assertEqual(server.store.home, projects)
+                        page.locator("#folder-cancel").click()
+                        page.evaluate("paths => { browseHome = paths.home; browseFallback = paths.fallback; }", defaults)
+                        page.locator("#open-close").click()
+                        entry = next(item for item in inventory["projects"] if item["name"] == "Readable")
+                        self.select_project(page, entry["id"])
+                        page.locator('[data-stage="build"]').click()
+                        page.locator("#message").fill("Keep this unsent message")
+
+                (projects / ".stall-after-entries").unlink()
+                (unavailable / ".stall-folder").unlink()
+                (definition / ".stall-file").unlink()
+                if browser is not None:
+                    page.locator("#open").click()
+                    page.locator("#refresh-projects").click()
+                    expect(page.locator("#project option")).to_have_count(4)
+                    expect(page.locator("#project")).to_have_value(entry["id"])
+                    expect(page.locator("#message")).to_have_value("Keep this unsent message")
+                    self.assertEqual(page.evaluate("workspace"), "build")
+                    page.locator("#open-close").click()
+                else:
+                    self.request("/api/rescan", {})
+                wait_for(lambda: not server.store.report()["scanning"])
+                recovered = self.request("/api/projects", {})[1]
+                self.assertTrue(recovered["complete"])
+                self.assertEqual({item["name"] for item in recovered["projects"]}, {"Definition", "Readable", "Nested"})
+                self.assertFalse(recovered["notices"])
+
+                # A later unavailable definition keeps its last-known identity,
+                # honestly disabled; Stop reaps the actually blocked helper.
+                (definition / ".entered-file").unlink()
+                (definition / ".stall-file").touch()
+                self.request("/api/rescan", {})
+                wait_for(lambda: (definition / ".entered-file").exists())
+                current = self.request("/api/projects", {})[1]
+                known = next(item for item in current["projects"] if item["name"] == "Definition")
+                self.assertFalse(known["available"])
+                self.assertEqual(self.request("/api/stop", {})[0], 200)
+                self.thread.join(3)
+                self.assertFalse(self.thread.is_alive())
+                server.shutdown_thread.join(3)
+                self.assertFalse(server.shutdown_thread.is_alive())
+                self.assertFalse(server.store._scan_thread.is_alive())
+                self.assertTrue(all(child.poll() is not None for child in owned_readers))
+                self.assertFalse([thread for thread in threading.enumerate() if thread.name == "Vibe discovery responses"])
+            finally:
+                if browser is not None:
+                    browser.close()
+                if playwright is not None:
+                    playwright.stop()
+                self.close()
+
+        argv = ["vibe", "--no-browser", "--settings", str(settings.path)]
+        with mock.patch.object(project_module.subprocess, "Popen", side_effect=start_reader), \
+                mock.patch.object(project_module, "DISCOVERY_READ_SECONDS", .75), \
+                mock.patch.object(sys, "argv", argv), \
+                mock.patch.object(app_entry, "serve", side_effect=exercise):
+            app_entry.main()
+        self.assertFalse(settings.path.with_name("running.json").exists())
+        self.assertTrue(all(child.poll() is not None for child in owned_readers))
+
+        # Failure to save or protect the launch record must close the already
+        # constructed server and reap its blocked reader before releasing the
+        # lock that prevents another launch or update from taking ownership.
+        running = settings.path.with_name("running.json")
+        original_write = app_entry.atomic_write
+        original_chmod = Path.chmod
+        original_close = LocalServer.server_close
+        for failure in ("write", "permissions"):
+            with self.subTest(launch_record_failure=failure):
+                (projects / ".entered-folder").unlink(missing_ok=True)
+                (projects / ".stall-folder").touch()
+                constructed, closed = [], []
+
+                def construct(*args, **kwargs):
+                    server = LocalServer(*args, **kwargs)
+                    constructed.append(server)
+                    return server
+
+                def save_record(path, text):
+                    if failure == "write":
+                        wait_for(lambda: (projects / ".entered-folder").exists())
+                        raise OSError("launch record write failed")
+                    return original_write(path, text)
+
+                def protect_record(path, *args, **kwargs):
+                    if path == running:
+                        wait_for(lambda: (projects / ".entered-folder").exists())
+                        raise OSError("launch record permissions failed")
+                    return original_chmod(path, *args, **kwargs)
+
+                def close_while_locked(server):
+                    with self.assertRaisesRegex(ValueError, "already running"):
+                        with AppLock(settings.path.with_name("app.lock")):
+                            pass
+                    original_close(server)
+                    closed.append(server)
+
+                try:
+                    with mock.patch.object(project_module.subprocess, "Popen", side_effect=start_reader), \
+                            mock.patch.object(app_entry, "LocalServer", side_effect=construct), \
+                            mock.patch.object(LocalServer, "server_close", new=close_while_locked), \
+                            mock.patch.object(app_entry, "atomic_write", side_effect=save_record), \
+                            mock.patch.object(Path, "chmod", new=protect_record), \
+                            mock.patch.object(sys, "argv", argv), \
+                            mock.patch.object(app_entry, "serve") as serve_failed, \
+                            contextlib.redirect_stdout(io.StringIO()) as message:
+                        app_entry.main()
+                    serve_failed.assert_not_called()
+                    self.assertIn("could not start", message.getvalue())
+                    self.assertEqual(closed, constructed)
+                    self.assertEqual(len(closed), 1)
+                    self.assertEqual(closed[0].fileno(), -1)
+                    self.assertFalse(closed[0].store._scan_thread.is_alive())
+                    self.assertTrue(all(child.poll() is not None for child in owned_readers))
+                    self.assertFalse(running.exists())
+                    with AppLock(settings.path.with_name("app.lock")):
+                        pass
+                finally:
+                    for server in constructed:
+                        original_close(server)
+
+        # A genuinely missing configured root is reported at that boundary;
+        # startup must neither abort nor silently search another folder.
+        missing = self.home / "Missing configured root"
+        settings.update(projects_dir=str(missing))
+        seen = []
+        def unavailable_root(server, **kwargs):
+            try:
+                server.store._scan_thread.join()
+                seen.append(server.store.report())
+            finally:
+                server.server_close()
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(app_entry, "serve", side_effect=unavailable_root):
+            app_entry.main()
+        self.assertEqual(seen[0]["home"], str(missing))
+        self.assertFalse(seen[0]["complete"])
+        self.assertIn(str(missing), " ".join(seen[0]["notices"]))
 
     def test_browser_open_failure_still_allows_stop_and_joins_owned_server(self):
         self.close()

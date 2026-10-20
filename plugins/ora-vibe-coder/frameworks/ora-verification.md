@@ -57,7 +57,7 @@ If the external route is unavailable:
 - Do not assume that a pasted local path is accessible remotely.
 - Wait for the actual independent response; preparing or copying the request is not a completed review.
 - Do not call the fallback model-diverse or portray a transport failure as reviewer disagreement.
-- If no qualified independent path is available, return `NOT PASSED — REVIEW INCOMPLETE` and state the exact missing prerequisite.
+- If no qualified independent path is available, return `INCOMPLETE` and state the exact missing prerequisite.
 - Never imitate an unavailable companion or use the invoking context as its own sole reviewer.
 
 ## Reviewer contract
@@ -92,7 +92,7 @@ In standalone use:
 
 - Begin read-only inspection immediately.
 - Any proposed additional or repeated check must satisfy the shared contract's proof rule; use credible current evidence first. Show the smallest necessary check; a proposal is not permission to run it.
-- If required evidence remains unavailable: continue the rest of the review and mark the affected criterion `NOT PASSED — REVIEW INCOMPLETE`.
+- If required evidence remains unavailable: continue the rest of the review and mark the affected criterion `INCOMPLETE`.
 
 Correction routing:
 
@@ -104,7 +104,7 @@ Correction routing:
 
 ## Verdict and the Verification Report
 
-Record the actual verdict — for example `PASSED`, `NOT PASSED`, or a not-passed verdict with its exact reason such as `NOT PASSED — REVIEW INCOMPLETE`. Truthfulness rules:
+Save the actual verdict in opening YAML `status: PASSED`, `status: NOT PASSED` or `status: INCOMPLETE`, with substantive evidence and the exact reason in the report body. NOT PASSED means a completed assessment found required deficiencies; INCOMPLETE means required evidence or an essential prerequisite prevents a supported conclusion. Preserve existing vault metadata. Truthfulness rules:
 
 - `PASSED` only when no material finding or unverified material risk remains, the authorized checks that exist pass, the implementation conforms to the available requirements where they exist, important content and data are preserved, and failure and recovery behavior is sound.
 - Neither the report's existence nor an older passing result proves that newer code passed. A saved verdict describes the implementation actually inspected, not automatically newer code.
