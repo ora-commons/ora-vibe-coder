@@ -2,6 +2,8 @@
 
 Ora Vibe Coder is a local workspace for taking a software idea through a fixed route: Specification, Planning, Programming, and Verification, presented as three workspaces — **Specification → Plan → Build & verify**. You talk to your chosen coding tool inside the app — the button naming your tool and stage sends your message through the bundled Agent Bridge, while your project documents stay visible beside the conversation and refresh as they change. A complete portable Markdown handoff remains available through Desktop, Terminal, or Copy for external recipients.
 
+Ora Vibe Coder is one of the Ora tools; Ora itself is at https://ora-ai.app. The other products' pages: Ora Agent Bridge (https://github.com/ora-commons/ora-agent-bridge), Ora Programming Loop (https://github.com/ora-commons/ora-programming-loop), and Ora AI Boost (https://github.com/ora-commons/ora-adversarial-review).
+
 Vibe is useful when you want AI help without turning a pile of chats into the project record. Your ordinary Markdown files and source repository remain the durable work. The application does not run an agent service, store credentials, choose a model, upload a project, or declare a stage complete because a window opened. The selected coding tool still owns login, model choice, and execution; Vibe calls it as an ordinary local command through Bridge. ZCode Programming and code-correction turns explicitly request native Full access for that turn, allowing approved Git work and tests under your account without an approval connection. Other ZCode stages and document assessments keep Edit, and no global permission setting changes. A simple question does not need a Specification; ask it in the project conversation.
 
 ## What you get
