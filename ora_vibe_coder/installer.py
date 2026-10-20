@@ -295,6 +295,7 @@ def refuse_to_replace_newer(home, platform, destination, hosts, skill_names, plu
     installed = release_version(version)
     newer = []
     renamed_loop_finding = False
+    shared_launcher_finding = False
     for label, folder, identity_name in (
         ("the Vibe application", destination, IDENTITY),
         ("the bundled Agent Bridge", bridge_home(destination), IDENTITY),
@@ -310,6 +311,11 @@ def refuse_to_replace_newer(home, platform, destination, hosts, skill_names, plu
         recorded = data.get("version") if isinstance(data, dict) else None
         if release_version(recorded) and installed and release_version(recorded) > installed:
             newer.append(f"{label} at {folder} records version {recorded}")
+            # The shared Mac launcher is deliberately preserved by removal
+            # (another account may use it), so it is never cleared by
+            # removing Vibe; other platforms' launchers are removed with it.
+            shared_launcher_finding = shared_launcher_finding or (
+                label == "the Vibe launcher" and platform == "darwin")
     bundled_loop = release_version(
         (plugin / "resources/programming-loop/VERSION").read_text(encoding="utf-8"))
     for host in hosts:
@@ -329,14 +335,24 @@ def refuse_to_replace_newer(home, platform, destination, hosts, skill_names, plu
                 # there is no Vibe installation to remove at all.
                 renamed_loop_finding = renamed_loop_finding or name == RENAMED_LOOP_SKILL_NAME
     if newer:
-        # Removing Vibe clears every item named above except a renamed shared
-        # Loop entry, so the way onward named in the closing sentence has to
-        # match what the findings actually are.
-        closing = (
-            " That entry belongs to a newer installation this setup preserves; "
-            "install the Ora Vibe Coder release that bundles that newer Programming Loop."
-            if renamed_loop_finding
-            else " Removing Ora Vibe Coder first allows installing an older version."
+        # Removing Vibe clears every item named above except two: the shared
+        # Mac launcher (removal preserves it for other accounts) and a
+        # renamed shared Loop entry (another installation's copy), so the
+        # way onward named in the closing has to match the findings.
+        guidance = []
+        if shared_launcher_finding:
+            guidance.append(
+                " That launcher is shared with other accounts on this Mac, and removing "
+                "Ora Vibe Coder preserves it; install the Ora Vibe Coder release matching "
+                "that newer launcher."
+            )
+        if renamed_loop_finding:
+            guidance.append(
+                " That entry belongs to a newer installation this setup preserves; "
+                "install the Ora Vibe Coder release that bundles that newer Programming Loop."
+            )
+        closing = "".join(guidance) if guidance else (
+            " Removing Ora Vibe Coder first allows installing an older version."
         )
         raise ValueError(
             "A newer version is already installed, so setup changed nothing: "
