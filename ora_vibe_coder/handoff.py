@@ -83,8 +83,10 @@ def loop_component_facts(home=None):
 
     The selected package is the generated resource copy this application
     embeds in its packets; the installed entries are the per-user copies the
-    hosts' own coding tools see. Both are read-only observations: no minimum
-    version is invented, and an unreadable package reports its reason.
+    hosts' own coding tools see, recognized under either of the shared
+    entry's two names (pre-rename and renamed). Both are read-only
+    observations: no minimum version is invented, and an unreadable package
+    reports its reason.
     """
     facts = {"version": None, "path": str(LOOP), "adapters": (), "status": "unknown",
              "reason": "", "remedy": "Reinstall Ora Vibe Coder from a complete release, then Recheck.",
@@ -107,16 +109,9 @@ def loop_component_facts(home=None):
     except (OSError, ValueError, UnicodeDecodeError):
         facts["source_revision"] = None
     root = Path(home) if home is not None else Path.home()
-    from .installer import SKILL_HOMES  # The authoritative per-user entry map.
+    from .installer import SKILL_HOMES, shared_loop_entries  # The authoritative per-user entry map.
     for host in sorted(set(SKILL_HOMES) & set(HOSTS.values())):
-        recorded = None
-        try:
-            entry = json.loads((root / SKILL_HOMES[host] / "skills" / "programming-loop" / "SOURCE.json").read_text(encoding="utf-8"))
-            if isinstance(entry, dict) and isinstance(entry.get("version"), str):
-                recorded = entry["version"]
-        except (OSError, ValueError, UnicodeDecodeError):
-            pass
-        facts["installed"][host] = recorded
+        facts["installed"][host] = shared_loop_entries(root, host) or None
     facts.update({"version": version, "adapters": adapters, "status": "ok", "reason": "", "remedy": ""})
     return facts
 

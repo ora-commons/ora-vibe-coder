@@ -418,7 +418,7 @@
     {
       "executable": false,
       "path": "ora_vibe_coder/handoff.py",
-      "sha256": "ba4e69a31412488f04a2ab1607aee9548e4af6f6539f3a025be7d9eb85b2fcbc"
+      "sha256": "15a0579185c31e394815d35ea5eb11183aadbca6716d016050ba6d46bdabd71d"
     },
     {
       "executable": false,
@@ -428,7 +428,7 @@
     {
       "executable": false,
       "path": "ora_vibe_coder/installer.py",
-      "sha256": "86bf43e7d0e386466f527fa24beee27a7450340428380229fda595db79c57921"
+      "sha256": "d1a1d7310f318bb6e1e54ab709b99230b8d8433debe742d7238e09450af22c66"
     },
     {
       "executable": false,
@@ -508,17 +508,17 @@
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/.claude-plugin/plugin.json",
-      "sha256": "082c0b750f3f0c799a07f0920e027d1c113933171bccd3179cdb001045101efa"
+      "sha256": "12943ed87d21bd0314f4c6567e15f510b6afc0b2fab86077e614237e95667d3b"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/.codex-plugin/plugin.json",
-      "sha256": "af43c98e3e1c0c3c2505e32406e61f763435d93a197578fe21c1346328cda2ca"
+      "sha256": "1ad232d449c74d35b090e40cd1fbec5e83c1c4d95c09fad35c4ffe5d9ef8c47f"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/VERSION",
-      "sha256": "8225d01c6781052b4445ba5eada856290c242c119a3f0d65d80ba166edb99acc"
+      "sha256": "7c3850b28d57f77292b6d8e9fe00998daf5823523e40e97a51c79279055cf0a2"
     },
     {
       "executable": false,
@@ -868,7 +868,7 @@
     {
       "executable": false,
       "path": "tests/test_local_app_boundary.py",
-      "sha256": "cea0b0f557a93d6409d1f4a69b969e64ea542291ce05659ace0540d0d51a3a1f"
+      "sha256": "7501d4ce669bc122525d6ff45316194d8ff2b8f3004d8250b7c0e83cddbdecf0"
     },
     {
       "executable": false,
