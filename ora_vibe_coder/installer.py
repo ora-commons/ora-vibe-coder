@@ -24,6 +24,10 @@ IDENTITY = "ora-vibe-install.json"
 # location, never at the bundle root after signing.
 LAUNCHER_IDENTITY = "Contents/Resources/ora-vibe-install.json"
 LOOP_PROFILE = "programming-loop-reviewer.md"
+# The shared Loop entry's pre-rename name (the one this bundle carries) and
+# its renamed form (carried by newer Programming Loop releases).
+LOOP_SKILL_NAME = "programming-loop"
+RENAMED_LOOP_SKILL_NAME = "ora-programming-loop"
 EXECUTABLE_NAME = "Ora Vibe Coder"
 BRIDGE_HOME_NAME = "agent-bridge"
 BOOST_HOME_NAME = "ora-ai-boost"
@@ -265,10 +269,32 @@ def release_version(value):
     return tuple(int(part) for part in match.groups()) if match else None
 
 
+def shared_loop_entries(home, host):
+    """The installed shared Loop entries as {entry name: recorded version}.
+
+    Newer Programming Loop releases renamed the shared entry to
+    `ora-programming-loop`, while hosts may still hold the pre-rename
+    `programming-loop` entry this bundle carries; a copy under either name is
+    the same shared component and is recognized at both names. Absent or
+    unreadable entries simply do not appear.
+    """
+    entries = {}
+    for name in (LOOP_SKILL_NAME, RENAMED_LOOP_SKILL_NAME):
+        try:
+            data = json.loads((Path(home) / SKILL_HOMES[host] / "skills" / name
+                               / "SOURCE.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("version"), str):
+            entries[name] = data["version"]
+    return entries
+
+
 def refuse_to_replace_newer(home, platform, destination, hosts, skill_names, plugin, version, applications=None):
     """Setup never rolls back: a newer installed copy is named, not replaced."""
     installed = release_version(version)
     newer = []
+    renamed_loop_finding = False
     for label, folder, identity_name in (
         ("the Vibe application", destination, IDENTITY),
         ("the bundled Agent Bridge", bridge_home(destination), IDENTITY),
@@ -287,19 +313,35 @@ def refuse_to_replace_newer(home, platform, destination, hosts, skill_names, plu
     bundled_loop = release_version(
         (plugin / "resources/programming-loop/VERSION").read_text(encoding="utf-8"))
     for host in hosts:
-        try:
-            data = json.loads(
-                (home / SKILL_HOMES[host] / "skills/programming-loop/SOURCE.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        recorded = data.get("version") if isinstance(data, dict) else None
-        if bundled_loop and release_version(recorded) and release_version(recorded) > bundled_loop:
-            newer.append(f"the Programming Loop for {host} records version {recorded}")
+        skills = home / SKILL_HOMES[host] / "skills"
+        for name, recorded in shared_loop_entries(home, host).items():
+            found = release_version(recorded)
+            # A newer shared entry under either name is never downgraded. An
+            # equal renamed entry also stops setup: it is another
+            # installation's qualified copy, and installing this bundle would
+            # recreate a second, older-named entry beside it.
+            if bundled_loop and found and (
+                    found > bundled_loop
+                    or (name == RENAMED_LOOP_SKILL_NAME and found == bundled_loop)):
+                newer.append(f"the Programming Loop for {host} at {skills / name} records version {recorded}")
+                # Only the renamed entry is never cleared by removing Vibe: it
+                # is another installation's copy, and in the renamed-only case
+                # there is no Vibe installation to remove at all.
+                renamed_loop_finding = renamed_loop_finding or name == RENAMED_LOOP_SKILL_NAME
     if newer:
+        # Removing Vibe clears every item named above except a renamed shared
+        # Loop entry, so the way onward named in the closing sentence has to
+        # match what the findings actually are.
+        closing = (
+            " That entry belongs to a newer installation this setup preserves; "
+            "install the Ora Vibe Coder release that bundles that newer Programming Loop."
+            if renamed_loop_finding
+            else " Removing Ora Vibe Coder first allows installing an older version."
+        )
         raise ValueError(
             "A newer version is already installed, so setup changed nothing: "
             + "; ".join(newer)
-            + ". Removing Ora Vibe Coder first allows installing an older version."
+            + closing
         )
 
 

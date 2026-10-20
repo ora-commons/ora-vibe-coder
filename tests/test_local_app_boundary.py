@@ -2302,7 +2302,7 @@ elif skill.exists():
         marker["version"] = "9.9.9"
         loop_source.write_text(json.dumps(marker), encoding="utf-8")
         with self.assertRaisesRegex(ValueError,
-                                    r"Programming Loop for codex records version 9\.9\.9.*Removing Ora Vibe Coder first"):
+                                    r"Programming Loop for codex at .*skills/programming-loop records version 9\.9\.9.*Removing Ora Vibe Coder first"):
             install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
         self.assertEqual(json.loads(identity.read_text(encoding="utf-8")), original)
         self.assertEqual((app / "ora_vibe_coder/server.py").read_bytes(),
@@ -2313,6 +2313,46 @@ elif skill.exists():
         marker.pop("version")
         loop_source.write_text(json.dumps(marker), encoding="utf-8")
         install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
+
+        # A renamed shared entry alone (ora-programming-loop, as newer
+        # Programming Loop releases install it; no old-name entry) is
+        # recognized, reported under its own name, and preserved: setup
+        # changes nothing and does not recreate the older pre-rename entry.
+        from ora_vibe_coder import handoff
+        renamed_user = self.home / "renamed loop user"
+        renamed = renamed_user / ".codex" / "skills" / "ora-programming-loop"
+        renamed.mkdir(parents=True)
+        (renamed / "SOURCE.json").write_text(json.dumps(
+            {"component": "programming-loop", "source": "programming-loop", "version": "1.2.1"}),
+            encoding="utf-8")
+        self.assertEqual(handoff.loop_component_facts(renamed_user)["installed"]["codex"],
+                         {"ora-programming-loop": "1.2.1"})
+        with self.assertRaisesRegex(ValueError,
+                                    r"Programming Loop for codex at .*ora-programming-loop records version 1\.2\.1"
+                                    r".*That entry belongs to a newer installation this setup preserves; "
+                                    r"install the Ora Vibe Coder release that bundles that newer Programming Loop\."):
+            install(source=release, home=renamed_user, hosts=("codex",), platform="darwin",
+                    applications=renamed_user / "Applications")
+        self.assertEqual(json.loads((renamed / "SOURCE.json").read_text(encoding="utf-8"))["version"], "1.2.1")
+        self.assertFalse((renamed_user / ".codex/skills/programming-loop").exists())
+        self.assertFalse((renamed_user / ".codex/skills/ora-programming").exists())
+        self.assertFalse(installer.install_location(renamed_user, "darwin").exists())
+        self.assertFalse(list(renamed_user.rglob(".ora-vibe-install-*")))
+        # An equal renamed copy is preserved the same way: installing this
+        # bundle's same-version entry under the older name would duplicate it.
+        (renamed / "SOURCE.json").write_text(json.dumps(
+            {"component": "programming-loop", "source": "programming-loop", "version": "1.0.0"}),
+            encoding="utf-8")
+        self.assertEqual(handoff.loop_component_facts(renamed_user)["installed"]["codex"],
+                         {"ora-programming-loop": "1.0.0"})
+        with self.assertRaisesRegex(ValueError,
+                                    r"ora-programming-loop records version 1\.0\.0"
+                                    r".*That entry belongs to a newer installation this setup preserves; "
+                                    r"install the Ora Vibe Coder release that bundles that newer Programming Loop\."):
+            install(source=release, home=renamed_user, hosts=("codex",), platform="darwin",
+                    applications=renamed_user / "Applications")
+        self.assertFalse((renamed_user / ".codex/skills/programming-loop").exists())
+        self.assertFalse(list(renamed_user.rglob(".ora-vibe-install-*")))
 
     def test_common_launcher_and_desktop_link_are_maintained_and_removal_reports_shared_items(self):
         from ora_vibe_coder import installer
