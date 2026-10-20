@@ -2061,8 +2061,11 @@ function renderReviewerChoices() {
   const capable = entries.filter(entry => entry.capable);
   const stepSelect = $("step-reviewer");
   const held = stepSelect.value;
-  if (!capable.length) {
-    fill(stepSelect, []);
+  // With no work-capable route at all, a held choice keeps its own (disabled)
+  // option — staying selected and greyed with its reason — so a later Recheck
+  // restores exactly what was chosen instead of resetting to defaults; only a
+  // picker holding no recognizable choice shows the placeholder.
+  if (!capable.length && !entries.some(entry => entry.id === held)) {
     stepSelect.replaceChildren(new Option("No work-capable harness found", ""));
   } else {
     fill(stepSelect, entries);
@@ -2077,7 +2080,9 @@ function renderReviewerChoices() {
   stepReviewerInitialized = true;
   const select = $("reviewer");
   const peerHeld = select.value;
-  if (!capable.length) {
+  // The explicitly chosen peer is retained the same way: it stays among its
+  // own disabled options while every route is down, and recovery restores it.
+  if (!capable.length && !(reviewerChosen && entries.some(entry => entry.id === peerHeld))) {
     select.replaceChildren(new Option("No work-capable harness found", ""));
   } else {
     fill(select, entries);

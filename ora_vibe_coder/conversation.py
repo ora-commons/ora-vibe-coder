@@ -404,6 +404,13 @@ def bridge_check(tool, stop_requested=None, work_permission=None):
     except OSError as error:
         return {"peer": tool, "mode": "work", "ready": False, "warnings": [],
                 "reason": f"Readiness could not be checked: {error}", "next_action": ""}
+    except ProjectError as error:
+        # An unresolvable Bridge is one honest unavailable fact per tool, so a
+        # sweep still completes and replaces any stale result instead of dying
+        # and leaving the previous screen standing.
+        return {"peer": tool, "mode": "work", "ready": False, "warnings": [],
+                "reason": str(error).split(". ", 1)[0].lower(),
+                "next_action": "Reinstall Ora Vibe Coder from a complete release, then Recheck."}
     try:
         try:
             stdout, stderr = process.communicate(timeout=CHECK_TIMEOUT)
@@ -1120,6 +1127,27 @@ def conversation_request(project, tool, stage, text, attachments, exchanges, unr
         turn_instructions = (
             "This is one ordinary work turn in the user's project conversation. Work under your own instruction hierarchy and ordinary permissions; the sections divide these instructions from the user's material. Reply with your complete visible answer for the user — a clarifying question is a valid answer and the user replies in this same conversation — followed by exactly one Registry maintenance block as specified next.\n\n"
             + MAINTENANCE_INSTRUCTIONS + "\n\n" + QUESTIONS_RULE + "\n\n"
+        )
+    if tool == "zcode":
+        turn_instructions += (
+            "## ZCode one-shot completion\n\n"
+            "Vibe makes one headless work call: your final answer ends this coordinating session and can close its workers. "
+            "Do not return a final waiting message or promise a later notification while commissioned implementation, "
+            "independent review, or other work required for this assigned stage is still pending.\n\n"
+            "Prefer Agent calls with run_in_background: false. Preserve the independent workers and concurrent supervision "
+            "required by the assigned method. If work runs in the background, including an auto-backgrounded Agent call "
+            "with status async_launched, keep this coordinating call active. Use TaskOutput with the task_id and block: true "
+            "to collect each task's terminal status and actual output. A retrieval_status of timeout or not_ready means "
+            "it is still pending: repeat native blocking waits until terminal. Do not replace these waits with shell polling, "
+            "sleep loops, or an overall deadline. A launch acknowledgement, task identifier, notification, or Bash command "
+            "starting in the background is not completed work.\n\n"
+            "Background Agent tool-result advice to briefly tell the user and end your response assumes a persistent "
+            "interactive session; disregard that advice for this headless call and collect the results before returning. "
+            "Read the completed worker outputs and save the truthful result required by the selected stage before your final "
+            "answer. This adds no authority to implement, review, run checks, or write files beyond the assigned stage and "
+            "the user's permissions. Genuine questions, worker failures, unavailable result retrieval, and explicit stop "
+            "instructions may end the turn with truthful unfinished status and remaining work; never fabricate results "
+            "or claim pending work is complete.\n\n"
         )
     parts.append("# Work-turn instructions\n\n" + turn_instructions + "## Stage instructions\n\n"
                  f"Selected stage: {stage}\n\n" + framework_text(stage, TOOL_LABELS[tool][0]))

@@ -38,7 +38,7 @@
     {
       "executable": false,
       "path": "README.md",
-      "sha256": "bb627f3565fb769d9130cc04cec2e3c5805030fd30124a0a7b54a5df58cef13b"
+      "sha256": "c73ff85d9012df8d79b6e4eb1b46be58d27f223eb5cd80566e0e17f03a1d550e"
     },
     {
       "executable": false,
@@ -413,7 +413,7 @@
     {
       "executable": false,
       "path": "ora_vibe_coder/conversation.py",
-      "sha256": "e4163966365f291193a4595663fcb7231721d8e43858f7548df42e3cfcc2c744"
+      "sha256": "a5fdffdb2a49b06f7eceb53cbd5b1f278ce91160c8423f19455b2284a06d03ac"
     },
     {
       "executable": false,
@@ -463,7 +463,7 @@
     {
       "executable": false,
       "path": "ora_vibe_coder/static/app.js",
-      "sha256": "20b6406a0b2eccd4c39a8ddd2621b64cc3dbe866562be54f1f128a10e68a358c"
+      "sha256": "a007b8ec140b2cc502b2c7d30b29e2b1579eb405fb4fdbd45dfa89af098febd3"
     },
     {
       "executable": false,
@@ -508,17 +508,17 @@
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/.claude-plugin/plugin.json",
-      "sha256": "e4f69c9105079978c0ae55558123d4877dbc69c75c763c3fc89c1ff2c40cdcc6"
+      "sha256": "082c0b750f3f0c799a07f0920e027d1c113933171bccd3179cdb001045101efa"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/.codex-plugin/plugin.json",
-      "sha256": "09d1bd7d86111d9b17c294130020dae51040c393f56b79576394efa933df9310"
+      "sha256": "af43c98e3e1c0c3c2505e32406e61f763435d93a197578fe21c1346328cda2ca"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/VERSION",
-      "sha256": "f4fc956ec61b187cd18790c0b0a6fa5d1d3a30de4a5493e3277460485ed188f2"
+      "sha256": "8225d01c6781052b4445ba5eada856290c242c119a3f0d65d80ba166edb99acc"
     },
     {
       "executable": false,
@@ -853,7 +853,7 @@
     {
       "executable": false,
       "path": "tests/test_conversation.py",
-      "sha256": "ce2964e95c8751568cb4a356fa310b07df5d6505bc3d3595faf4256f1681ec87"
+      "sha256": "1b8d09ae7c3ad983f0fcd66f11cc1448d4e9736d2abe17b51d3793951ac37674"
     },
     {
       "executable": false,
