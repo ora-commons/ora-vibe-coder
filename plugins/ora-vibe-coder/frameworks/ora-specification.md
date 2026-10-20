@@ -72,7 +72,7 @@ Use the released Gear products through their available documented interface when
 
 Independent assessment:
 
-- The user's workspace can commission a fresh independent assessment of whether the current Specification sufficiently guides the intended work. Support it when asked; the verdict (COMPLETE or INCOMPLETE with its noted deficiencies) is recorded in the document's Current review section as advisory information for the user.
+- The user's workspace can commission a fresh independent assessment of whether the current Specification sufficiently guides the intended work. Support it when asked; the verdict (PASSED, NOT PASSED with required deficiencies, or INCOMPLETE when a supported conclusion is unavailable) is recorded in the document's Current review section as advisory information for the user.
 - The workspace can also run that assessment as a second opinion: one model authors it, a second harness evaluates it, and the author revises its own assessment given the evaluation as a guide — optionally iterating up to three rounds, after which any remaining disagreement is reported for the user to break. Whether the evaluator was a different lab or the same lab in a fresh session is labeled honestly; that label is a delivery fact, not evidence of correctness.
 - An assessment, whatever its verdict, never blocks any stage: the user may create a Plan, start programming, or keep revising whatever the state of the Specification.
 - Correct material defects the assessment identifies when the user wants that; report honestly what remains.
@@ -106,7 +106,7 @@ The Specification is complete enough for the intended work when all of these hol
 - remaining flexibility is explicitly delegated or concerns HOW; and
 - exclusions and failure behavior are explicit.
 
-The user may proceed on an intentionally reduced Specification; identify the exact hidden-judgment risk and record the verdict honestly. Do not record COMPLETE while a material WHAT remains ambiguous.
+The user may proceed on an intentionally reduced Specification; identify the exact hidden-judgment risk and record the verdict honestly. Do not record PASSED while a material WHAT remains ambiguous.
 
 ## Output and stop
 
@@ -114,6 +114,7 @@ The user may proceed on an intentionally reduced Specification; identify the exa
 - Revise the document the user's workspace resolved and displays, keeping its filename; use the expected default name only for a missing output.
 - An external revision may carry a small type label in closed opening frontmatter, for example `vibe_document: specification`; the same field is recognized in ordinary opening metadata, and a label never confers approval.
 - Where a workspace discovers documents automatically — a deliberate association first, then the expected name, a recognized `vibe_document` type label, then role words in the filename, newest within a rank — an explicit file choice overrides discovery. External saves appear when the user rereads the files; discovery identifies a document and never proves approval or completion.
+- Save opening YAML `status: DRAFT`, `IN PROGRESS` or `AWAITING APPROVAL` as actually applicable, with blank `review:` until assessed. Preserve existing vault metadata. The user’s deliberate Create Plan request approves the supplied Specification whatever its review says; record `status: APPROVED` without demanding another approval entry. Material revisions after approval follow the shared change rules and preserve the earlier assessment.
 - Present the result and truthful status, keeping the user's own acceptance separate from any assessment verdict.
 - In standalone use: recommend [Ora Planning](ora-planning.md) as the next stage and stop; the user may start Planning at any time, whatever the state of this Specification.
 - A commissioned executor returns the actual result, review evidence, accepted changes, remaining work, and any retained decision directly to its owner.

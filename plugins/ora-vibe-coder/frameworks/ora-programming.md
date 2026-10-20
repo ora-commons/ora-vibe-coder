@@ -77,7 +77,8 @@ Assignment content:
 
 Tell the Programming recipient that the complete candidate is the product code in its real project structure, plus one truthful reader product:
 
-- **Programming Result** — state near the top whether the programming work completed or stopped unfinished, then record the work performed, code location, checks, delivery state, and remaining work. A short `Status: COMPLETE` or `Status: INCOMPLETE` line is helpful but not required for the app to recognize a clear opening conclusion. Save the result after actual programming work, including work that stops unfinished.
+- A deliberate request to implement the current Plan is user approval of the supplied Plan, regardless of its review. Record `status: APPROVED` in that version without demanding a separate approval entry; preserve the review and all unrelated metadata. Scope and safety authority still follow the actual user instructions.
+- **Programming Result** — state near the top whether the programming work completed or stopped unfinished, then record the work performed, code location, checks, delivery state, and remaining work. Save opening YAML `status: PASSED`, `status: NOT PASSED` or `status: INCOMPLETE` using the shared meanings. PASSED describes successful completion of this assigned scope and its approved delivery endpoint; preserve truthful scope caveats and remaining larger-project work. Existing clear legacy conclusions remain readable. Save the result after actual programming work, including work that stops unfinished.
 
 Documentation rules:
 

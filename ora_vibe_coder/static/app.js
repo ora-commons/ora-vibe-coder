@@ -12,9 +12,9 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
 };
 let currentId = "", project = null, workspace = "", roles = [], projectsHome = "", projectPaths = {}, projectEntries = [], scanNotices = [], showArchived = false, stopped = false;
 let editorExpected = null, editorConflict = null;
-let selectorRescan = null;
+let selectorRescan = null, projectScanTimer = null, projectScanning = false, projectScanComplete = false, startupProject = null;
 let readerView = null;
-let hostChoices = [], browseHome = "", browseNote = "", folderChoice = null, folderState = null, folderLimit = null, fileState = null;
+let hostChoices = [], browseHome = "", browseFallback = "", browseNote = "", folderChoice = null, folderState = null, folderLimit = null, fileState = null;
 let createUnder = "", parentAutoFill = "", createCode = "", createMaterial = [];
 let lastVisibleInput = null, pendingLocal = Promise.resolve();
 let appSettings = {warn_skip_review: true, spending: "", role_defaults: {}};
@@ -201,7 +201,7 @@ function updateHost() {
 }
 async function initialize() {
   const data = await api("setup", {});
-  hostChoices = data.hosts; browseHome = data.browse_home; browseNote = data.browse_note || "";
+  hostChoices = data.hosts; browseHome = data.browse_home; browseFallback = data.browse_fallback || browseHome; browseNote = data.browse_note || "";
   appSettings = data.app_settings || appSettings;
   interviewSatisfied = Object.values(appSettings.role_defaults || {}).some(role => role?.tool);
   splitFraction = typeof data.split_fraction === "number" ? Math.min(.95, Math.max(.05, data.split_fraction)) : .42;
@@ -241,22 +241,24 @@ async function initialize() {
   $("setup").hidden = !!data.home;
   for (const id of ["new", "open"]) $(id).disabled = !data.home;
   if (!data.home) return;
+  startupProject = data.last_project ? {path: data.last_project, workspace: data.last_workspace} : null;
   await loadProjects();
-  if (data.last_project) {
-    // Restore only what discovery currently offers as active: an archived
-    // project is never silently reopened while the archive toggle is off.
-    const entry = projectEntries.find(p => p.path === data.last_project);
-    if (!entry || !entry.archived) {
-      try {
-        const opened = await api("open", {path: data.last_project});
-        await chooseProject(opened.id, data.last_workspace in workspaces ? data.last_workspace : "specification");
-        return;
-      } catch (_) { /* the saved project folder is unavailable; normal first-use flow applies */ }
-    }
+  if (!currentId && (projectScanning || scanNotices.length))
+    status("Project discovery is still checking or could not read some paths. Open shows the paths and Refresh projects retries them.", "warning");
+}
+async function browseRequest(operation, path, limit = null) {
+  try { return await api(operation, limit ? {path, limit} : {path}); }
+  catch (error) {
+    // A deliberate manual chooser retains its old home-folder fallback. No
+    // filesystem probe or fallback search is part of automatic discovery.
+    if (limit || path !== browseHome || browseFallback === path || ![400, 403].includes(error.status)) throw error;
+    const data = await api(operation, {path: browseFallback});
+    status(`Documents could not be read; browsing starts at ${browseFallback}. Project discovery stays in ${projectsHome}.`, "warning");
+    return data;
   }
 }
 async function browseFolders(path) {
-  const data = await api("folders", folderLimit ? {path, limit: folderLimit} : {path}); folderState = data;
+  const data = await browseRequest("folders", path, folderLimit); folderState = data;
   $("folder-path").value = data.path;
   $("folder-list").replaceChildren(...data.folders.map(folder => { const b = document.createElement("button"); b.textContent = `▸ ${folder.name}`; b.onclick = guard(() => browseFolders(folder.path)); return b; }));
   $("folder-note").textContent = data.limited ? "Showing the first 500 folders. Enter a location to select another." : "Only folders are listed. No project is created by browsing.";
@@ -293,7 +295,7 @@ function renderMaterialChosen() {
   syncVisibleInput();
 }
 async function browseMaterialFiles(path = browseHome) {
-  const data = await api("browse-files", {path}); fileState = data;
+  const data = await browseRequest("browse-files", path); fileState = data;
   $("file-path").value = data.path;
   $("file-location").textContent = data.path;
   $("file-list").replaceChildren(...data.entries.map(entry => { const b = document.createElement("button"); b.textContent = `${entry.directory ? "▸ " : ""}${entry.name}`; b.onclick = guard(async () => {
@@ -318,10 +320,28 @@ async function loadProjects(rescan = false) {
   roles = data.roles; projectsHome = data.home;
   projectEntries = data.projects;
   scanNotices = data.notices || [];
+  projectScanning = !!data.scanning; projectScanComplete = !!data.complete;
   projectPaths = Object.fromEntries(data.projects.map(entry => [entry.id, entry.path]));
   $("home").textContent = `Projects are discovered in: ${data.home}`;
   renderProjectOptions();
   if (!$("open-form").hidden) renderOpenList();
+  clearTimeout(projectScanTimer);
+  // Observe only the scan already in progress; this never starts a new scan.
+  if (projectScanning && !stopped) projectScanTimer = setTimeout(() => {
+    loadProjects().catch(error => status(error.message, "warning"));
+  }, 300);
+  if (startupProject && !currentId) {
+    const entry = projectEntries.find(p => p.path === startupProject.path && p.available !== false);
+    if (entry) {
+      const saved = startupProject; startupProject = null;
+      if (!entry.archived) {
+        try {
+          const opened = await api("open", {path: entry.path});
+          await chooseProject(opened.id, saved.workspace);
+        } catch (_) { /* A disappeared project remains available through deliberate Open. */ }
+      }
+    } else if (!projectScanning) startupProject = null;
+  }
 }
 function visibleProjects() { return projectEntries.filter(p => showArchived || !p.archived); }
 function renderProjectOptions() {
@@ -330,8 +350,9 @@ function renderProjectOptions() {
   // A currently open archived project stays named until the user leaves it.
   const visible = projectEntries.filter(p => showArchived || !p.archived || p.id === currentId);
   const duplicates = new Set(visible.filter((p, index) => visible.some((q, other) => other !== index && q.label === p.label)).map(p => p.label));
-  $("project").replaceChildren(new Option("Choose a project", ""), ...visible.map(p => {
-    const option = new Option(p.label + (p.archived ? " — Archived" : "") + (duplicates.has(p.label) ? ` — ${p.path}` : ""), p.id);
+  $("project").replaceChildren(new Option(projectScanning ? "Finding projects…" : !projectScanComplete && scanNotices.length ? "Choose a project — some paths unavailable" : "Choose a project", ""), ...visible.map(p => {
+    const option = new Option(p.label + (p.archived ? " — Archived" : "") + (p.available === false ? " — Unavailable; refresh to retry" : "") + (duplicates.has(p.label) ? ` — ${p.path}` : ""), p.id);
+    option.disabled = p.available === false;
     option.title = p.notice ? `${p.path} — ${p.notice}` : p.path;
     return option;
   }));
@@ -347,11 +368,14 @@ function renderOpenList() {
   const list = $("project-list");
   list.replaceChildren();
   const visible = visibleProjects();
-  if (!visible.length) list.append(Object.assign(document.createElement("p"), {textContent: `No projects with a Project.md definition were found under ${projectsHome || "the selected projects folder"}.`}));
+  if (!visible.length) list.append(Object.assign(document.createElement("p"), {textContent: projectScanComplete
+    ? `No ${showArchived ? "" : "active "}projects with a Project.md definition were found under ${projectsHome || "the selected projects folder"}.`
+    : "No readable projects are currently listed. Discovery is still running or could not read every path; see below and use Refresh projects to retry."}));
   for (const entry of visible) {
     const item = document.createElement("button");
-    item.append(Object.assign(document.createElement("span"), {className: "entry-label", textContent: entry.label + (entry.archived ? " — Archived" : "")}));
+    item.append(Object.assign(document.createElement("span"), {className: "entry-label", textContent: entry.label + (entry.archived ? " — Archived" : "") + (entry.available === false ? " — Unavailable; refresh to retry" : "")}));
     item.append(Object.assign(document.createElement("span"), {className: "entry-location", textContent: entry.notice ? `${entry.path} — ${entry.notice}` : entry.path}));
+    item.disabled = entry.available === false;
     item.onclick = guard(async () => {
       const result = await api("open", {path: entry.path});
       $("open-form").hidden = true; await loadProjects(); await chooseProject(result.id);
@@ -366,6 +390,9 @@ function statuses() {
     const s = rail.dataset.stage === "build" ? project.verification.status : project.statuses[key];
     rail.querySelector(".status-icon").textContent = s.icon;
     rail.setAttribute("aria-label", `${workspaces[rail.dataset.stage].title} — reported ${s.label}; source ${s.source}`);
+    const a = project?.assessments?.[key];
+    if (a?.approval_unknown) rail.setAttribute("aria-label", `${rail.getAttribute("aria-label")}. The approved version was not retained; its applicability is unconfirmed.`);
+    else if (a?.change?.state === "pending") rail.setAttribute("aria-label", `${rail.getAttribute("aria-label")}. Change comparison pending; approval applicability is unconfirmed.`);
     rail.title = rail.getAttribute("aria-label");
     rail.setAttribute("aria-expanded", String(workspace === rail.dataset.stage));
   }
@@ -396,43 +423,38 @@ function renderConflicts() {
   document.querySelector(".status-row").after(noteElement);
 }
 function assessmentText(a) {
-  if (a?.unreadable) return {label: "UNREADABLE", kind: "neutral", note: a.unreadable};
-  if (!a || (!a.present && !a.untouched)) return {label: "NOT REVIEWED", kind: "neutral", note: "No assessment has been recorded."};
+  if (a?.unreadable) return {label: "COULD NOT READ", kind: "working", note: a.unreadable};
+  if (!a || (!a.present && !a.untouched)) return {label: "NOT REVIEWED", kind: "neutral", note: a?.change?.reason || "No assessment has been recorded."};
   if (a.untouched) return {label: "NOT STARTED", kind: "neutral", note: "The starter template has not been filled in."};
-  if (!a.verdict || a.issues?.length) return {label: a.reason?.toLowerCase().includes("conflict") ? "CONFLICTING CONCLUSIONS" : "RECORD UNCLEAR", kind: "neutral", note: a.reason || (a.issues || []).join(" ")};
-  // The displayed verdict is binary: a current COMPLETE assessment is PASSED,
-  // an INCOMPLETE one is NOT PASSED, and none is NOT REVIEWED. The saved
-  // wording and any finding count stay in the note.
-  const upper = a.verdict.toUpperCase();
-  const kind = upper === "COMPLETE" ? "complete" : upper === "INCOMPLETE" ? "incomplete" : "neutral";
-  const label = (upper === "COMPLETE" ? "PASSED" : upper === "INCOMPLETE" ? "NOT PASSED" : upper)
-    + (a.applies === "earlier" ? " — earlier version" : "");
-  const counted = upper === "INCOMPLETE" && a.findings ? `${a.findings} noted ${a.findings === 1 ? "deficiency" : "deficiencies"}. ` : "";
-  const note = counted + (a.applies === "earlier" ? "The assessed document changed after this assessment; it applies to an earlier version."
-    : a.applies === "unconfirmed" ? "The verdict is saved, but this review does not identify which document version it assessed."
-    : a.issues.length ? a.issues.join(" ") : "Click to see the recorded assessment in the document.");
+  if (!a.verdict || a.issues?.length) return {label: "REPORT ERROR", kind: "working", note: (a.issues || []).join(" ") || a.reason || "The saved review has no clear verdict."};
+  const upper = (a.outcome || a.verdict).toUpperCase();
+  const label = upper === "COMPLETE" ? "PASSED" : upper;
+  const kind = label === "PASSED" ? "complete" : label === "NOT PASSED" ? "incomplete" : "working";
+  const note = a.applies === "earlier" ? "The saved review describes an earlier version. Its assessment and findings remain in Current review."
+    : a.change?.reason ? a.change.reason
+    : a.applies === "unconfirmed" ? "The verdict is saved; its applicability to the current document version is unconfirmed."
+    : "Click to see the recorded assessment in the document.";
   return {label, kind, note};
 }
 function reportStatusText(status, missing) {
   if (!status) return missing;
   if (status.unreadable) return "COULD NOT READ";
-  if (status.label === "Not reported") return missing === "NO RESULT" ? "RESULT UNCLEAR" : "VERDICT UNCLEAR";
-  if (status.label.startsWith("Unknown")) return status.reason?.toLowerCase().includes("conflict") ? "CONFLICTING CONCLUSIONS" : "CONCLUSION UNCLEAR";
+  if (status.label.startsWith("Unknown") || status.label === "REPORT ERROR") return "REPORT ERROR";
+  if (status.untouched) return "NOT STARTED";
+  if (status.label === "Not reported") return "VERDICT MISSING";
+  if (/^NOT PASSED — (REVIEW|REVISION) INCOMPLETE/.test(status.label)) return "INCOMPLETE";
+  if (status.label === "COMPLETE") return "PASSED";
   if (status.label.startsWith("NOT PASSED")) return "NOT PASSED";
   return status.label.toUpperCase();
 }
-// Build & Verify's verdict: the saved Verification Report gives PASSED, NOT
-// PASSED, REVIEW INCOMPLETE or NOT VERIFIED. A saved legacy combined
-// "NOT PASSED — REVIEW/REVISION INCOMPLETE" shows as REVIEW INCOMPLETE,
-// because the review did not finish.
+function verdictKind(label) {
+  return label === "PASSED" ? "complete" : label === "NOT PASSED" ? "incomplete"
+    : ["INCOMPLETE", "CHANGED", "REPORT ERROR", "VERDICT MISSING", "COULD NOT READ"].includes(label) ? "working" : "neutral";
+}
 function verificationVerdict(status, path) {
-  const kind = {positive: "complete", working: "working", attention: "incomplete"}[status?.kind] || "neutral";
   if (!path || !status) return {label: "NOT VERIFIED", kind: "neutral"};
-  if (status.unreadable) return {label: "COULD NOT READ", kind: "neutral"};
-  if (/^NOT PASSED — (REVIEW|REVISION) INCOMPLETE/.test(status.label)) return {label: "REVIEW INCOMPLETE", kind: "working"};
-  if (status.label.startsWith("NOT PASSED")) return {label: "NOT PASSED", kind: "incomplete"};
-  if (status.label.startsWith("PASSED")) return {label: "PASSED", kind: "complete"};
-  return {label: reportStatusText(status, "NOT VERIFIED"), kind};
+  const label = reportStatusText(status, "NOT VERIFIED");
+  return {label, kind: verdictKind(label)};
 }
 function showStatusExplanation(id, path, reason, evidence = []) {
   const element = $(id);
@@ -455,7 +477,7 @@ function showStatusExplanation(id, path, reason, evidence = []) {
 }
 function showReportStatus(element, report, path, missing) {
   const verdict = element.id === "assessment" ? verificationVerdict(report, path)
-    : {label: path ? reportStatusText(report, missing) : missing, kind: {positive: "complete", working: "working", attention: "incomplete"}[report?.kind] || "neutral"};
+    : {label: path ? reportStatusText(report, missing) : missing, kind: verdictKind(path ? reportStatusText(report, missing) : missing)};
   element.textContent = verdict.label;
   element.className = `assessment ${verdict.kind}`;
   element.title = path ? `${report?.unreadable || report?.literal || report?.label || "Status unavailable"}\nSource: ${path}` : missing;
@@ -483,12 +505,12 @@ function confirmImplementationBasis() {
     ["planning", "Plan", "The coding tool may make inconsistent implementation choices."]
   ]) {
     const assessment = project?.assessments?.[key];
-    if (assessment?.verdict?.toUpperCase() === "COMPLETE" && ["current", "unconfirmed"].includes(assessment.applies) && !assessment.unreadable && !assessment.issues?.length) continue;
+    if (["PASSED", "COMPLETE"].includes((assessment?.outcome || assessment?.verdict)?.toUpperCase()) && ["current", "unconfirmed"].includes(assessment.applies) && !assessment.unreadable && !assessment.issues?.length) continue;
     const state = assessment?.unreadable ? "could not be read"
       : assessment?.issues?.length ? "has an unclear review record"
       : assessment?.applies === "earlier" ? "was changed after its review"
-      : assessment?.verdict?.toUpperCase() === "INCOMPLETE" ? "was reviewed as INCOMPLETE"
-      : "has no COMPLETE review for its current version";
+      : (assessment?.outcome || assessment?.verdict) === "NOT PASSED" ? "was reviewed as NOT PASSED"
+      : "has no PASSED review for its current version";
     concerns.push(`${label} ${state}. ${consequence}`);
   }
   if (!concerns.length) return Promise.resolve(true);
@@ -521,30 +543,8 @@ function renderAssessment() {
   }
   const assessment = project?.assessments?.[config.assessment];
   let {label, kind, note} = assessmentText(assessment);
-  // An unclear current record gets one remembered read-only judgment, never a
-  // RECORD UNCLEAR display; a failed call shows a reading error.
-  if (["RECORD UNCLEAR", "CONFLICTING CONCLUSIONS"].includes(label) && assessment?.present) {
-    const id = currentId, stage = config.assessment, target = element;
-    resolveUnclearVerdict(assessment, stage).then(result => {
-      if (id !== currentId || workspace !== (stage === "specification" ? "specification" : "plan")) return;
-      if (result.state === "answered") {
-        const verdict = result.answer?.verdict === "PASSED" ? "PASSED" : "NOT PASSED";
-        target.textContent = verdict;
-        target.className = `assessment ${verdict === "PASSED" ? "complete" : "incomplete"}`;
-        target.title = `A model judgment of the unclear saved record by ${result.tool || "the Reviewer"}, remembered for this content.`;
-        showStatusExplanation("assessment-note", assessment?.path, target.title, []);
-      } else if (result.state === "error" || result.state === "failed") {
-        target.textContent = "READING ERROR";
-        target.className = "assessment neutral";
-        target.title = result.reason || "The record could not be read.";
-        showStatusExplanation("assessment-note", assessment?.path, target.title, []);
-      }
-    });
-    label = "READING…"; kind = "working";
-    note = "One brief read-only judgment of the unclear record is running; the answer is remembered for this content.";
-  }
   $("result-status-note").hidden = true;
-  showStatusExplanation("assessment-note", assessment?.path, note, assessment?.issues?.length ? assessment.evidence || [] : []);
+  showStatusExplanation("assessment-note", assessment?.path, note + (project?.plan_notice && workspace === "plan" ? " " + project.plan_notice : ""), assessment?.issues?.length ? assessment.evidence || [] : []);
   $("review-step-title").textContent = `Review the ${config.title}`;
   element.textContent = label;
   element.className = `assessment ${kind}`;
@@ -572,21 +572,17 @@ function renderAssessment() {
     event.preventDefault(); event.stopPropagation(); element.click();
   };
 }
-// Approve the Plan: greyed out until the current Plan review verdict is
-// COMPLETE, and already done when the Plan records Status: APPROVED. The
-// save behavior arrives with the phase-3 review work.
+// Approval is the user's decision, independent of the review's outcome.
 function updateApprovePlan() {
-  const button = $("approve-plan");
-  if (workspace !== "plan") { button.hidden = true; return; }
+  const button = $("approve-plan"), config = workspaces[workspace];
+  if (!config?.assessment) { button.hidden = true; return; }
   button.hidden = false;
-  const a = project?.assessments?.planning;
-  const reviewedComplete = a?.verdict?.toUpperCase() === "COMPLETE" && !a.unreadable && !a.issues?.length;
-  const approved = ["APPROVED", "Approved Implementation Plan"].includes(project?.statuses?.planning?.label);
-  button.textContent = approved ? "Plan approved" : "Approve the Plan";
-  button.disabled = approved || !reviewedComplete;
-  button.title = approved ? "The Plan already records Status: APPROVED."
-    : reviewedComplete ? "Approving saves Status: APPROVED in the Plan."
-    : "Available once the current Plan review verdict is COMPLETE.";
+  const a = project?.assessments?.[config.assessment];
+  const approved = ["APPROVED", "Approved Implementation Plan", "Approved product specification"].includes(project?.statuses?.[config.assessment]?.label);
+  button.textContent = approved && !a?.change && !a?.approval_unknown ? `${config.title} approved` : `Approve the ${config.title}`;
+  button.disabled = (approved && !a?.change && !a?.approval_unknown) || !a?.path || a?.expected == null || !!a.unreadable;
+  button.title = approved ? `The ${config.title} records status: APPROVED.`
+    : `Save your approval of the displayed ${config.title}, whatever its review says.`;
 }
 function readerDefault() {
   const config = workspaces[workspace];
@@ -620,13 +616,14 @@ async function refreshProject() {
   const refreshed = await api("project", {id});
   if (id !== currentId) return;
   project = refreshed;
+  compareChangedDocuments();
   renderProjectOptions();
   $("project-name").textContent = project.name;
   renderOverviewSources(); renderConflicts(); statuses();
-  const complete = project.programming_result?.status?.label === "COMPLETE" && project.verification?.status?.label === "PASSED";
+  const complete = ["COMPLETE", "PASSED"].includes(project.programming_result?.status?.label) && project.verification?.status?.label === "PASSED";
   $("project-completion").hidden = !complete;
   renderProjectDetailsLabel();
-  $("project-completion").title = complete ? "The selected reports say implementation COMPLETE and verification PASSED for the work they describe. This is not user approval or verification of later changes." : "";
+  $("project-completion").title = complete ? "The selected reports say programming PASSED and verification PASSED for the work they describe. This is not user approval or verification of later changes." : "";
   $("rails").hidden = false;
   $("workspace-head").hidden = false;
   if (workspace) {
@@ -731,6 +728,7 @@ function showAbsentPacket() {
 // The saved-request section of More appears whenever a request path is known.
 function renderMoreRequest() { $("more-request").hidden = !$("prepared-path").value; }
 async function chooseProject(id, preferredWorkspace) {
+  startupProject = null;
   remember(); rememberEditor(); currentId = id; project = null; workspace = "";
   renderProjectOptions();
   conversationTurns = []; reviewRuns = []; $("file-picker").hidden = true; filePickerTarget = "project";
@@ -920,6 +918,7 @@ function applyCreateUnder(path) {
 }
 function updateNewProposed() { $("new-location").textContent = `Proposed directory: ${createUnder || projectsHome}/${$("new-directory").value}`; }
 $("new").onclick = () => {
+  startupProject = null;
   applyCreateUnder(projectsHome); updateNewProposed();
   codeLine($("new-code-location"), createCode);
   renderMaterialChosen();
@@ -946,6 +945,7 @@ $("create-save").onclick = guard(async () => {
   } finally { $("create-save").disabled = false; }
 });
 $("open").onclick = guard(async () => {
+  startupProject = null;
   const data = await api("setup", {});
   renderOpenList();
   const list = $("recent-projects");
@@ -966,7 +966,9 @@ $("show-archived").onchange = () => { showArchived = $("show-archived").checked;
 $("refresh-projects").onclick = guard(async () => {
   // Rescanning preserves the selection, workspace, and unsent input; it never switches projects.
   await loadProjects(true);
-  status("Projects refreshed. Unsent input and the selected workspace are unchanged.");
+  status(projectScanning ? "Refreshing projects. Open shows paths still being checked; readable projects appear as they are found."
+    : scanNotices.length ? "Some project paths could not be read. Open shows the paths; Refresh projects retries them."
+      : "Projects refreshed. Unsent input and the selected workspace are unchanged.");
 });
 $("open-browse").onclick = guard(() => pickFolder("Choose an existing project", async path => { $("open-form").hidden = true; const result = await api("open", {path}); await loadProjects(); await chooseProject(result.id); }));
 $("document").onchange = guard(async () => { readerAnchor = $("document").value; await readDocument(); });
@@ -994,7 +996,9 @@ async function preparePurpose(purpose, instruction = null) {
   try {
     const result = await api("prepare", {id, stage: purpose, input: instruction === null ? composerInstruction() : instruction, destination: d.destination,
       context: {material: composerMaterial(selectedWorkspace, id)},
+      upstream: (() => { const a = project?.assessments?.[purpose === "create-plan" ? "specification" : purpose === "implement-plan" ? "planning" : ""]; return a?.path && a.expected != null ? {path: a.path, expected: a.expected} : null; })(),
       expected: d.packetPath === path ? d.packet : null});
+    if (id === currentId && result.file_state) lastFiles = result.file_state;
     observePacket(id, result.path, result.text);
     d.packet = result.text; d.packetPurpose = purpose; d.packetDestination = submittedDestination; d.packetPath = result.path; d.packetCurrentOnly = false; d.recoveryPacket = null;
     if (instruction === null) d.saved = submitted;
@@ -1053,14 +1057,16 @@ $("approve-plan").onclick = local(async () => {
   const id = currentId;
   $("approve-plan").disabled = true;
   try {
-    const result = await api("approve-plan", {id});
+    const config = workspaces[workspace], assessment = project?.assessments?.[config.assessment];
+    const result = await api("approve-document", {id, stage: config.assessment, expected: assessment.expected, document: assessment.path});
     if (id !== currentId) return;
+    if (result.file_state) lastFiles = result.file_state;
     // The confirmation and the refreshed Plan appear only after the save
     // succeeded, which the server has confirmed by reading the file back.
     await refreshProject();
     if (id !== currentId) return;
     await readDocument();
-    status(`Plan approved: Status: APPROVED saved in ${String(result.plan).split("/").pop()}. The rest of the Plan and its review are unchanged; approval does not start implementation.`);
+    status(`${config.title} approved: status: APPROVED saved in ${String(result.document).split("/").pop()}. Approval leaves the review unchanged.${result.warning ? " " + result.warning : ""}`);
   } finally { if (id === currentId) updateApprovePlan(); }
 });
 $("copy").onclick = local(async () => {
@@ -1236,6 +1242,7 @@ $("stop").onclick = guard(async () => {
   try { result = await api("stop", {}); }
   catch (error) { status(error.message); return; }
   stopped = true;
+  clearTimeout(projectScanTimer);
   stopPolling();
   if (result.interrupted) {
     status(`Vibe is closing: ${result.note}`);
@@ -1548,7 +1555,8 @@ $("message").addEventListener("keydown", event => {
   }
 });
 function updateSendState() {
-  const busy = (!!lastOperation && ["starting", "running"].includes(lastOperation.state))
+  const busy = (!!lastOperation && ["starting", "running"].includes(lastOperation.state)
+                && !lastOperation.stage?.startsWith("materiality-"))
     || (runActive && ["starting", "running"].includes(runActive.state));
   if (runActive) {
     $("send").disabled = runActive.state !== "paused-question";
@@ -2233,7 +2241,7 @@ function selectedHost() { return hostChoices.find(h => h.id === selectedToolId()
 function buildNextAction() {
   if (workspace !== "build") return "correction";
   const verdict = verificationVerdict(project?.verification?.status, project?.verification?.path);
-  return verdict.label === "REVIEW INCOMPLETE" ? "verification" : "correction";
+  return verdict.label === "INCOMPLETE" ? "verification" : "correction";
 }
 function updateBuildNextStep() {
   const unfinished = buildNextAction() === "verification";
@@ -2306,6 +2314,9 @@ async function deliverStep(step, action = null, note = "") {
     if (host && host.conversation === false && !host.detected) action = "copy";
   }
   const id = currentId, selectedWorkspace = workspace;
+  const upstreamStage = step === "create-plan" ? "specification" : step === "implement-plan" ? "planning" : null;
+  const observedUpstream = upstreamStage ? project?.assessments?.[upstreamStage] : null;
+  const upstream = observedUpstream?.path && observedUpstream.expected != null ? {path: observedUpstream.path, expected: observedUpstream.expected} : null;
   const text = $("message").value.trim();
   // The request carries the visible unsent step-4 text and the currently
   // attached files: project material plus this message's file choices.
@@ -2332,12 +2343,13 @@ async function deliverStep(step, action = null, note = "") {
       files: filePaths,
       images: action === "send" ? submittedAttachments.map(item => ({name: item.name, data: item.data}))
                                 : submittedAttachments.map(item => ({name: item.name})),
-      verifier});
+      verifier, upstream});
   } catch (error) {
     if (id === currentId) status(`${error.message} Your unsent text and files are retained; nothing was sent.`);
     return;
   }
   if (id !== currentId) return;
+  if (result.file_state) { lastFiles = result.file_state; await refreshProject(); }
   if (result.path) { $("prepared-path").value = result.path; renderMoreRequest(); }
   if (action === "copy") {
     try {
@@ -2459,7 +2471,7 @@ function sortingTrigger() {
   }
   const key = workspace === "specification" ? "specification" : "planning";
   const assessment = project?.assessments?.[key];
-  if (assessment?.verdict === "INCOMPLETE" && !assessment.issues?.length && !assessment.unreadable
+  if ((assessment?.outcome || assessment?.verdict) === "NOT PASSED" && !assessment.issues?.length && !assessment.unreadable
       && ["current", "unconfirmed"].includes(assessment.applies)) return {stage: key, key: `${assessment.path}:${assessment.verdict}:${assessment.applies}`};
   return null;
 }
@@ -2580,6 +2592,47 @@ function resolveUnclearVerdict(assessment, stageKey, attempt = 0) {
       return new Promise(resolve => setTimeout(
         () => resolve(resolveUnclearVerdict(assessment, stageKey, attempt + 1)), 2500));
     });
+}
+
+const materialityChecks = new Map();
+function compareChangedDocuments() {
+  // An optional comparison must not compete with a deliberate turn or an
+  // automatic run. A foreground request can also safely retire a comparison
+  // already running when the user chooses to proceed.
+  if (runActive || (lastOperation && ["starting", "running"].includes(lastOperation.state)
+                    && !lastOperation.stage?.startsWith("materiality-"))) return;
+  const id = currentId;
+  for (const stage of ["specification", "planning"]) {
+    const change = project?.assessments?.[stage]?.change;
+    if (change?.state !== "pending") continue;
+    const remembered = materialityChecks.get(`${id}:${change.key}`);
+    if (remembered) {
+      if (remembered.state === "failed" || remembered.state === "error") {
+        change.state = "failed";
+        change.reason = `The change comparison could not finish: ${remembered.reason || "No supported conclusion."} Approval applicability remains unconfirmed. You can still approve or advance.`;
+      }
+      continue;
+    }
+    const key = `${id}:${change.key}`, tool = selectedToolId();
+    if (!tool) continue;
+    materialityChecks.set(key, "working");
+    const inspect = async () => {
+      if (id !== currentId) return;
+      let result;
+      try { result = await api("materiality", {id, stage, tool}); }
+      catch (error) { result = {state: "failed", reason: error.message}; }
+      if (id !== currentId) return;
+      if (result.state === "working") { setTimeout(inspect, 2500); return; }
+      materialityChecks.set(key, result);
+      if (result.state === "answered") await refreshProject();
+      else {
+        const a = project?.assessments?.[stage];
+        if (a?.change) a.change.reason = `The change comparison could not finish: ${result.reason || "No supported conclusion."} Approval applicability remains unconfirmed. You can still approve or advance.`;
+        renderAssessment();
+      }
+    };
+    inspect();
+  }
 }
 
 // --- Run to Completion -------------------------------------------------------
@@ -2817,13 +2870,13 @@ $("run-completion").onclick = guard(async () => {
   // Settings switch or this run's hide-advisory preference removes it.
   const spec = project?.assessments?.specification, plan = project?.assessments?.planning;
   const missing = [ ["Specification", spec], ["Plan", plan] ].filter(([_, a]) =>
-    !(a?.verdict === "COMPLETE" && ["current", "unconfirmed"].includes(a.applies) && !a.issues?.length && !a.unreadable));
+    !(["COMPLETE", "PASSED"].includes(a?.outcome || a?.verdict) && ["current", "unconfirmed"].includes(a.applies) && !a.issues?.length && !a.unreadable));
   if (missing.length && appSettings.warn_skip_review !== false && !config.hide_advisory) {
     const proceed = await new Promise(resolve => {
       const dialog = $("run-warning");
       $("run-warning-text").replaceChildren(...missing.map(([label, _]) => {
         const line = document.createElement("p");
-        line.textContent = `The ${label} has no current COMPLETE review; the run will skip that review.`;
+        line.textContent = `The ${label} has no current PASSED review; the run will skip that review.`;
         return line;
       }));
       const back = $("run-warning-back"), cont = $("run-warning-continue");

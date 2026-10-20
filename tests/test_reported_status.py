@@ -52,20 +52,47 @@ class ReportedStatus(unittest.TestCase):
                     self.assertEqual(self.status(stage, text)["label"], "Not reported")
         self.assertEqual(self.status("specification", "Status: DRAFT\n\n    Status: APPROVED")["label"], "DRAFT")
 
-    def test_yaml_frontmatter_does_not_supply_or_hide_body_status(self):
-        for stage, field, approved in (("specification", "Status", "APPROVED"), ("planning", "Status", "APPROVED"),
-                                       ("programming", "Programming", "COMPLETE"), ("verification", "Verification", "PASSED")):
-            for newline in ("\n", "\r\n", "\r"):
-                for closing in ("---", "..."):
-                    with self.subTest(stage=stage, newline=newline, closing=closing):
-                        frontmatter = f"---\n{field}: {approved}\ntags: [project]\n{closing}\n\n".replace("\n", newline)
-                        body = f"# Current document\n\n{field}: IN PROGRESS\n\n## Body\n{field}: {approved}\n".replace("\n", newline)
-                        self.assertEqual(self.status(stage, frontmatter + body)["label"], "IN PROGRESS")
-                        self.assertEqual(self.status(stage, frontmatter + body.replace("IN PROGRESS", approved))["kind"], "positive")
-                        self.assertEqual(self.status(stage, frontmatter)["label"], "Not reported")
-                        self.assertEqual(self.status(stage, frontmatter + f"## Example\n{field}: {approved}")["label"], "Not reported")
-                        self.assertEqual(self.status(stage, frontmatter + f"{field}: {approved}\n{field}: IN PROGRESS")["kind"], "neutral")
-            self.assertEqual(self.status(stage, f"---\n{field}: {approved}\n")["label"], "Not reported")
+    def test_canonical_yaml_and_vault_metadata_are_read_without_rewriting(self):
+        for stage, value in (("specification", "APPROVED"), ("planning", "AWAITING APPROVAL"),
+                             ("programming", "PASSED"), ("verification", "INCOMPLETE")):
+            text = f"---\nnexus:\n  - ora\ntags: [active]\nstatus: {value}\n---\n# Document\n\nContent.\n"
+            self.assertEqual(reported_status(stage, text, "source", field="Status")["label"], value)
+        for text in ("---\nstatus: PASSED\nstatus: PASSED\n---\n", "---\nstatus: mystery\n---\n",
+                     "---\nstatus: PASSED\n", "---\nstatus PASSED\n---\n",
+                     '---\nstatus: PASSED\nowner: "unclosed\n---\n',
+                     "---\nstatus: PASSED\ntags: [unclosed\n---\n",
+                     "---\nstatus: PASSED\n  nested: invalid\n---\n",
+                     "---\nstatus: PASSED\nowner: invalid: scalar\n---\n"):
+            self.assertFalse(reported_status("programming", text, "source", field="Status")["label"] == "PASSED")
+        for review in ("PASSED", "NOT PASSED", "INCOMPLETE", "CHANGED"):
+            text = f"---\nstatus: APPROVED\nreview: {review}\n---\n# Specification\n\nBuild useful behavior.\n"
+            facts = assessment_facts("specification", text)
+            self.assertEqual(facts["outcome"], review)
+            self.assertFalse(facts["issues"])
+        from ora_vibe_coder.project import not_started
+        recorded = ("# Document\n\nvibe_document: specification\nStatus: DRAFT\nReview:\n"
+                    "Date: October 20\n\n## Requirements\n")
+        self.assertTrue(not_started(recorded))
+        for content in ("Summary: Implemented record export.", "**Summary:** Implemented record export.",
+                        "Requirements: Preserve all records.", "Approach: Reuse the existing exporter."):
+            with self.subTest(opening_content=content):
+                self.assertFalse(not_started(f"# Document\n\n{content}\n"))
+                self.assertFalse(not_started(recorded.replace("\n## Requirements", f"\n{content}\n\n## Requirements")))
+        for empty in ("", "null", "Null", "NULL", "~", "null # unset"):
+            self.assertFalse(assessment_facts("specification", f"---\nstatus: DRAFT\nreview: {empty}\n---\n# Specification\n")["present"])
+            for stage, field in (("programming", "Status"), ("verification", "Verdict")):
+                blank = f"---\nstatus: {empty}\nreview: null\n---\n# Report\n\n## Findings\n"
+                self.assertEqual(reported_status(stage, blank, "source", field=field)["label"], "Not reported")
+                self.assertTrue(not_started(blank))
+                substantive = blank + "\nRequired evidence is missing.\n"
+                self.assertFalse(not_started(substantive))
+                self.assertEqual(reported_status(stage, substantive, "source", field=field)["label"], "Not reported")
+        for invalid in ('"null"', "'~'", "arbitrary", "\nstatus:", "\n  verdict: PASSED"):
+            text = f"---\nstatus: {invalid}\n---\n# Report\n\n## Findings\n"
+            for stage in ("programming", "verification"):
+                self.assertTrue(reported_status(stage, text, "source", field="Status")["label"].startswith("Unknown"), text)
+        for record in ("review: PASSED\nreview: PASSED", "review: arbitrary", 'review: "null"', "review:\n  verdict: PASSED"):
+            self.assertTrue(assessment_facts("planning", f"---\n{record}\n---\n# Plan\n")["issues"])
 
     def test_verification_only_reads_own_overview_field_not_prior_report(self):
         # The saved Verification Report governs the displayed verdict; the
@@ -145,7 +172,7 @@ class ReportedStatus(unittest.TestCase):
         changed = assessed.replace("The product behaves.", "The product behaves differently.")
         later = assessment_facts("specification", changed)
         self.assertEqual(later["verdict"], "COMPLETE")
-        self.assertEqual(later["applies"], "earlier")
+        self.assertEqual(later["applies"], "unconfirmed")
         self.assertEqual(later["basis"], own_basis)
         # INCOMPLETE counts its actual noted deficiencies; a missing list is an
         # unknown count, never zero.
@@ -185,7 +212,7 @@ class ReportedStatus(unittest.TestCase):
             with self.subTest(stage=stage):
                 facts = assessment_facts(stage, explanatory)
                 self.assertEqual((facts["verdict"], facts["applies"], facts["issues"]), ("COMPLETE", "current", []))
-                self.assertEqual(assessment_facts(stage, explanatory.replace("The intended work is defined.", "The work changed."))["applies"], "earlier")
+                self.assertEqual(assessment_facts(stage, explanatory.replace("The intended work is defined.", "The work changed."))["applies"], "unconfirmed")
                 duplicate = explanatory.replace(f"`{basis}`", f"`{basis}` and `{basis}`")
                 self.assertTrue(assessment_facts(stage, duplicate)["issues"])
                 no_algorithm_name = explanatory.replace("SHA-256 content hash", "unidentified hash")
@@ -203,7 +230,7 @@ class ReportedStatus(unittest.TestCase):
                 self.assertEqual((facts["verdict"], facts["applies"], facts["issues"]),
                                  ("COMPLETE", "current", []))
                 changed = reviewed.replace("Build the current work.", "Build different work.")
-                self.assertEqual(assessment_facts(stage, changed)["applies"], "earlier")
+                self.assertEqual(assessment_facts(stage, changed)["applies"], "unconfirmed")
                 conflicting = reviewed.replace(f"`{basis}`", f"`{basis}` and `{'a' * 64}`")
                 self.assertTrue(assessment_facts(stage, conflicting)["issues"])
 
@@ -248,6 +275,14 @@ class ReportedStatus(unittest.TestCase):
                 self.assertIn(label, result["evidence"][0])
             self.assertEqual(read_conclusion(stage, f"## Current result\n\n{word}\n")["label"], word)
             self.assertEqual(read_conclusion(stage, f"Status: {word}\nVerdict: {word}.\n")["label"], word)
+            for body in ("## Current outcome\nVerdict: NOT PASSED\n",
+                         "## Current outcome\nVerdict: PASSED — but required checks failed.\n",
+                         "## Current outcome\nPASSED\n\nHowever the export is unfinished.\n"):
+                canonical = "---\nstatus: PASSED\n---\n# Report\n\n" + body
+                self.assertEqual(read_conclusion(stage, canonical)["label"], "")
+                self.assertNotEqual(reported_status(stage, canonical, "report", field="Status")["kind"], "positive")
+            canonical = f"---\nstatus: PASSED\n---\n# Report\n\n## Current outcome\nVerdict: {word}\n\n## Earlier review\nVerdict: NOT PASSED\n"
+            self.assertEqual(read_conclusion(stage, canonical)["label"], "PASSED")
             for text in (f"**Status: {word}.** But two checks failed.",
                          f"Status: {word}\n\nBut the export is unfinished.",
                          f"Status: {word}\n\n## Current result\nStatus: INCOMPLETE",
@@ -276,6 +311,13 @@ class ReportedStatus(unittest.TestCase):
             self.assertFalse(assessment_facts(stage, example)["present"])
             conflict = "# Plan\n\n## Current review\nVerdict: PASSED\nStatus: INCOMPLETE\n"
             self.assertTrue(assessment_facts(stage, conflict)["issues"])
+            for body in ("Verdict: PASSED\nStatus: INCOMPLETE\n",
+                         "Verdict: PASSED — but required decisions are missing.\n",
+                         "Verdict: PASSED\n\nThe review failed.\n",
+                         "Verdict: PASSED\n\nHowever the delivery choice is unfinished.\n"):
+                canonical = "---\nstatus: APPROVED\nreview: PASSED\n---\n# Document\n\n## Current review\n" + body
+                facts = assessment_facts(stage, canonical)
+                self.assertTrue(facts["issues"], body)
         old_report = "Verdict: PASSED\n\n## Readiness\nThis is the current independent verdict for revision `38a5ceb5980868d14c48a2c11b4b0855edb5ce73`."
         self.assertIn("38a5ceb", reported_status("verification", old_report, "report", field="Verdict")["basis_note"])
 
@@ -296,11 +338,86 @@ class ReportedStatus(unittest.TestCase):
         self.assertEqual((facts["verdict"], facts["applies"]), ("COMPLETE", "current"))
         self.assertIn("recording details", facts["reason"])
         substantive = reviewed.replace("Keep the user's work.", "Delete the user's work.")
-        self.assertEqual(assessment_facts("specification", substantive, [document])["applies"], "earlier")
+        self.assertEqual(assessment_facts("specification", substantive, [document])["applies"], "unconfirmed")
         self.assertEqual(assessment_facts("specification", reviewed)["applies"], "unconfirmed")
         modern = document + f"\n## Current review\nVerdict: COMPLETE\nBasis: {review_basis(document)}\nBasis format: content-v2\n"
         self.assertEqual(assessment_facts("specification", modern)["applies"], "current")
-        self.assertEqual(assessment_facts("specification", modern.replace("Keep the user's work.", "Delete it."))["applies"], "earlier")
+        self.assertEqual(assessment_facts("specification", modern.replace("Keep the user's work.", "Delete it."))["applies"], "unconfirmed")
+
+    def test_explicit_current_legacy_reports_do_not_read_historical_failures_as_current(self):
+        result = "Programming: COMPLETE — This revision replaces the earlier INCOMPLETE result.\n"
+        self.assertEqual(read_conclusion("programming", result)["label"], "COMPLETE")
+        report = "# Verification Report\n\n> **Current report: round 2 — PASSED**\n\n**PASSED**\n\n## Round 1 — historical\nNOT PASSED\n"
+        self.assertEqual(reported_verdict(report), "PASSED")
+        report = "# Report\n\n**Current verdict (round 3, 19 October 2026): PASSED.** Current scope passed.\n\n## Round 3 — current report (verbatim)\nPASSED\n"
+        self.assertEqual(reported_verdict(report), "PASSED")
+        self.assertEqual(reported_verdict("# Report\n\n**Current verdict (round 3): PASSED.** Current scope passed.\n"), "PASSED")
+        # A faithful small legacy opening: older failed rounds and a separate
+        # live-answer acceptance checkpoint do not retract the current pass.
+        scoped = ("# Verification Report\n\n**Current verdict (round 3, 19 October 2026): PASSED.** "
+                  "Candidate: revision abc1234. Round 1 returned NOT PASSED (a defect); "
+                  "both findings were corrected and confirmed resolved in round 2; "
+                  "round 3 resolved the one remaining evidence gap (the supplied check output showed 8 passed). "
+                  "The verdict accepts the reviewed implementation; it does not establish the user's acceptance "
+                  "of the flagged live answer (the user's checkpoint, still pending at save time).\n\n"
+                  "## Round 3 — current report (verbatim)\n\nPASSED\n\n"
+                  "## Round 1 — history\n\nNOT PASSED\n")
+        self.assertEqual(reported_verdict(scoped), "PASSED")
+        for retraction in ("But the current required check failed.",
+                           "However the current implementation is unfinished.",
+                           "Round 3 returned NOT PASSED.",
+                           "Round 1 returned NOT PASSED, but the current privacy check is still failing.",
+                           "Round 1 returned NOT PASSED and current required checks remain unfinished.",
+                           "It does not establish the user's acceptance of the live answer because current export checks failed."):
+            current = scoped.replace("Candidate: revision abc1234.", retraction)
+            self.assertNotEqual(reported_verdict(current), "PASSED", retraction)
+        acceptance_test = "Current verdict (round 3): PASSED. User acceptance tests are still pending.\n"
+        self.assertNotEqual(reported_verdict(acceptance_test), "PASSED")
+        for continuing in ("Round 1 returned NOT PASSED for a defect that remains unresolved.",
+                           "Round 2 returned INCOMPLETE because required checks remain unfinished."):
+            report = "Current verdict (round 3): PASSED. " + continuing
+            self.assertNotEqual(reported_verdict(report), "PASSED", continuing)
+        duplicated = reported_status("programming", "Status: PASSED\nStatus: PASSED\n", "result", field="Status")
+        self.assertNotEqual(duplicated["kind"], "positive")
+        self.assertIn("Duplicate", duplicated["reason"])
+        review = "# Specification\n\n## Current review\nVerdict: COMPLETE — this does not verify working software.\n"
+        self.assertEqual(assessment_facts("specification", review)["outcome"], "PASSED")
+        misleading = "Status: PASSED — This report supersedes the earlier report; required checks remain unfinished."
+        self.assertNotEqual(read_conclusion("verification", misleading)["label"], "PASSED")
+        misleading = "Status: COMPLETE — Project.md Programming stays IN PROGRESS for later scope, but current required checks remain unfinished."
+        self.assertNotEqual(read_conclusion("programming", misleading)["label"], "COMPLETE")
+        legacy = "## Current review\nVerdict: INCOMPLETE\n\n- The delivery requirement is missing.\n"
+        self.assertEqual(assessment_facts("planning", legacy)["outcome"], "NOT PASSED")
+        canonical = "---\nreview: INCOMPLETE\n---\n# Plan\n"
+        self.assertEqual(assessment_facts("planning", canonical)["outcome"], "INCOMPLETE")
+
+    def test_representative_invented_programming_results_preserve_scoped_success_and_caveats(self):
+        paragraphs = [
+            ("Programming: COMPLETE — 2031-04-12. Delivery checks D1–D3 confirmed DEMO-410's handoff: "
+             "**Cedar Desk 2.7.1** was released (tag `v2.7.1` → public main "
+             "`0123456789abcdef0123456789abcdef01234567`, archive `cedar-desk-2.7.1.zip` "
+             "sha-256 `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`), "
+             "independently verified PASSED by a fresh reviewer in round 5, with no material findings. "
+             "The assignment covered release evidence and delivery records only; it required no application edits. "
+             "This revision replaces the earlier INCOMPLETE result, which awaited DEMO-410's round-2 review "
+             "and worktree cleanup."),
+            ("Status: COMPLETE — The first delivery was implemented, independently reviewed, corrected, "
+             "and verified (review round 4: PASSED), then merged and installed in the running Cedar Desk "
+             "workspace; its records are saved and task-owned files removed. A separate acceptance decision "
+             "is Morgan's to make: whether the detailed mode's flagged sample answer meets the Specification's "
+             "human judgement criterion. The overall project closes after Morgan records that judgement."),
+            ("Status: COMPLETE — The Plan's two assigned deliveries are merged to the application and document "
+             "repositories and verified. Delivery A adds library folders and document handling; Delivery B adds "
+             "exports plus move, restore, and removal actions. Both are available in the running Cedar Desk "
+             "workspace and its document store. A third milestone is reserved for later planning after DEMO-275 "
+             "connects activity messages to move actions; Project.md's Programming field stays IN PROGRESS "
+             "for that remaining part, as the Plan specifies."),
+        ]
+        for paragraph in paragraphs:
+            with self.subTest(project=paragraph[:90]):
+                result = read_conclusion("programming", paragraph)
+                self.assertEqual(result["label"], "COMPLETE")
+                self.assertEqual(result["evidence"], [paragraph])
 
 
 if __name__ == "__main__":

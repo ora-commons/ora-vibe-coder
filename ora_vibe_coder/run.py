@@ -23,7 +23,7 @@ from . import conversation
 from .handoff import prepare_request, quoted
 from .hosts import HOSTS as TOOL_LABELS
 from .project import ProjectError, not_started, read_text
-from .status import reported_status, review_basis
+from .status import reported_status, review_basis, canonical_verdict
 
 # The route, in order. "correction" returns to "verification".
 ROUTE = ("specification", "planning", "build", "verification")
@@ -133,7 +133,7 @@ def build_input(step, project, user_text="", verifier=None, extra=()):
     return "\n\n".join(parts)
 
 
-def step_request(project, step, user_text, destination, material=(), verifier=None, extra=()):
+def step_request(project, step, user_text, destination, material=(), verifier=None, extra=(), supplied_documents=None):
     """One complete step request, shared by the manual buttons and the run.
 
     Returns the full prepared packet text. Ordinary requests are saved as
@@ -142,7 +142,7 @@ def step_request(project, step, user_text, destination, material=(), verifier=No
     """
     stage = STEP_STAGE[step]
     return prepare_request(project, stage, build_input(step, project, user_text, verifier, extra),
-                           destination, list(material or []))
+                           destination, list(material or []), supplied_documents=supplied_documents)
 
 
 # --- Resolving each assignment's tool and model -------------------------------
@@ -194,7 +194,7 @@ def unsupported_roles(config, entry, step3_tool, defaults):
 def verification_verdict(text):
     """PASSED, NOT PASSED, REVIEW INCOMPLETE — or '' when unreadable."""
     label = reported_status("verification", text or "", "", field="Verdict")["label"]
-    if label.startswith("NOT PASSED — REVIEW INCOMPLETE") or label.startswith("NOT PASSED — REVISION INCOMPLETE"):
+    if label == "INCOMPLETE" or label.startswith("NOT PASSED — REVIEW INCOMPLETE") or label.startswith("NOT PASSED — REVISION INCOMPLETE"):
         return "REVIEW INCOMPLETE"
     if label.startswith("NOT PASSED"):
         return "NOT PASSED"
@@ -515,9 +515,11 @@ class RunDriver:
         files = self.brief_files if self._brief_pending() else []
         self.step_requested = model_label(tool, model, effort)
         try:
+            supplied_documents = self.project.approve_transition(self.step)
             self.handle = conversation.start_turn(
                 self.registry, self.project, tool, STEP_STAGE[self.step], text, images, files,
-                run_fields={"Run": self.run, "Run-Step": self.step}, model=model, effort=effort)
+                run_fields={"Run": self.run, "Run-Step": self.step}, model=model, effort=effort,
+                supplied_documents=supplied_documents)
         except (ProjectError, OSError) as error:
             self._pause_failure(f"The step could not start: {error} Fix it and resume, or stop the run. "
                                 "Copy request under the run banner can deliver this step manually.")

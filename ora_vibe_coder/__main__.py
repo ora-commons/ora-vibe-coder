@@ -62,15 +62,8 @@ def main():
                 native_alert(message)
             return
     if home is None:
-        documents = documents_location()
-        if documents is None or not os.access(documents, os.R_OK):
-            message = ("Ora Vibe Coder could not start because your Documents folder is not available; "
-                       "open it again once Documents exists and can be read, and know that no files were changed.")
-            print(message, flush=True)
-            if args.wrapper:
-                native_alert(message)
-            return
-        home = documents
+        # Do not probe a cloud-backed Documents path before opening the UI.
+        home = documents_location()
     lock = AppLock(settings.path.with_name("app.lock"))
     try:
         lock.__enter__()
@@ -90,6 +83,7 @@ def main():
             native_alert(message)
         lock.__exit__()
         return
+    server = None
     try:
         server = LocalServer(home, settings=settings)
         import json
@@ -102,6 +96,8 @@ def main():
         if args.wrapper:
             native_alert(message)
     finally:
+        if server is not None:
+            server.server_close()
         running.unlink(missing_ok=True)
         lock.__exit__()
 

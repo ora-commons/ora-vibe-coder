@@ -218,7 +218,7 @@ class ProjectFiles(unittest.TestCase):
         self.assertEqual((assessment["verdict"], assessment["applies"]), ("COMPLETE", "current"))
         self.assertEqual(path.read_text(), before)  # No repair or restamping of the user's document.
         path.write_text(current.replace("Keep the work.", "Change the work."))
-        self.assertEqual(project.snapshot()["assessments"]["specification"]["applies"], "earlier")
+        self.assertEqual(project.snapshot()["assessments"]["specification"]["applies"], "unconfirmed")
 
     def test_collisions_aliases_traversal_and_explicit_external_selection(self):
         project = self.project()
@@ -275,7 +275,17 @@ class ProjectFiles(unittest.TestCase):
         self.addCleanup(os.chmod, locked / "Project.md", 0o644)
         readable = os.access(locked / "Project.md", os.R_OK)
 
+        # A linked directory cannot import projects from outside the boundary;
+        # retained .vibe packets must not become projects either.
+        outside_link = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, outside_link)
+        (outside_link / "Project.md").write_text("Name: Outside linked project\n", encoding="utf-8")
+        (home / "linked directory").symlink_to(outside_link, target_is_directory=True)
+        retained = home / ".vibe" / "saved packet"
+        retained.mkdir(parents=True)
+        (retained / "Project.md").write_text("Name: Retained packet\n", encoding="utf-8")
         store = ProjectStore(home)
+        self.addCleanup(store.close)
         entries = {entry["path"]: entry for entry in store.list(include_archived=True)}
         names = {entry["name"]: entry for entry in entries.values()}
         self.assertIn("Documents Root", names)   # Directly in the discovery root.
@@ -283,6 +293,8 @@ class ProjectFiles(unittest.TestCase):
         self.assertIn("Beneath", names)          # Discovery continues beneath archived parents.
         self.assertNotIn(str(oversize), entries)  # Oversize definition: noticed, not listed.
         self.assertNotIn(str(linked), entries)    # Linked definition: noticed, not listed.
+        self.assertNotIn("Outside linked project", names)
+        self.assertNotIn("Retained packet", names)
         self.assertTrue(any("could not be read" in notice for notice in store.scan_notices))
         self.assertTrue(any("symbolic link" in notice for notice in store.scan_notices))
         if readable:  # Running as root cannot simulate an unreadable file.
@@ -450,6 +462,169 @@ class ProjectFiles(unittest.TestCase):
         self.assertIn("Programming: COMPLETE", final)
         self.assertIn("Verification: NOT PASSED", final)
         self.assertIn("- Plan: source.md", final)
+
+    def test_approval_material_change_and_fresh_review_are_independent(self):
+        from ora_vibe_coder.status import assessment_facts, review_basis
+        project = self.project()
+        document = project.root / "Specification.md"
+        # Deliberately supplying even an untouched/empty upstream document is
+        # approval; its reading state and its review do not veto the action.
+        template = document.read_text()
+        supplied = project.approve_transition("create-plan", {"expected": template, "path": str(document)})
+        self.assertIn("status: APPROVED", supplied["Specification"]["text"])
+        blank_plan = project.root / "Plan.md"
+        blank_plan.write_text("")
+        supplied = project.approve_transition("implement-plan", {"expected": "", "path": str(blank_plan)})
+        self.assertIn("status: APPROVED", supplied["Plan"]["text"])
+        self.assertNotIn("review: PASSED", supplied["Plan"]["text"])
+        initial = "---\nnexus:\n  - ora\nstatus: AWAITING APPROVAL\nreview: NOT PASSED\n---\n# Specification\n\n## Requirements\nKeep records for 30 days.\n\n## Current review\nVerdict: NOT PASSED\n\n- Delivery is unclear.\n"
+        document.write_text(initial)
+        saved, warning = project.approve_document("specification", initial, str(document))
+        self.assertFalse(warning)
+        self.assertIn("status: APPROVED", saved["text"])
+        self.assertIn("review: NOT PASSED", saved["text"])
+        self.assertIn("nexus:\n  - ora", saved["text"])
+        # Approval is bound to displayed content, and survives reopening.
+        from ora_vibe_coder.project import Project, Conflict
+        reopened = Project(project.root)
+        self.assertIsNotNone(reopened._approved_document("Specification", str(document)))
+        with self.assertRaises(Conflict):
+            reopened.approve_document("specification", initial, str(document))
+        cosmetic = saved["text"].replace("## Requirements", "## **Requirements**").replace("30 days.", "30 days.  ")
+        document.write_text(cosmetic)
+        self.assertIsNone(reopened.material_change("specification"))
+        renamed = saved["text"].replace("## Requirements", "## Expected behavior")
+        document.write_text(renamed)
+        uncertain = reopened.material_change("specification")
+        self.assertEqual(uncertain["state"], "pending")
+        self.assertIn("status: APPROVED", document.read_text())
+        self.assertNotIn("review: CHANGED", document.read_text())
+        material = saved["text"].replace("30 days", "90 days")
+        document.write_text(material)
+        pending = reopened.material_change("specification")
+        self.assertEqual(pending["state"], "pending")
+        self.assertIn("status: APPROVED", document.read_text())
+        answers = {f"specification:{pending['key']}": {"purpose": "materiality", "answer": {
+            "materiality": "MATERIAL", "reason": "The required retention period increased from 30 to 90 days."}}}
+        semantic = patch("ora_vibe_coder.conversation.read_aux_answers", return_value=answers)
+        semantic.start()
+        self.addCleanup(semantic.stop)
+        snapshot = reopened.snapshot()
+        changed = document.read_text()
+        self.assertIn("status: AWAITING APPROVAL", changed)
+        self.assertIn("review: CHANGED", changed)
+        self.assertIn("- Delivery is unclear.", changed)
+        # An external edit cannot discard the prior actual assessment by
+        # replacing its prose while changing the requirements.
+        document.write_text(changed.replace("- Delivery is unclear.", "- Different feedback saved by the editor."))
+        reopened.snapshot()
+        changed = document.read_text()
+        self.assertIn("- Delivery is unclear.", changed)
+        self.assertIn("- Different feedback saved by the editor.", changed)
+        self.assertEqual(changed.count("## Current review"), 1)
+        self.assertEqual(snapshot["assessments"]["specification"]["outcome"], "CHANGED")
+        self.assertIn("Plan may need updating", snapshot["plan_notice"])
+        # Fresh review applies to the edited version while approval stays pending.
+        fresh = changed.replace("review: CHANGED", "review: PASSED").replace("Verdict: NOT PASSED", "Verdict: PASSED")
+        fresh += ""  # The review records its actual current content basis.
+        fresh = fresh.replace("Verdict: PASSED", "Verdict: PASSED\nBasis: " + review_basis(fresh))
+        document.write_text(fresh)
+        self.assertEqual(reopened.snapshot()["assessments"]["specification"]["outcome"], "PASSED")
+        self.assertIn("status: AWAITING APPROVAL", document.read_text())
+        approved = reopened.approve_transition("create-plan")["Specification"]
+        self.assertIn("status: APPROVED", approved["text"])
+        self.assertIn("review: PASSED", approved["text"])
+        # A later approval cannot make an older reviewed version current.
+        old_reviewed = approved["text"]
+        changed_again = old_reviewed.replace("90 days", "180 days")
+        document.write_text(changed_again)
+        reopened.approve_document("specification", changed_again, str(document))
+        # Look up the actual earlier approval note; the latest approval is a
+        # different version and cannot stand in for the reviewed content.
+        reopened = Project(project.root)
+        pending = reopened.material_change("specification")
+        self.assertEqual(pending["state"], "pending")
+        self.assertEqual(pending["before"]["text"], old_reviewed)
+        answers[f"specification:{pending['key']}"] = {"purpose": "materiality", "answer": {
+            "materiality": "MATERIAL", "reason": "The reviewed 90-day requirement is now 180 days."}}
+        reread = reopened.snapshot()
+        self.assertIn("status: APPROVED", document.read_text())
+        self.assertEqual(reread["assessments"]["specification"]["outcome"], "CHANGED")
+        self.assertEqual(reopened._approved_document("Specification", str(document))["text"],
+                         changed_again)
+        document.unlink()
+        self.assertEqual(reopened.approve_transition("create-plan"), {})
+        self.assertFalse(document.exists())
+
+    def test_unknown_word_change_uses_retained_semantic_answer_without_guessing(self):
+        from unittest import mock
+        project = self.project()
+        document = project.root / "Plan.md"
+        initial = "---\nstatus: APPROVED\nreview:\n---\n# Plan\n\n## Approach\nKeep the useful behaivor.\n"
+        document.write_text(initial)
+        project.approve_document("planning", initial, str(document))
+        document.write_text(initial.replace("behaivor", "behavior"))
+        change = project.material_change("planning")
+        self.assertEqual(change["state"], "pending")
+        self.assertIn("status: APPROVED", document.read_text())
+        remembered = {f"planning:{change['key']}": {"purpose": "materiality", "answer": {"materiality": "UNCHANGED", "reason": "Typo only."}}}
+        with mock.patch("ora_vibe_coder.conversation.read_aux_answers", return_value=remembered):
+            self.assertEqual(project.material_change("planning")["state"], "unchanged")
+        self.assertNotIn("review: CHANGED", document.read_text())
+        remembered[f"planning:{change['key']}"]["answer"] = {"materiality": "UNKNOWN", "reason": "The supplied meaning is ambiguous."}
+        with mock.patch("ora_vibe_coder.conversation.read_aux_answers", return_value=remembered):
+            unknown = project.material_change("planning")
+        self.assertEqual(unknown["state"], "unknown")
+        self.assertIn("ambiguous", unknown["reason"])
+        self.assertIn("status: APPROVED", document.read_text())
+        # A material answer for an earlier version cannot overwrite a newer edit.
+        newer = document.read_text() + "\n## Checks\nProve the intended behavior.\n"
+        document.write_text(newer)
+        self.assertFalse(project.apply_material_change("planning", change["before"], change["after"]))
+        self.assertEqual(document.read_text(), newer)
+        # List numbering and an explanatory section do not prove new
+        # obligations. Keep approval while the semantic comparison is pending,
+        # and preserve it when that comparison establishes unchanged meaning.
+        steps = initial.replace("## Approach\nKeep the useful behaivor.", "## Steps\n1. Inspect the project.\n2. Implement the agreed scope.")
+        for original, edited in (
+            (steps, steps.replace("1. Inspect", "2. Inspect").replace("2. Implement", "3. Implement")),
+            (initial, initial + "\n## Checks\nThese are the same checks already described above.\n"),
+        ):
+            document.write_text(original)
+            approved, _warning = project.approve_document("planning", original, str(document))
+            document.write_text(edited)
+            pending = project.material_change("planning")
+            self.assertEqual(pending["state"], "pending")
+            self.assertIn("status: APPROVED", document.read_text())
+            answer = {f"planning:{pending['key']}": {"purpose": "materiality", "answer": {
+                "materiality": "UNCHANGED", "reason": "Only numbering or an explanation of the same checks changed."}}}
+            with mock.patch("ora_vibe_coder.conversation.read_aux_answers", return_value=answer):
+                self.assertEqual(project.material_change("planning")["state"], "unchanged")
+            self.assertIn("status: APPROVED", document.read_text())
+            self.assertNotIn("review: CHANGED", document.read_text())
+        # Code punctuation and link destinations must reach semantic judgment,
+        # rather than being erased as decorative Markdown.
+        for old, new in (("Call `save(*records)`.", "Call `save(records)`."),
+                         ("Call `save(_records)`.", "Call `save(records)`."),
+                         ("Use [the contract](https://example.test/_records).", "Use [the contract](https://example.test/records)."),
+                         ("Keep literal * punctuation.", "Keep literal punctuation.")):
+            original = initial.replace("Keep the useful behaivor.", old)
+            document.write_text(original)
+            approved, _warning = project.approve_document("planning", original, str(document))
+            document.write_text(approved["text"].replace(old, new))
+            self.assertEqual(project.material_change("planning")["state"], "pending")
+            self.assertIn("status: APPROVED", document.read_text())
+        # Approval changes the owned scalar without losing a legacy status's
+        # scope qualification or rewriting unrelated vault frontmatter.
+        prefix = "---\r\nnexus:\r\n  - ora\r\ntags: [active]\r\n"
+        qualified = prefix + "---\r\n# Plan\r\n\r\nStatus: AWAITING APPROVAL — Framework-only scope; public release remains on hold.\r\n\r\n## Approach\r\nUse the existing framework.\r\n"
+        document.write_bytes(qualified.encode())
+        approved, _warning = project.approve_document("planning", qualified, str(document))
+        self.assertTrue(approved["text"].startswith(prefix))
+        self.assertIn("Status: APPROVED — Framework-only scope; public release remains on hold.", approved["text"])
+        self.assertEqual(project.material_change("planning"), None)
+        from ora_vibe_coder.status import meaning_text
+        self.assertEqual(meaning_text(qualified), meaning_text(approved["text"]))
 
 
 if __name__ == "__main__":

@@ -1,17 +1,29 @@
 """Ordinary Markdown project files, with explicit selection and narrow writes."""
 
+from collections import deque
+import json
 import os
 from pathlib import Path
+import queue
 import re
 import secrets
 import stat
+import subprocess
+import sys
 import tempfile
+import threading
+import time
 
 from .status import (assessment_facts, body_start, document_type_values, metadata, reported_status,
-                     reported_verdict, sections, legacy_review_basis, review_basis)
+                     reported_verdict, sections, legacy_review_basis, review_basis, canonical_verdict,
+                     meaning_text, set_yaml_fields, yaml_value, RECORDING_FIELDS)
 
 READ_LIMIT = 256 * 1024
 PACKET_LIMIT = 4 * 1024 * 1024
+# macOS cloud-backed filesystem calls cannot be cancelled in a Python thread.
+# This is an inactivity deadline for one isolated read, never a scan/content
+# limit: after five seconds without a response, name it and try siblings.
+DISCOVERY_READ_SECONDS = 5
 # The five standard working documents come first; the roles after them are the
 # recognized legacy vocabulary, retained so older files and saved associations
 # keep working without migration.
@@ -44,6 +56,10 @@ ROLE_WORDS = {
     "Request": ("request",),
 }
 READER_SUFFIXES = {".md", ".markdown", ".txt"}
+
+
+def assessments_changed(text):
+    return yaml_value(text or "", "review")[0] == "CHANGED"
 
 
 class ProjectError(ValueError):
@@ -89,9 +105,30 @@ def atomic_write(path, text):
 
 
 def not_started(text):
-    """An untouched starter template: headings present, every section body empty."""
-    found = sections(text or "")
-    return bool(found) and all(not (text or "")[body:end].strip() for _name, _start, body, end in found)
+    """Recognize an empty document/template without hiding opening substance."""
+    text = text or ""
+    start = body_start(text)
+    if start is None:
+        return False
+    body = text[start:]
+    status_value = yaml_value(text, "status")[0]
+    if status_value in {"PASSED", "NOT PASSED", "INCOMPLETE", "COMPLETE"}:
+        return False
+    if any(value.upper() in {"PASSED", "NOT PASSED", "INCOMPLETE", "COMPLETE"}
+           for values in metadata(text).values() for value in values):
+        return False
+    generic = {"Intended behavior, requirements, and outcomes.", "Implementation approach, steps, and checks.",
+               "Notes, background, decisions, and open questions."}
+    fields = {name for name in metadata(text)
+              if name.casefold() in RECORDING_FIELDS | {"date", "date created", "date modified"}}
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped in generic:
+            continue
+        if any(re.fullmatch(r"[*`_]*" + re.escape(name) + r"[*`_]*\s*:.*", stripped) for name in fields):
+            continue
+        return False
+    return True
 
 
 def starter_documents(name):
@@ -99,9 +136,9 @@ def starter_documents(name):
     return {
         "Registry.md": (f"# {name} — Registry\n\nNotes, background, decisions, and open questions.\n\n"
                         "## Notes\n\n\n## Decisions\n\n\n## Open questions\n\n\n"),
-        "Specification.md": (f"# {name} — Specification\n\nIntended behavior, requirements, and outcomes.\n\n"
+        "Specification.md": (f"---\nstatus: DRAFT\nreview:\n---\n# {name} — Specification\n\nIntended behavior, requirements, and outcomes.\n\n"
                              "## Description\n\n\n## Requirements\n\n\n## Outcomes\n\n\n"),
-        "Plan.md": (f"# {name} — Plan\n\nImplementation approach, steps, and checks.\n\n"
+        "Plan.md": (f"---\nstatus: DRAFT\nreview:\n---\n# {name} — Plan\n\nImplementation approach, steps, and checks.\n\n"
                     "## Approach\n\n\n## Steps\n\n\n## Checks\n\n\n"),
     }
 
@@ -293,11 +330,14 @@ def edit_brief(original, name, description, goals, paths, parent=None, state=Non
 
 
 class Project:
-    def __init__(self, root):
-        self.root = Path(root).resolve(strict=True)
-        if not self.root.is_dir():
+    def __init__(self, root, *, _discovered=False):
+        # Discovery already validated this directory in its isolated reader.
+        self.root = Path(root) if _discovered else Path(root).resolve(strict=True)
+        if not _discovered and not self.root.is_dir():
             raise ProjectError("Select an existing project directory.")
         self.approved_references = set()
+        self.document_lock = threading.RLock()
+        self.document_versions = {}
 
     def write_target(self, name):
         target = self.root / name
@@ -461,14 +501,193 @@ class Project:
         path = path if path.is_absolute() else self.root / path
         return path if path.is_dir() else None
 
+    def approve_document(self, stage, expected=None, path=None):
+        """Record this deliberate approval independently of the review outcome."""
+        role = {"specification": "Specification", "planning": "Plan"}[stage]
+        with self.document_lock:
+            item = self.material(role)
+            reference = self.reference(role)
+            if not isinstance(reference, Path) or item["text"] is None:
+                raise ProjectError(item["reason"] or f"No {role} document is resolved to approve.")
+            if reference.is_symlink() or not reference.resolve().is_relative_to(self.root):
+                raise ProjectError(f"The resolved {role} is a link or outside the project folder, so it was not changed.")
+            if expected is not None and (item["text"] != expected or item["path"] != path):
+                raise Conflict(f"The {role} changed after it was displayed. Read the current document before approving it.", item["text"])
+            current = item["text"]
+            try:
+                updated = set_yaml_fields(current, status="APPROVED")
+            except ValueError as error:
+                raise ProjectError(str(error)) from error
+            if self.reference(role) != reference or read_text(reference) != current:
+                raise Conflict(f"The {role} changed before approval; nothing was written.", read_text(reference))
+            atomic_write(reference, updated)
+            if read_text(reference) != updated:
+                raise ProjectError(f"The {role} approval could not be confirmed by reading it back.")
+            saved = dict(item, text=updated)
+            self.document_versions[(role, item["path"])] = saved
+            # Version evidence uses the application's existing retained Bridge
+            # notes, never extra reader-facing YAML or a second state store.
+            from . import conversation
+            warning = ""
+            try:
+                conversation.retain_document_version(self, role, saved)
+            except (OSError, ProjectError) as error:
+                warning = f"Approval saved; its retained version could not be saved: {error}"
+            return saved, warning
+
+    def approve_transition(self, purpose, supplied=None):
+        stage = {"create-plan": "specification", "implement-plan": "planning",
+                 "planning": "specification", "build": "planning"}.get(purpose)
+        if stage is None:
+            return {}
+        role = {"specification": "Specification", "planning": "Plan"}[stage]
+        item = self.material(role)
+        if item["text"] is None:
+            return {}  # There is no readable upstream document to supply.
+        expected = supplied.get("expected") if supplied is not None else item["text"]
+        expected_path = supplied.get("path") if supplied is not None else item["path"]
+        if supplied is not None and (not isinstance(expected, str) or not isinstance(expected_path, str)):
+            raise ProjectError("The upstream document was not displayed. Read it before advancing, or continue with no upstream document.")
+        saved, _warning = self.approve_document(stage, expected, expected_path)
+        return {role: saved}
+
+    def _approved_document(self, role, path, basis=None):
+        key = (role, path)
+        saved = self.document_versions.get(key)
+        if saved is not None and (basis is None or basis in {review_basis(saved["text"]), legacy_review_basis(saved["text"])}):
+            return saved
+        from . import conversation
+        for retained in sorted((self.root / ".vibe").glob("*/session/messages/*-initiator-record.md"), reverse=True):
+            if not retained.resolve().is_relative_to(self.root):
+                continue
+            try:
+                message = conversation.parse_message(retained)
+                fields = conversation.note_fields(message["body"]) or {}
+                if fields.get("Purpose") != "document-version" or fields.get("Role") != role:
+                    continue
+                body = message["body"]
+                marker = "\n# Approved document\n\n"
+                if marker not in body:
+                    continue
+                source, document = body.split(marker, 1)[1].split("\n\nContent:\n\n", 1)
+                if source != path:
+                    continue
+                if basis is not None and basis not in {review_basis(document), legacy_review_basis(document)}:
+                    continue
+                saved = {"path": path, "text": document, "role": role}
+                if basis is None:
+                    self.document_versions[key] = saved
+                return saved
+            except (OSError, ProjectError, ValueError, UnicodeDecodeError):
+                continue
+        return None
+
+    def material_change(self, stage):
+        """Return a real comparison task, or deterministic recording equivalence."""
+        role = {"specification": "Specification", "planning": "Plan"}[stage]
+        item = self.material(role)
+        if item["text"] is None:
+            return None
+        approved = self._approved_document(role, item["path"])
+        facts = assessment_facts(stage, item["text"])
+        old = self._reviewed_snapshots(role, item["path"], facts["basis"]) if facts["basis"] and facts["applies"] != "current" else []
+        reviewed = dict(item, text=old[0]) if old else None
+        # Approval and review bind independently. A new approval of an edited
+        # document cannot make an older assessment current, and a reviewed
+        # version is never invented as evidence of an unknown old approval.
+        comparison = "approval"
+        if approved is None or meaning_text(approved["text"]) == meaning_text(item["text"]):
+            approved = reviewed
+            comparison = "review"
+        if approved is None:
+            return None
+        if meaning_text(approved["text"]) == meaning_text(item["text"]):
+            return dict(stage=stage, state="unchanged", comparison=comparison) if comparison == "review" else None
+        key = review_basis(approved["text"]) + ":" + review_basis(item["text"])
+        from . import conversation
+        answer = conversation.read_aux_answers(self).get(f"{stage}:{key}")
+        if answer and answer["purpose"] == conversation.PURPOSE_MATERIALITY:
+            verdict = answer["answer"].get("materiality")
+            if verdict == "MATERIAL":
+                self.apply_material_change(stage, approved, item)
+            if verdict == "UNKNOWN":
+                return dict(stage=stage, state="unknown", comparison=comparison, key=key,
+                            reason="The comparison could not establish whether meaning changed: " + answer["answer"].get("reason", "No supported conclusion."))
+            if verdict in {"MATERIAL", "UNCHANGED"}:
+                return dict(stage=stage, state=verdict.lower(), comparison=comparison,
+                            review_current=(verdict == "UNCHANGED" and assessment_facts(stage, approved["text"])["applies"] == "current"
+                                            and assessment_facts(stage, approved["text"])["basis"] == facts["basis"]),
+                            key=key, reason=answer["answer"].get("reason", ""))
+        return dict(stage=stage, state="pending", comparison=comparison, key=key, before=approved, after=item,
+                    reason="The document text changed; a comparison of meaning is needed before approval and review applicability can be established.")
+
+    def apply_material_change(self, stage, before, after):
+        role = {"specification": "Specification", "planning": "Plan"}[stage]
+        with self.document_lock:
+            item = self.material(role)
+            reference = self.reference(role)
+            if item["path"] != after["path"] or item["text"] != after["text"]:
+                return False  # A semantic answer can never be applied to a later edit.
+            if not isinstance(reference, Path) or reference.is_symlink() or not reference.resolve().is_relative_to(self.root):
+                return False
+            current = item["text"]
+            facts = assessment_facts(stage, current)
+            prior_facts = assessment_facts(stage, before["text"])
+            updates = {}
+            state = reported_status(stage, current, item["path"])["label"]
+            approved = self._approved_document(role, item["path"])
+            if (state in {"APPROVED", "Approved product specification", "Approved Implementation Plan"}
+                    and approved is not None and meaning_text(approved["text"]) != meaning_text(current)):
+                updates["status"] = "AWAITING APPROVAL"
+            reviewed_before = facts["basis"] in {review_basis(before["text"]), legacy_review_basis(before["text"])}
+            if (prior_facts["present"] or reviewed_before) and facts["applies"] != "current":
+                updates["review"] = "CHANGED"
+            if not updates:
+                return True
+            # Preserve actual earlier findings even when an editor replaced,
+            # rather than removed, the review section. A fresh basis-matched
+            # review above remains current and is never replaced this way.
+            if prior_facts["present"] and updates.get("review") == "CHANGED":
+                prior = [part for part in sections(before["text"]) if part[0].strip().casefold() == "current review"]
+                now = [part for part in sections(current) if part[0].strip().casefold() == "current review"]
+                if len(prior) == 1:
+                    previous_body = before["text"][prior[0][2]:prior[0][3]].strip()
+                    if not now:
+                        current = current.rstrip() + "\n\n## Current review\n\n" + previous_body + "\n"
+                    elif len(now) == 1:
+                        current_body = current[now[0][2]:now[0][3]].strip()
+                        if previous_body not in current_body:
+                            retained = previous_body + "\n\n### Feedback saved with the changed document\n\n" + current_body
+                            current = current[:now[0][2]] + "\n\n" + retained + "\n\n" + current[now[0][3]:]
+            updated = set_yaml_fields(current, **updates)
+            if read_text(reference) != item["text"]:
+                return False
+            atomic_write(reference, updated)
+            return True
+
     def _document_assessment(self, stage, role, discovery):
         """Advisory completeness facts read from the resolved stage document."""
         item = self.material(role, discovery=discovery)
         facts = assessment_facts(stage, item["text"] or "")
         if facts["applies"] == "unconfirmed" and facts["basis"] and not facts["issues"]:
-            facts = assessment_facts(stage, item["text"] or "",
-                                     self._reviewed_snapshots(role, item["path"], facts["basis"]))
+            snapshots = self._reviewed_snapshots(role, item["path"], facts["basis"])
+            approved = self._approved_document(role, item["path"])
+            if approved is not None:
+                snapshots.append(approved["text"])
+            facts = assessment_facts(stage, item["text"] or "", snapshots)
         facts["path"] = item["path"]
+        facts["expected"] = item["text"]
+        facts["approval_unknown"] = (reported_status(stage, item["text"] or "", item["path"])["label"] in {"APPROVED", "Approved product specification", "Approved Implementation Plan"}
+                                     and self._approved_document(role, item["path"]) is None)
+        change = self.material_change(stage)
+        if change:
+            facts["change"] = {key: value for key, value in change.items() if key not in {"before", "after"}}
+            if change["state"] == "material":
+                facts["expected"] = self.material(role)["text"]
+                saved_facts = assessment_facts(stage, facts["expected"] or "")
+                facts.update(saved_facts)
+            elif change["state"] == "unchanged" and (change.get("comparison") == "review" or change.get("review_current")):
+                facts["applies"] = "current"
         conflict = self._selection_conflict(role, discovery)
         if conflict:
             facts["issues"].append(conflict)
@@ -497,14 +716,18 @@ class Project:
                 request = read_text(retained, PACKET_LIMIT)
             except (OSError, ProjectError):
                 continue
-            if "# Review request\n" not in request:
-                continue
             for match in pattern.finditer(request):
                 if match["path"] != path:
                     continue
                 document = match["document"]
                 if digests[0] in {legacy_review_basis(document), review_basis(document)}:
                     return [document]
+        # An approval note can retain the actual reviewed version even after
+        # a later approval replaces the in-memory/latest approval. Looking up
+        # that old version must never change which approval is current.
+        approved = self._approved_document(role, path, digests[0])
+        if approved is not None:
+            return [approved["text"]]
         return []
 
     def _selection_conflict(self, role, discovery):
@@ -534,7 +757,7 @@ class Project:
                 value = assessment_facts(stage, text)["verdict"]
             else:
                 value = reported_status(stage, text, candidate, field="Status" if stage == "programming" else "Verdict")["label"]
-                if value == "Not reported" or value.startswith("Unknown"):
+                if value in {"Not reported", "VERDICT MISSING"} or value.startswith("Unknown"):
                     value = ""
             if value:
                 conclusions.append((candidate, value))
@@ -722,6 +945,7 @@ class Project:
                 if resolved:
                     entry.update(path=resolved["path"], name=resolved["name"], origin="discovered")
             documents[role] = entry
+        changes = {stage: self.material_change(stage) for stage in ("specification", "planning")}
         statuses = {}
         for stage, role in (("specification", "Specification"), ("planning", "Plan")):
             item = self.material(role, discovery=discovery)
@@ -734,18 +958,20 @@ class Project:
         programming_result = {"path": result["path"],
                               "status": {**reported_status("programming", result["text"] or "",
                                                            result["path"] or "No Programming Result document", field="Status"),
+                                         "untouched": not_started(result["text"]) if result["text"] is not None else False,
                                          "unreadable": result["reason"] if result["path"] and result["text"] is None else ""}}
         report = self.material("Verification Report", discovery=discovery)
         verification = {"path": report["path"], "name": Path(report["path"]).name if report["path"] else None,
                         "verdict": reported_verdict(report["text"] or ""),
                         "status": reported_status("verification", report["text"] or "",
                                                   report["path"] or "No Verification Report document", field="Verdict") |
-                                  {"unreadable": report["reason"] if report["path"] and report["text"] is None else ""},
+                                  {"untouched": not_started(report["text"]) if report["text"] is not None else False,
+                                   "unreadable": report["reason"] if report["path"] and report["text"] is None else ""},
                         "legacy_field": statuses["verification"]["literal"]}
         for role, outcome in (("Programming Result", programming_result), ("Verification Report", verification)):
             conflict = self._selection_conflict(role, discovery)
             if conflict:
-                outcome["status"].update(label="Unknown — conflicting candidate documents", kind="neutral", icon="○",
+                outcome["status"].update(label="REPORT ERROR", kind="neutral", icon="○",
                                          reason=conflict)
                 documents[role]["note"] = conflict
                 if role == "Verification Report":
@@ -757,31 +983,85 @@ class Project:
                                 for stage, role in (("specification", "Specification"), ("planning", "Plan"))},
                 "reader": self.reader_documents(), "programming_result": programming_result,
                 "verification": verification,
+                "plan_notice": "The Specification changed materially; the Plan may need updating." if (changes.get("specification") or {}).get("state") == "material" or assessments_changed(self.material("Specification")["text"]) else "",
                 "code_folder": str(folder) if (folder := self.code_folder(brief)) else None,
                 "handoff_exists": (self.root / "Handoff.md").exists(), "handoff_path": str(self.root / "Handoff.md"),
                 "implementation_request_path": str(self.root / self.implementation_request_name())}
 
 
+def _inventory_reader():
+    """Temporary scan-owned process: all potentially stuck discovery I/O lives here."""
+    def send(value):
+        print(json.dumps(value), flush=True)
+
+    try:
+        for request in sys.stdin:
+            location, boundary = json.loads(request)
+            try:
+                target = Path(location)
+                mode = target.lstat().st_mode
+                if boundary is not None and stat.S_ISLNK(mode):
+                    notice = f"{target} is a symbolic link, so it is not read as a project definition." if target.name == "Project.md" else ""
+                    send(({"entry": None, "notice": notice}, ""))
+                    continue
+                root = target.resolve(strict=True)
+                if boundary is not None and (root != target or not root.is_relative_to(boundary)):
+                    raise ProjectError("A linked or moved path is outside this discovery boundary.")
+                if root.is_dir():
+                    if boundary is None:
+                        send({"home": str(root)})
+                    # Stream names before asking for their type. If enumeration
+                    # later hangs, already-listed siblings can still be checked;
+                    # cloud metadata for one child cannot block its siblings.
+                    with os.scandir(root) as items:
+                        for item in items:
+                            if item.name != ".vibe":
+                                send({"next": str(root / item.name), "boundary": boundary or str(root)})
+                    answer = {"entry": None, "notice": ""}
+                elif boundary is None:
+                    raise ProjectError("The projects folder is not an existing directory.")
+                elif target.name == "Project.md":
+                    entry, notice = ProjectStore._read_entry(root.parent)
+                    answer = {"entry": entry, "notice": notice}
+                else:
+                    answer = {"entry": None, "notice": ""}
+                send((answer, ""))
+            except (OSError, ProjectError) as error:
+                send((None, str(error)))
+    except BrokenPipeError:
+        pass
+
+
 class ProjectStore:
-    def __init__(self, home):
-        self.home = Path(home).resolve(strict=True)
-        if not self.home.is_dir():
-            raise ProjectError("The projects home must be an existing directory.")
+    def __init__(self, home, *, background=False):
+        # A lexical absolute path requires no cloud filesystem access. The
+        # reader resolves and validates the chosen boundary after UI startup.
+        self.home = Path(os.path.abspath(Path(home).expanduser()))
         self.projects = {}
         self.inventory = {}
         self.scan_notices = []
-        self.scan()
+        self.scan_running = False
+        self.scan_current = ""
+        self.scan_complete = False
+        self.background = background
+        self._lock = threading.RLock()
+        self._stop = threading.Event()
+        self._scan_thread = None
+        self._scan_found = {}
+        self.rescan()
 
-    def open(self, path):
-        project = Project(path)
-        for key, known in self.projects.items():
-            if known.root == project.root:
-                return key
-        key = secrets.token_urlsafe(12)
-        self.projects[key] = project
-        return key
+    def open(self, path, *, _discovered=False):
+        project = Project(path, _discovered=_discovered)
+        with self._lock:
+            for key, known in self.projects.items():
+                if known.root == project.root:
+                    return key
+            key = secrets.token_urlsafe(12)
+            self.projects[key] = project
+            return key
 
-    def _read_entry(self, root):
+    @staticmethod
+    def _read_entry(root):
         """One definition's inventory facts, or a notice when it cannot be read."""
         target = root / "Project.md"
         try:
@@ -804,70 +1084,186 @@ class ProjectStore:
         return entry, ""
 
     def scan(self):
-        """Recursive read-only discovery of Project.md beneath the home folder.
+        """Publish readable projects progressively; isolate and recover stuck reads.
 
-        Folder links are not followed, so discovery stays inside the boundary;
-        unreadable folders and definitions are noticed per entry and never hide
-        the readable ones. Handles are never discarded, so an open session
-        keeps its project even after the entry leaves the inventory.
+        There is one controller and at most one owned reader. Refreshes during
+        a scan share that scan. A failed folder never hides its readable siblings;
+        a failed definition never prevents discovery beneath that project.
         """
-        entries, notices = {}, []
+        reader = output_thread = None
+        responses = None
+        failed = []
+        pending = deque([(str(self.home), None)])
 
-        def unreadable(error):
-            notices.append(f"A folder could not be read while searching for projects: {error}")
+        def end_reader():
+            nonlocal reader, output_thread
+            if reader is not None:
+                if reader.poll() is None:
+                    reader.terminate()
+                try:
+                    reader.wait(timeout=.2)
+                except subprocess.TimeoutExpired:
+                    reader.kill()
+                    reader.wait()
+                reader.stdin.close()
+                output_thread.join()
+                reader.stdout.close()
+                reader = output_thread = None
 
-        for folder, directories, files in os.walk(self.home, followlinks=False, onerror=unreadable):
-            # The project's retained conversation records live under the
-            # reserved .vibe/ name; it is skipped so retained packets can never
-            # create false projects. Other hidden content stays discoverable.
-            directories[:] = [name for name in directories if name != ".vibe"]
-            if "Project.md" not in files:
-                continue
-            root = Path(folder)
-            entry, notice = self._read_entry(root)
-            if notice:
-                notices.append(notice)
-            if entry is None:
-                continue
+        def collect_output(stream, answers):
             try:
-                entry["id"] = self.open(root)
-            except (OSError, ProjectError) as error:
-                notices.append(f"{root / 'Project.md'} could not be opened as a project: {error}")
-                continue
-            entries[str(root)] = entry
-        self.inventory = dict(sorted(entries.items(),
-                                     key=inventory_order))
-        self.scan_notices = notices
+                for line in stream:
+                    answers.put(json.loads(line))
+            except (OSError, ValueError) as error:
+                answers.put((None, str(error)))
+            finally:
+                answers.put((None, "The filesystem reader stopped before returning this path."))
+
+        def read(location, boundary):
+            nonlocal reader, output_thread, responses
+            path = location
+            with self._lock:
+                self.scan_current = path
+            if self._stop.is_set():
+                return None
+            if reader is not None and reader.poll() is not None:
+                end_reader()
+            if reader is None:
+                reader = subprocess.Popen([sys.executable, "-m", "ora_vibe_coder.project_discovery"],
+                                          stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                          stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+                                          cwd=Path(__file__).parent.parent)
+                responses = queue.Queue()
+                output_thread = threading.Thread(target=collect_output, args=(reader.stdout, responses),
+                                                 name="Vibe discovery responses")
+                output_thread.start()
+            deadline = time.monotonic() + DISCOVERY_READ_SECONDS
+            try:
+                reader.stdin.write(json.dumps((location, boundary)) + "\n")
+                reader.stdin.flush()
+                while not self._stop.is_set():
+                    try:
+                        message = responses.get(timeout=.05)
+                    except queue.Empty:
+                        pass
+                    else:
+                        if isinstance(message, dict):
+                            if "home" in message:
+                                with self._lock:
+                                    self.home = Path(message["home"])
+                            elif "next" in message:
+                                pending.append((message["next"], message["boundary"]))
+                            deadline = time.monotonic() + DISCOVERY_READ_SECONDS
+                            continue
+                        answer, error = message
+                        if not error:
+                            return answer
+                        break
+                    if time.monotonic() >= deadline:
+                        error = "The filesystem did not respond; this read was stopped so other projects can be found. Retry with Refresh projects."
+                        end_reader()
+                        break
+                else:
+                    return None
+            except OSError as problem:
+                error = str(problem)
+                end_reader()
+            with self._lock:
+                self.scan_notices.append(f"{path} could not be read: {error}")
+            failed.append(Path(location))
+            return None
+
+        try:
+            while pending and not self._stop.is_set():
+                location, boundary = pending.popleft()
+                facts = read(location, boundary)
+                if facts is None:
+                    continue
+                entry, notice = facts["entry"], facts["notice"]
+                if notice:
+                    with self._lock:
+                        self.scan_notices.append(notice)
+                    failed.append(Path(location))
+                if entry is not None:
+                    entry["id"] = self.open(entry["path"], _discovered=True)
+                    entry["available"] = True
+                    with self._lock:
+                        self._scan_found[entry["path"]] = entry
+                        self.inventory[entry["path"]] = entry
+            with self._lock:
+                # Keep last-known entries only for paths whose current state
+                # could not be checked, and label them unavailable in the UI.
+                self.inventory = {path: entry for path, entry in self.inventory.items()
+                                  if path in self._scan_found or any(
+                                      Path(path).is_relative_to(unreadable) or
+                                      (unreadable.name == "Project.md" and Path(path) == unreadable.parent)
+                                      for unreadable in failed)}
+                self.scan_complete = not failed and not self._stop.is_set()
+        except Exception as error:
+            with self._lock:
+                self.scan_notices.append(f"{self.scan_current or self.home} could not be read: {error}. Retry with Refresh projects.")
+        finally:
+            end_reader()
+            with self._lock:
+                self.scan_current = ""
+                self.scan_running = False
 
     def refresh_entry(self, root):
-        """Update one inventory entry from its saved definition; no rescan."""
+        """Update one locally saved definition; keep it during an active scan."""
         try:
             root = Path(root).resolve(strict=True)
         except OSError:
             return
         if not root.is_relative_to(self.home):
-            return  # Outside the discovery boundary; the manual route stays unchanged.
-        entry, _ = self._read_entry(root)
-        if entry is None:
-            self.inventory.pop(str(root), None)
             return
-        entry["id"] = self.open(root)
-        self.inventory[str(root)] = entry
-        self.inventory = dict(sorted(self.inventory.items(),
-                                     key=inventory_order))
+        entry, _ = self._read_entry(root)
+        with self._lock:
+            if entry is None:
+                self.inventory.pop(str(root), None)
+                self._scan_found.pop(str(root), None)
+                return
+            entry["id"] = self.open(root)
+            entry["available"] = True
+            self.inventory[str(root)] = entry
+            self._scan_found[str(root)] = entry
 
     def list(self, include_archived=False):
-        return [{"id": entry["id"], "name": entry["name"], "label": entry["label"], "parent": entry["parent"],
-                 "path": entry["path"], "archived": entry["archived"], "notice": entry["notice"],
-                 "position": entry.get("position", ""),
-                 # The lineage without the position: what a new subproject's
-                 # Parent line copies, so it never freezes a list position.
-                 "lineage": display_label(entry["parent"], entry["name"])}
-                for entry in self.inventory.values() if include_archived or not entry["archived"]]
+        with self._lock:
+            return [{**entry, "position": entry.get("position", ""),
+                     "lineage": display_label(entry["parent"], entry["name"])}
+                    for _, entry in sorted(self.inventory.items(), key=inventory_order)
+                    if include_archived or not entry["archived"]]
+
+    def report(self):
+        with self._lock:
+            notices = list(self.scan_notices)
+            if self.scan_running:
+                notices.append(f"Waiting to read: {self.scan_current or self.home}. Readable projects appear as they are found.")
+            return {"home": str(self.home), "projects": self.list(include_archived=True),
+                    "notices": notices, "scanning": self.scan_running, "complete": self.scan_complete}
 
     def rescan(self):
-        self.scan()
+        with self._lock:
+            if not self._stop.is_set() and not self.scan_running:
+                self.scan_running = True
+                self.scan_complete = False
+                self.scan_current = str(self.home)
+                self.scan_notices = []
+                self._scan_found = {}
+                self.inventory = {path: {**entry, "available": False} for path, entry in self.inventory.items()}
+                self._scan_thread = threading.Thread(target=self.scan, name="Vibe project discovery")
+                self._scan_thread.start()
+            thread = self._scan_thread
+        if not self.background and thread is not None:
+            thread.join()
         return self.list(include_archived=True)
+
+    def close(self):
+        """Stop and reap this store's reader before application exit/update."""
+        self._stop.set()
+        thread = self._scan_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join()
 
     def create(self, directory, name, description, goals, parent="", under=None, code=""):
         if not directory or directory in {".", ".."} or "/" in directory or "\\" in directory or Path(directory).name != directory:

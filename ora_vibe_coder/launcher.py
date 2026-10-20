@@ -27,14 +27,8 @@ def settings_path(home=None, platform=None):
 
 
 def documents_location(home=None):
-    """The user's actual Documents folder, or None when it does not exist."""
-    candidate = Path(home or Path.home()) / "Documents"
-    try:
-        if candidate.is_dir():
-            return candidate
-    except OSError:
-        pass
-    return None
+    """The Documents boundary; discovery reports availability without blocking startup."""
+    return Path(home or Path.home()) / "Documents"
 
 
 class Settings:
@@ -58,10 +52,8 @@ class Settings:
             return None
         if not isinstance(configured, str) or not Path(configured).is_absolute():
             raise ValueError("The configured projects folder must be an absolute path.")
-        root = Path(configured)
-        if not root.is_dir():
-            raise ValueError(f"The configured projects folder is unavailable: {root}")
-        return root
+        # Availability belongs to isolated discovery, never launcher startup.
+        return Path(configured)
 
     def update(self, **values):
         data = self.read()

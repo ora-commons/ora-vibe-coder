@@ -88,8 +88,7 @@ Criteria the assessment itself must satisfy:
 
 {criteria}
 
-The document's completeness verdict (COMPLETE or INCOMPLETE with noted
-deficiencies) is the content of the assessment. The pipeline judges each pass
+The document's assessment verdict (PASSED, NOT PASSED with required deficiencies, or INCOMPLETE when a supported conclusion is unavailable) is the content of the assessment. The pipeline judges each pass
 against the shared criteria above; no pass invents additional criteria, and none
 drops these.
 """
@@ -264,9 +263,9 @@ Evaluator uncertainties that propagate, unverifiable externals, and any new
 uncertainty this revision introduced — stated plainly for the user.
 
 ### `## REVISED ASSESSMENT`
-The complete revised assessment as it should be saved: a clear `Verdict: COMPLETE`
+The complete revised assessment as it should be saved: a clear `Verdict: PASSED`, `Verdict: NOT PASSED`
 or `Verdict: INCOMPLETE`, the reasoning, and the deficiency list for an
-INCOMPLETE verdict. The application records the stage and evidence basis;
+NOT PASSED verdict. The application records the stage and evidence basis;
 do not repeat the `## Current review` heading here.
 Re-emit the complete assessment even when nothing changed; narration is not a
 substitute, and a missing or empty section here fails the pass.
@@ -288,8 +287,8 @@ task and criteria above to the supplied document.
 Return your complete visible assessment in one `## Current review` section:
 
 ```text
-Verdict: COMPLETE    (or INCOMPLETE)
-<For INCOMPLETE, list each noted deficiency as one "- " bullet.>
+Verdict: PASSED    (or NOT PASSED or INCOMPLETE)
+<For NOT PASSED, list each required deficiency as one "- " bullet.>
 ```
 
 The application records the stage and the evidence basis for the document it

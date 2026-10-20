@@ -36,7 +36,7 @@ The user may create a Plan with an incomplete or missing Specification, start pr
 
 ### 1. Specification
 
-Assign an executor Ora Specification with the user's idea, current material, existing requirements, and corrections; for existing software, direct the executor to inspect relevant accessible code when a location is known. Preserve interactive updates and establish project-specific completion and retained/delegated decisions. Show the complete current Specification. A fresh independent assessment of whether it sufficiently guides the intended work is available on request; its COMPLETE or INCOMPLETE verdict is advisory information for the user, never a gate.
+Assign an executor Ora Specification with the user's idea, current material, existing requirements, and corrections; for existing software, direct the executor to inspect relevant accessible code when a location is known. Preserve interactive updates and establish project-specific completion and retained/delegated decisions. Show the complete current Specification. A fresh independent assessment of whether it sufficiently guides the intended work is available on request; its PASSED, NOT PASSED or INCOMPLETE verdict is advisory information for the user, never a gate.
 
 ### 2. Planning
 
@@ -54,7 +54,7 @@ Commission Verification through its owner with the accessible candidate: availab
 
 After verification, assign any remaining authorized finishing work through the existing delivery procedure. The Verification Report's readiness conclusion informs that work; it is not itself proof.
 
-Never auto-advance after silence. Each stage stops at its own boundary; a technical review PASS and the user's separately recorded approval are distinct facts, and neither substitutes for the other.
+Requesting Create Plan approves the supplied Specification; requesting implementation approves the supplied Plan, regardless of review. Record the current version’s approval without another user entry, preserve the assessment, and apply the shared material-change rules to later revisions. Never auto-advance after silence. Each stage stops at its own boundary; a technical review PASS and the user’s approval by Approve or a deliberate next-stage request are distinct facts, and neither substitutes for the other.
 
 ## Route correction to the earliest owner
 
