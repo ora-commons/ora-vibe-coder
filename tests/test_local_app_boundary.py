@@ -708,6 +708,630 @@ elif skill.exists():
             finally:
                 browser.close()
 
+    def test_project_opening_recovers_from_auxiliary_read_failures_and_clears_status(self):
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("Playwright is not installed for the browser check")
+
+        self.server.settings = Settings(self.home / "opening-settings.json")
+        projects = {}
+        for name in ("Working", "History", "Status", "Empty", "Destination"):
+            projects[name] = self.request("/api/create", {"directory": name, "name": name,
+                                                         "description": "", "goals": ""})[1]["id"]
+        for name in ("History", "Status"):
+            (self.home / name / f"{name} — Plan.md").write_text(
+                f"# Plan\n\nStatus: DRAFT\n\nReadable {name} plan.\n", encoding="utf-8")
+            messages = self.home / name / ".vibe" / "0001-20261023-120000" / "session" / "messages"
+            messages.mkdir(parents=True)
+            body = conversation.user_note_body("verification", "codex", f"Retained {name} instruction.", [])
+            (messages / "0001-initiator-record.md").write_text(
+                f"# Message 0001\nKind: note\n\n## Body\n\n{body}", encoding="utf-8")
+        for name, stage in (("Working", "programming"), ("History", "planning"), ("Status", "verification")):
+            active = self.server.store.projects[projects[name]]
+            handle = conversation.TurnOperation(active.root, "codex", stage, {})
+            handle.turn = "0001-20261023-120000"
+            handle.state = "running"
+            self.server.conversation.by_project[str(active.root)] = handle
+
+        failures, holds, pending, requests, errors = set(), {}, {}, [], []
+        evidence = Path(os.environ["VIBE_NAVIGATION_EVIDENCE"]) / "opening" if os.environ.get("VIBE_NAVIGATION_EVIDENCE") else None
+        if evidence:
+            evidence.mkdir(parents=True, exist_ok=True)
+
+        def ready(peer, **kwargs):
+            return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
+
+        with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready), \
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
+                mock.patch("ora_vibe_coder.conversation.start_turn") as dispatch, \
+                mock.patch("ora_vibe_coder.conversation.start_assessment") as assess, \
+                mock.patch("ora_vibe_coder.conversation.start_aux") as auxiliary, sync_playwright() as playwright:
+            if not Path(playwright.chromium.executable_path).is_file():
+                self.skipTest("Playwright's Chromium is not installed for the browser check")
+            browser = playwright.chromium.launch(headless=True)
+            context = browser.new_context(viewport={"width": 1440, "height": 1000}, reduced_motion="reduce")
+            try:
+                page = context.new_page()
+                page.on("pageerror", lambda error: errors.append(str(error)))
+
+                def route_api(route):
+                    endpoint = urlsplit(route.request.url).path.rsplit("/", 1)[-1]
+                    data = route.request.post_data_json
+                    requests.append((endpoint, data))
+                    key = (data.get("id"), endpoint)
+                    if key in holds:
+                        mode = holds.pop(key)
+                        pending[key] = (route, route.fetch() if mode == "success" else None)
+                    elif key in failures:
+                        route.fulfill(status=503, content_type="application/json",
+                                      body=json.dumps({"error": f"Fixture: {endpoint} unavailable."}))
+                    else:
+                        route.continue_()
+
+                page.route("**/api/**", route_api)
+                page.goto(self.server.url)
+                page.wait_for_function("() => project?.name === 'Destination' && pollTimer !== null && lastFiles !== null")
+
+                def opened(name, stage):
+                    self.select_project(page, projects[name])
+                    page.wait_for_function("data => project?.name === data.name && workspace === data.stage && pollTimer !== null",
+                                           arg={"name": name, "stage": stage})
+                    expect(page.locator("#stage-panel")).to_be_visible()
+                    expect(page.locator("#rails")).to_be_visible()
+                    page.locator("#destination").select_option(label="Codex")
+                    page.wait_for_function("() => readinessState.peers?.some(peer => peer.peer === 'codex' && peer.ready)")
+
+                def capture(name):
+                    if evidence:
+                        page.screenshot(path=str(evidence / f"{name}.png"), full_page=True)
+
+                def release(name, endpoint):
+                    route, response = pending.pop((projects[name], endpoint))
+                    if response is not None:
+                        route.fulfill(response=response)
+                    else:
+                        route.fulfill(status=503, content_type="application/json",
+                                      body=json.dumps({"error": f"Fixture: stale {endpoint} failure."}))
+
+                opened("Working", "build")
+                expect(page.locator("#status-bar")).to_contain_text("Working —")
+                # Hold the next project's live answer: the old Working text
+                # clears immediately, before any new status can replace it.
+                holds[(projects["Status"], "turn-state")] = "success"
+                self.select_project(page, projects["Status"])
+                page.wait_for_function("() => project?.name === 'Status'")
+                page.wait_for_function("() => document.getElementById('status-bar').textContent === ''")
+                expect(page.locator("#status-bar")).not_to_have_class("active")
+                capture("switch-clears-working")
+                # Its late successful answer cannot put Working on the idle
+                # destination, even though the originating turn is still live.
+                opened("Destination", "specification")
+                release("Status", "turn-state")
+                page.wait_for_function("() => project?.name === 'Destination' && lastFiles !== null")
+                expect(page.locator("#status-bar")).not_to_contain_text("Working —")
+                self.assertIsNone(page.evaluate("lastOperation"))
+
+                failures.add((projects["History"], "conversation"))
+                opened("History", "plan")
+                expect(page.locator("#reader")).to_contain_text("Readable History plan.")
+                expect(page.locator("#status-bar")).to_contain_text("Conversation history could not be loaded")
+                self.assertEqual(page.evaluate("lastOperation.state"), "running")
+                expect(page.locator("#send")).to_be_disabled()
+                self.assertTrue(any(endpoint == "turn-state" and data.get("id") == projects["History"] for endpoint, data in requests))
+                capture("history-failure-documents-and-known-work")
+                # No manual retry: the existing timer loads the retained
+                # history when it returns, without moving the chosen page.
+                failures.remove((projects["History"], "conversation"))
+                expect(page.locator("#conversation")).to_contain_text("Retained History instruction.")
+                self.assertEqual(page.evaluate("workspace"), "plan")
+                expect(page.locator("#send")).to_be_disabled()
+                capture("history-recovered-at-chosen-stage")
+
+                failures.add((projects["Status"], "turn-state"))
+                opened("Status", "build")
+                expect(page.locator("#conversation")).to_contain_text("Retained Status instruction.")
+                page.locator("#document").select_option(label="Plan — Status")
+                expect(page.locator("#reader")).to_contain_text("Readable Status plan.")
+                expect(page.locator("#status-bar")).to_contain_text("turn-state unavailable")
+                self.assertTrue(page.evaluate("lastOperation === undefined"))
+                expect(page.locator("#send")).to_be_disabled()
+                expect(page.locator("#run-completion")).to_be_disabled()
+                page.locator("#message").fill("Keep this unsent draft while live status is unknown.")
+                picture = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c020000000b4944415478da6364f80f00010501012718e3660000000049454e44ae426082")
+                page.locator("#image-input").set_input_files({"name": "opening-draft.png", "mimeType": "image/png", "buffer": picture})
+                page.locator("#message").press("Enter")
+                expect(page.locator("#status-bar")).to_contain_text("work status is unknown")
+                page.evaluate("() => deliverStep('create-plan', 'send')")
+                self.assertFalse(any(endpoint in {"converse", "review", "repair", "deliver", "run-start"} for endpoint, _ in requests))
+                capture("status-failure-visible-history-and-draft")
+                failures.remove((projects["Status"], "turn-state"))
+                page.wait_for_function("() => lastOperation?.state === 'running' && !contactLost")
+                expect(page.locator("#status-bar")).to_contain_text("Working —")
+                expect(page.locator("#send")).to_be_disabled()
+                expect(page.locator("#message")).to_have_value("Keep this unsent draft while live status is unknown.")
+                expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "opening-draft.png")
+                self.assertEqual(page.evaluate("workspace"), "build")
+                capture("status-recovered-running-work")
+
+                # With both reads unavailable and no saved progress, opening
+                # still shows Specification and never calls the project idle.
+                failures.update((projects["Empty"], endpoint) for endpoint in ("conversation", "turn-state"))
+                opened("Empty", "specification")
+                expect(page.locator("#reader")).to_contain_text("Specification")
+                self.assertTrue(page.evaluate("lastOperation === undefined"))
+                expect(page.locator("#send")).to_be_disabled()
+                expect(page.locator("#status-bar")).not_to_contain_text("nothing is running")
+                capture("both-fail-specification-fallback")
+                # An early manual rail choice survives the same failures.
+                opened("Destination", "specification")
+                holds[(projects["Empty"], "conversation")] = "error"
+                self.select_project(page, projects["Empty"])
+                page.wait_for_function("() => project?.name === 'Empty' && workspace === ''")
+                page.locator('.rail[data-stage="plan"]').click()
+                release("Empty", "conversation")
+                page.wait_for_function("() => workspace === 'plan' && pollTimer !== null")
+                expect(page.locator("#reader")).to_contain_text("Plan")
+                failures.difference_update((projects["Empty"], endpoint) for endpoint in ("conversation", "turn-state"))
+                page.wait_for_function("() => conversationLoaded && lastOperation === null && lastFiles !== null")
+                expect(page.locator("#send")).to_be_enabled()
+                expect(page.locator("#run-completion")).to_be_enabled()
+                self.assertEqual(page.evaluate("workspace"), "plan")
+                expect(page.locator("#message")).to_have_value("Keep this unsent draft while live status is unknown.")
+                expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "opening-draft.png")
+                capture("both-recovered-with-manual-choice-and-draft")
+
+                # A delayed history failure also stays with its origin; the
+                # successful destination keeps its page, polling and readiness.
+                holds[(projects["History"], "conversation")] = "error"
+                self.select_project(page, projects["History"])
+                page.wait_for_function("() => project?.name === 'History' && workspace === ''")
+                opened("Destination", "specification")
+                release("History", "conversation")
+                page.wait_for_function("() => project?.name === 'Destination' && lastFiles !== null")
+                expect(page.locator("#status-bar")).not_to_contain_text("stale conversation failure")
+                expect(page.locator("#status-bar")).not_to_contain_text("Working —")
+                self.assertTrue(page.evaluate("conversationLoaded && lastOperation === null && pollTimer !== null"))
+                capture("stale-history-error-isolated")
+                dispatch.assert_not_called()
+                assess.assert_not_called()
+                auxiliary.assert_not_called()
+                self.assertEqual(errors, [])
+                self.assertEqual(pending, {})
+            finally:
+                context.close()
+                browser.close()
+                self.server.conversation.by_project.clear()
+
+    def test_projects_open_at_progress_and_rails_slide_without_losing_drafts(self):
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("Playwright is not installed for the browser check")
+
+        settings = Settings(self.home / "navigation-settings.json")
+        self.server.settings = settings
+        projects = {}
+        for name in ("Fresh", "Specification", "Planning", "Approved", "Build", "Verification",
+                     "LegacyVerificationPassed", "LegacyVerificationActive",
+                     "Templates", "RetainedPlan", "RetainedBuild", "ReviewPlan", "ActivePlan", "ActiveBuild", "ActiveRun"):
+            projects[name] = self.request("/api/create", {"directory": name, "name": name,
+                                                         "description": "", "goals": ""})[1]["id"]
+
+        def document(name, role, text):
+            root = self.server.store.projects[projects[name]].root
+            target = root / (f"{name} — {role}.md" if role in {"Specification", "Plan"} else f"{role}.md")
+            target.write_text(text, encoding="utf-8")
+            return target
+
+        document("Specification", "Specification", "# Specification\n\nStatus: COMPLETE\n\nA small app that saves a user's notes.\n")
+        document("Planning", "Plan", "# Plan\n\nStatus: DRAFT\n\nUse the current note editor and save files locally.\n")
+        document("Approved", "Plan", "# Plan\n\nStatus: APPROVED\n\nUse the current note editor and save files locally.\n")
+        document("Build", "Programming Result", "# Programming Result\n\nStatus: IN PROGRESS\n\nThe note editor now saves local files.\n")
+        document("Verification", "Verification Report", "# Verification Report\n\nVerdict: INCOMPLETE\n\nThe saved file was checked; reopening still needs inspection.\n")
+        document("Templates", "Programming Result", "# Programming Result\n\nStatus: NOT STARTED\n\n## Changes\n\n## Checks\n")
+        document("Templates", "Verification Report", "# Verification Report\n\n## Verdict\n\n## Findings\n")
+        for name, status in (("LegacyVerificationPassed", "PASSED"), ("LegacyVerificationActive", "IN PROGRESS")):
+            definition = self.server.store.projects[projects[name]].root / "Project.md"
+            text = definition.read_text(encoding="utf-8")
+            self.assertIn("Programming: NOT STARTED", text)
+            self.assertIn("Verification: NOT STARTED", text)
+            definition.write_text(text.replace("Verification: NOT STARTED", f"Verification: {status}"), encoding="utf-8")
+        # An outgoing implementation request must not masquerade as implementation.
+        (self.home / "Specification" / "Specification — Implementation Request.md").write_text(
+            "# Implementation Request\n\nImplement the Plan when I send this.\n", encoding="utf-8")
+
+        def retain(name, stage, purpose=conversation.PURPOSE_WORK):
+            root = self.server.store.projects[projects[name]].root
+            messages = root / ".vibe" / "0001-20261023-120000" / "session" / "messages"
+            messages.mkdir(parents=True)
+            body = conversation.user_note_body(stage, "codex", "Work already submitted on this stage.", [])
+            body = body.replace(f"Vibe-Purpose: {conversation.PURPOSE_WORK}", f"Vibe-Purpose: {purpose}")
+            (messages / "0001-initiator-record.md").write_text(f"# Message 0001\nKind: note\n\n## Body\n\n{body}", encoding="utf-8")
+
+        retain("RetainedPlan", "planning")
+        retain("RetainedBuild", "programming-result")
+        retain("ReviewPlan", "review-plan", conversation.PURPOSE_AUTHOR)
+        for name, stage in (("ActivePlan", "planning"), ("ActiveBuild", "verification")):
+            active = self.server.store.projects[projects[name]]
+            handle = conversation.TurnOperation(active.root, "codex", stage, {})
+            handle.turn = f"live-{name}"
+            handle.state = "running"
+            self.server.conversation.by_project[str(active.root)] = handle
+        from ora_vibe_coder.run import RunDriver
+        active = self.server.store.projects[projects["ActiveRun"]]
+        driver = RunDriver(self.server.conversation, active, "build", "An existing automatic run.", {}, {}, "codex")
+        driver.run = "0001-20261023-120001"
+        driver.state = "paused-question"
+        self.server.runs.by_project[str(active.root)] = driver
+
+        evidence = Path(os.environ["VIBE_NAVIGATION_EVIDENCE"]) if os.environ.get("VIBE_NAVIGATION_EVIDENCE") else None
+        if evidence:
+            evidence.mkdir(parents=True, exist_ok=True)
+        measurements = {}
+
+        def ready(peer, **kwargs):
+            return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
+
+        with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready), \
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
+                mock.patch("ora_vibe_coder.conversation.start_turn") as dispatch, \
+                mock.patch("ora_vibe_coder.conversation.start_assessment") as assess, \
+                mock.patch("ora_vibe_coder.conversation.start_aux") as auxiliary, sync_playwright() as playwright:
+            if not Path(playwright.chromium.executable_path).is_file():
+                self.skipTest("Playwright's Chromium is not installed for the browser check")
+            browser = playwright.chromium.launch(headless=True)
+            context = browser.new_context(viewport={"width": 1440, "height": 1000},
+                                          permissions=["clipboard-read", "clipboard-write"], reduced_motion="no-preference")
+            try:
+                page = context.new_page()
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(self.server.url)
+                page.wait_for_function("() => project?.name === 'ActiveRun' && workspace === 'build' && pollTimer !== null && lastFiles !== null")
+
+                def opened(name, stage):
+                    self.select_project(page, projects[name])
+                    page.wait_for_function("data => currentId === data.id && project?.name === data.name && workspace === data.stage && pollTimer !== null && lastFiles !== null",
+                                           arg={"id": projects[name], "name": name, "stage": stage})
+                    expect(page.locator("#stage-title")).to_have_text({"specification": "Specification", "plan": "Plan", "build": "Build & Verify"}[stage])
+
+                def settled():
+                    page.wait_for_function("() => workspaceReveal === null && workspaceAnimations.every(animation => animation.playState === 'finished' || animation.playState === 'idle')")
+                    self.assertEqual(page.locator(".workspace-snapshot").count(), 0)
+                    self.assertNotEqual(page.locator(".main-col").evaluate("element => getComputedStyle(element).pointerEvents"), "none")
+
+                def arrangement(stage):
+                    settled()
+                    boxes = page.evaluate("""() => ({page: document.querySelector('.main-col').getBoundingClientRect().toJSON(),
+                        rails: [...document.querySelectorAll('.rail')].map(rail => ({stage: rail.dataset.stage,
+                            expanded: rail.getAttribute('aria-expanded'), box: rail.getBoundingClientRect().toJSON()}))})""")
+                    selected = ["specification", "plan", "build"].index(stage)
+                    for index, rail in enumerate(boxes["rails"]):
+                        self.assertEqual(rail["expanded"], str(index == selected).lower(), f"{stage}: {boxes}")
+                        if index <= selected:
+                            self.assertLessEqual(rail["box"]["right"], boxes["page"]["left"])
+                        else:
+                            self.assertGreaterEqual(rail["box"]["left"], boxes["page"]["right"])
+                    self.assertEqual([rail["stage"] for rail in sorted(boxes["rails"], key=lambda rail: rail["box"]["left"])],
+                                     ["specification", "plan", "build"])
+                    return boxes
+
+                def capture(name):
+                    if evidence:
+                        page.screenshot(path=str(evidence / f"{name}.png"), full_page=True, animations="allow")
+
+                def delay_plan_read():
+                    page.evaluate("""() => {
+                        window.delayedRead = {originalApi: api, pending: [], captured: false};
+                        api = async (path, data) => {
+                            const delay = window.delayedRead, result = await delay.originalApi(path, data);
+                            if (path === 'read-file' && data.path.endsWith(' — Plan.md') && !delay.captured) {
+                                delay.captured = true;
+                                await new Promise(resolve => delay.pending.push(resolve));
+                            }
+                            return result;
+                        };
+                    }""")
+
+                def release_plan_read():
+                    page.evaluate("""() => { const delay = window.delayedRead;
+                        api = delay.originalApi; delay.pending.forEach(resolve => resolve()); delete window.delayedRead; }""")
+
+                def motion(name, forward, old_title, new_title):
+                    page.wait_for_function("() => workspaceAnimations.some(animation => animation.playState === 'running' && animation.currentTime >= 250 && animation.currentTime < 800)")
+                    # Pause a real intermediate frame so geometry, content and
+                    # the screenshot all describe precisely the same instant.
+                    page.evaluate("() => { for (const animation of workspaceAnimations) { animation.pause(); animation.currentTime = 400; } }")
+                    observed = page.evaluate("""forward => {
+                        const old = document.querySelector('.workspace-snapshot'), page = document.querySelector('.main-col');
+                        const visible = element => {
+                            const box = element.getBoundingClientRect(), values = getComputedStyle(element).clipPath.match(/[\\d.]+/g).map(Number);
+                            const [top, right = top, bottom = top, left = right] = values;
+                            return {left: box.left + left, right: box.right - right};
+                        };
+                        const rails = workspaceAnimations.map(animation => animation.effect.target).filter(element => element.classList.contains('rail'));
+                        const edge = forward ? Math.min(...rails.map(rail => rail.getBoundingClientRect().left))
+                            : Math.max(...rails.map(rail => rail.getBoundingClientRect().right));
+                        const ids = [...document.querySelectorAll('[id]')].map(element => element.id);
+                        return {x: document.querySelector('.rail[data-stage=plan]').getBoundingClientRect().x, edge,
+                            old: visible(old), new: visible(page), oldTitle: workspaceReveal.frozen.querySelector('#stage-title').textContent,
+                            newTitle: document.getElementById('stage-title').textContent,
+                            oldReader: workspaceReveal.frozen.querySelector('#reader').textContent, newReader: document.getElementById('reader').textContent,
+                            oldIcons: [...workspaceReveal.frozen.querySelectorAll('.project-action use, #project-card use')].map(icon => icon.getBBox().width),
+                            inertSnapshot: old.inert, blockedPage: getComputedStyle(page).pointerEvents === 'none', duplicateLiveIds: ids.length - new Set(ids).size,
+                            animations: workspaceAnimations.map(animation => ({time: animation.currentTime, duration: animation.effect.getTiming().duration})),
+                            oldOpacity: getComputedStyle(old).opacity, newOpacity: getComputedStyle(document.getElementById('stage-panel')).opacity,
+                            pageTransform: getComputedStyle(page).transform};
+                    }""", forward)
+                    self.assertEqual(observed["oldTitle"], old_title)
+                    self.assertEqual(observed["newTitle"], new_title)
+                    self.assertNotEqual(observed["oldReader"], observed["newReader"])
+                    self.assertEqual(len(observed["oldIcons"]), 3)
+                    self.assertTrue(all(width > 0 for width in observed["oldIcons"]))
+                    self.assertTrue(observed["inertSnapshot"])
+                    self.assertTrue(observed["blockedPage"])
+                    self.assertEqual(observed["duplicateLiveIds"], 0)
+                    self.assertEqual(observed["oldOpacity"], "1")
+                    self.assertEqual(observed["newOpacity"], "1")
+                    self.assertEqual(observed["pageTransform"], "none")
+                    self.assertTrue(all(item["duration"] == 1000 for item in observed["animations"]))
+                    self.assertAlmostEqual(observed["old"]["right" if forward else "left"], observed["edge"], delta=1)
+                    self.assertAlmostEqual(observed["new"]["left" if forward else "right"], observed["edge"], delta=1)
+                    self.assertGreater(observed["old"]["right"] - observed["old"]["left"], 50)
+                    self.assertGreater(observed["new"]["right"] - observed["new"]["left"], 50)
+                    capture(name)
+                    page.evaluate("() => { for (const animation of workspaceAnimations) animation.play(); }")
+                    return observed
+
+                for name, stage in (("Fresh", "specification"), ("Specification", "specification"),
+                                    ("Planning", "plan"), ("Approved", "plan"), ("Build", "build"),
+                                    ("Verification", "build"), ("LegacyVerificationPassed", "build"),
+                                    ("LegacyVerificationActive", "build"), ("Templates", "specification"),
+                                    ("RetainedPlan", "plan"), ("RetainedBuild", "build"),
+                                    ("ReviewPlan", "plan"), ("ActivePlan", "plan"), ("ActiveBuild", "build"), ("ActiveRun", "build")):
+                    opened(name, stage)
+                    arrangement(stage)
+                    measurements[f"open-{name}"] = stage
+                self.assertEqual(driver.state, "paused-question")
+                self.assertTrue(all(handle.state == "running" for handle in self.server.conversation.by_project.values()))
+
+                # Delay two overlapping opens of the same project. An early
+                # real rail click wins the page, but the latest open must still
+                # finish polling/readiness; the older open must not restart them.
+                page.evaluate("""id => {
+                    window.openingRace = {originalApi: api, pending: [], responses: []};
+                    api = async (path, data) => {
+                        const race = window.openingRace, result = await race.originalApi(path, data);
+                        race.responses.push({path, data});
+                        if (path === 'conversation' && data.id === id)
+                            await new Promise(resolve => race.pending.push(resolve));
+                        return result;
+                    };
+                    window.firstOpening = chooseProject(id);
+                }""", projects["Approved"])
+                page.wait_for_function("() => openingRace.pending.length === 1")
+                page.evaluate("id => { window.secondOpening = chooseProject(id); }", projects["Approved"])
+                page.wait_for_function("() => openingRace.pending.length === 2")
+                page.locator('.rail[data-stage="build"]').click()
+                expect(page.locator("#stage-title")).to_have_text("Build & Verify")
+                page.evaluate("() => { openingRace.pending[1](); return secondOpening; }")
+                page.wait_for_function("""() => pollTimer !== null && lastFiles !== null &&
+                    openingRace.responses.some(response => response.path === 'readiness' && response.data.recheck)""")
+                page.evaluate("() => { openingRace.pending[0](); return firstOpening; }")
+                measurements["early-rail-opening"] = page.evaluate("""() => ({stage: workspace, polling: pollTimer !== null,
+                    readinessRechecks: openingRace.responses.filter(response => response.path === 'readiness' && response.data.recheck).length,
+                    stateResponses: openingRace.responses.filter(response => response.path === 'turn-state').length})""")
+                self.assertEqual(measurements["early-rail-opening"]["stage"], "build")
+                self.assertTrue(measurements["early-rail-opening"]["polling"])
+                self.assertEqual(measurements["early-rail-opening"]["readinessRechecks"], 1)
+                self.assertGreaterEqual(measurements["early-rail-opening"]["stateResponses"], 2)
+                arrangement("build")
+                capture("early-rail-opening")
+                page.evaluate("""() => { api = openingRace.originalApi;
+                    delete window.openingRace; delete window.firstOpening; delete window.secondOpening; }""")
+
+                opened("Specification", "specification")
+                page.locator("#destination").select_option(label="Codex")
+                page.evaluate("() => deliverStep('create-plan', 'copy')")
+                expect(page.locator("#status-bar")).to_contain_text("Create the Plan request copied and saved")
+                self.assertTrue((self.home / "Specification" / "Handoff.md").is_file())
+                opened("Fresh", "specification")
+                opened("Specification", "specification")
+                expect(page.locator("#next-step-title")).to_have_text("Create the Plan")
+
+                # Existing drafts and reading controls survive the moving rail.
+                page.locator("#message").fill("Keep this unsent instruction through every stage.")
+                picture = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c020000000b4944415478da6364f80f00010501012718e3660000000049454e44ae426082")
+                page.locator("#image-input").set_input_files({"name": "draft.png", "mimeType": "image/png", "buffer": picture})
+                expect(page.locator("#attachment-bar")).to_contain_text("Remove")
+                note = self.home / "material.txt"
+                note.write_text("Existing material for the next message.", encoding="utf-8")
+                page.locator("#add-message-files").click()
+                page.locator("#file-path").fill(str(self.home))
+                page.locator("#file-go").click()
+                page.locator("#file-list button").filter(has_text="material.txt").click()
+                page.locator("#file-cancel").click()
+                expect(page.locator("#message-files")).to_contain_text("material.txt")
+                page.locator("#spine").focus()
+                page.locator("#spine").press("ArrowRight")
+                fraction = page.evaluate("splitFraction")
+                measurements["desktop-specification"] = arrangement("specification")
+                capture("desktop-specification")
+
+                document("Specification", "Plan", "# Plan\n\nStatus: DRAFT\n\nNEW PLAN: use the current note editor and save files locally.\n")
+                delay_plan_read()
+                page.locator('.rail[data-stage="plan"]').click()
+                expect(page.locator("#stage-title")).to_have_text("Plan")
+                page.wait_for_function("() => delayedRead.pending.length === 1")
+                page.wait_for_timeout(1100)
+                measurements["slow-read-waits"] = page.evaluate("""() => ({oldTitle: workspaceReveal.frozen.querySelector('#stage-title').textContent,
+                    oldClip: getComputedStyle(workspaceReveal.snapshot).clipPath,
+                    animations: workspaceAnimations.map(animation => ({time: animation.currentTime, state: animation.playState})),
+                    liveReader: document.getElementById('reader').textContent})""")
+                self.assertEqual(measurements["slow-read-waits"]["oldTitle"], "Specification")
+                self.assertTrue(all(item["time"] == 0 and item["state"] == "paused" for item in measurements["slow-read-waits"]["animations"]))
+                self.assertIn("Loading", measurements["slow-read-waits"]["liveReader"])
+                capture("slow-read-old-page")
+                release_plan_read()
+                measurements["forward-motion"] = motion("forward-motion", True, "Specification", "Plan")
+                self.assertIn("NEW PLAN:", measurements["forward-motion"]["newReader"])
+                measurements["desktop-plan"] = arrangement("plan")
+                capture("desktop-plan")
+                self.assertGreater(measurements["forward-motion"]["x"], measurements["desktop-plan"]["rails"][1]["box"]["x"])
+                self.assertLess(measurements["forward-motion"]["x"], measurements["desktop-specification"]["rails"][1]["box"]["x"])
+                page.locator('.rail[data-stage="build"]').click()
+                measurements["desktop-build"] = arrangement("build")
+                capture("desktop-build")
+                expect(page.locator("#message")).to_have_value("Keep this unsent instruction through every stage.")
+                expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "draft.png")
+                expect(page.locator("#destination")).to_have_value("Codex")
+                self.assertEqual(page.evaluate("splitFraction"), fraction)
+                page.locator('.rail[data-stage="specification"]').click()
+                measurements["backward-motion"] = motion("backward-motion", False, "Build & Verify", "Specification")
+                arrangement("specification")
+                self.assertGreater(measurements["backward-motion"]["x"], measurements["desktop-build"]["rails"][1]["box"]["x"])
+                self.assertLess(measurements["backward-motion"]["x"], measurements["desktop-specification"]["rails"][1]["box"]["x"])
+                expect(page.locator("#message-files")).to_contain_text("material.txt")
+
+                # Real keyboard actions cannot submit a draft to the still
+                # covered stage. A fresh activation works after it is visible.
+                submitted = []
+                page.route("**/api/converse", lambda route: (
+                    submitted.append(route.request.post_data_json),
+                    route.fulfill(status=400, content_type="application/json", body='{"error":"Keyboard check stopped before dispatch."}')
+                ))
+                held_message = page.locator("#message").input_value()
+                for target, key in (("#message", "Enter"), ("#send", "Space")):
+                    delay_plan_read()
+                    page.locator('.rail[data-stage="plan"]').click()
+                    page.wait_for_function("() => delayedRead.pending.length === 1 && workspaceReveal !== null")
+                    page.locator(target).focus()
+                    page.keyboard.press(key)
+                    arrangement("plan")
+                    self.assertEqual(submitted, [])
+                    expect(page.locator("#message")).to_have_value(held_message)
+                    expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "draft.png")
+                    capture(f"keyboard-{key.lower()}-reveals-page")
+                    release_plan_read()
+                    expect(page.locator("#reader")).to_contain_text("NEW PLAN:")
+                    page.locator('.rail[data-stage="specification"]').click()
+                    arrangement("specification")
+
+                delay_plan_read()
+                page.locator('.rail[data-stage="plan"]').click()
+                page.wait_for_function("() => delayedRead.pending.length === 1 && workspaceReveal !== null")
+                page.locator("#message").focus()
+                page.locator("#message").evaluate("element => element.setSelectionRange(element.value.length, element.value.length)")
+                page.keyboard.type(" More typed text.")
+                arrangement("plan")
+                expect(page.locator("#message")).to_have_value(held_message + " More typed text.")
+                self.assertEqual(submitted, [])
+                release_plan_read()
+                expect(page.locator("#reader")).to_contain_text("NEW PLAN:")
+                page.keyboard.press("Enter")
+                expect(page.locator("#status-bar")).to_contain_text("Keyboard check stopped before dispatch")
+                self.assertEqual(len(submitted), 1)
+                self.assertEqual(submitted[0]["stage"], "planning")
+                self.assertEqual(submitted[0]["text"], held_message + " More typed text.")
+                expect(page.locator("#message")).to_have_value(held_message + " More typed text.")
+                expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "draft.png")
+                measurements["keyboard-during-old-page"] = {"coveredActivationsSubmitted": 0,
+                    "visibleSubmission": submitted[0]["stage"], "preservedText": page.locator("#message").input_value()}
+                capture("keyboard-typing-and-visible-send")
+                page.unroute("**/api/converse")
+                page.locator("#message").fill(held_message)
+                page.locator('.rail[data-stage="specification"]').click()
+                arrangement("specification")
+
+                # A document change updates the chosen reader without auto-routing.
+                document("Specification", "Plan", "# Plan\n\nStatus: DRAFT\n\nPlanning has now begun outside the app.\n")
+                page.evaluate("() => refreshChanged([], {silent: true})")
+                expect(page.locator("#stage-title")).to_have_text("Specification")
+                page.locator("#document").select_option(label="Plan — Specification")
+                expect(page.locator("#reader")).to_contain_text("Planning has now begun outside the app.")
+                page.evaluate("() => refreshChanged([], {silent: true})")
+                expect(page.locator("#document option:checked")).to_have_text("Plan — Specification")
+                expect(page.locator("#reader")).to_contain_text("Planning has now begun outside the app.")
+                expect(page.locator("#message")).to_have_value("Keep this unsent instruction through every stage.")
+
+                # A slow cancelled read must never reappear after another stage
+                # or project takes ownership of the real page.
+                delay_plan_read()
+                page.locator('.rail[data-stage="plan"]').click()
+                page.wait_for_function("() => delayedRead.pending.length === 1")
+                page.locator('.rail[data-stage="build"]').click()
+                release_plan_read()
+                arrangement("build")
+                expect(page.locator("#reader")).to_be_empty()
+                delay_plan_read()
+                page.locator('.rail[data-stage="plan"]').click()
+                page.wait_for_function("() => delayedRead.pending.length === 1")
+                page.evaluate("id => chooseProject(id)", projects["Fresh"])
+                release_plan_read()
+                arrangement("specification")
+                expect(page.locator("#reader")).not_to_contain_text("Planning has now begun outside the app.")
+                measurements["cancelled-read-project"] = page.evaluate("({name: project.name, stage: workspace, snapshots: document.querySelectorAll('.workspace-snapshot').length})")
+                opened("Specification", "plan")
+                page.locator('.rail[data-stage="specification"]').click()
+                arrangement("specification")
+
+                # Quick successive clicks cancel stale animation and stale document reads.
+                page.evaluate("""() => { for (const stage of ['plan', 'build', 'plan', 'specification', 'build'])
+                    document.querySelector(`.rail[data-stage=${stage}]`).click(); }""")
+                arrangement("build")
+                expect(page.locator("#stage-title")).to_have_text("Build & Verify")
+                expect(page.locator("#reader")).to_be_empty()
+                expect(page.locator("#message")).to_have_value("Keep this unsent instruction through every stage.")
+
+                page.emulate_media(reduced_motion="reduce")
+                page.locator('.rail[data-stage="plan"]').click()
+                arrangement("plan")
+                self.assertEqual(page.evaluate("workspaceAnimations.length"), 0)
+                page.emulate_media(reduced_motion="no-preference")
+                page.locator('.rail[data-stage="specification"]').click()
+                page.wait_for_function("() => workspaceAnimations.some(animation => animation.playState === 'running')")
+                page.emulate_media(reduced_motion="reduce")
+                arrangement("specification")
+                self.assertEqual(page.evaluate("workspaceAnimations.length"), 0)
+                page.emulate_media(reduced_motion="no-preference")
+                page.set_viewport_size({"width": 375, "height": 812})
+                for stage in ("specification", "plan", "build"):
+                    page.locator(f'.rail[data-stage="{stage}"]').click()
+                    boxes = arrangement(stage)
+                    for rail in boxes["rails"]:
+                        self.assertGreaterEqual(rail["box"]["left"], 0)
+                        self.assertLessEqual(rail["box"]["right"], 375)
+                    expect(page.locator("#single-toggle")).to_be_visible()
+                    page.locator("#single-toggle").click()
+                    self.assertEqual(page.locator("#split").get_attribute("data-mode"), "doc")
+                    page.locator("#single-toggle").click()
+                    self.assertEqual(page.locator("#split").get_attribute("data-mode"), "chat")
+                    capture(f"narrow-{stage}")
+
+                # Reopening ignores the last manually viewed page and re-derives progress.
+                page.locator("#message").fill("")
+                page.locator('#attachment-bar button').click()
+                page.locator('.rail[data-stage="specification"]').click()
+                arrangement("specification")
+                page.reload()
+                page.wait_for_function("() => project?.name === 'Specification' && workspace === 'plan' && pollTimer !== null")
+                expect(page.locator("#next-step-title")).to_have_text("Implement the Plan")
+                page.set_viewport_size({"width": 1440, "height": 1000})
+                capture("reopened-at-plan")
+                measurements["reopened-stage"] = page.evaluate("workspace")
+                dispatch.assert_not_called()
+                assess.assert_not_called()
+                auxiliary.assert_not_called()
+                self.assertEqual(errors, [])
+                if evidence:
+                    (evidence / "navigation-observations.json").write_text(json.dumps(measurements, indent=2), encoding="utf-8")
+            finally:
+                context.close()
+                browser.close()
+                self.server.conversation.by_project.clear()
+                self.server.runs.by_project.clear()
+
     def test_coding_tool_follows_project_across_stages_without_another_readiness_check(self):
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -1289,70 +1913,260 @@ elif skill.exists():
                 browser.close()
 
     def test_saved_role_defaults_restore_and_survive_a_warning_only_save(self):
-        # A saved role reopens accurately in Settings, and saving an unrelated
-        # setting preserves every role — through the shared renderer that
-        # Settings, the setup interview and Configure Path all use.
-        try:
-            from playwright.sync_api import expect, sync_playwright
-        except ImportError:
-            self.skipTest("Playwright is not installed for the browser check")
+        from playwright.sync_api import expect, sync_playwright
         settings = Settings(self.home / "role-settings.json")
         server = LocalServer(self.home, settings=settings)
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01})
         thread.start()
-
         def close():
-            server.shutdown()
-            thread.join(timeout=2)
-            server.server_close()
-
+            server.shutdown(); thread.join(timeout=2); server.server_close()
         self.addCleanup(close)
-
         def request(path, body):
-            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
-            connection.request("POST", path, json.dumps(body),
-                               headers={"Content-Type": "application/json", "X-Ora-Token": server.token})
-            response = connection.getresponse()
-            data = json.loads(response.read())
-            connection.close()
-            return response.status, data
-
-        _status, created = request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})
-        _status, _saved = request("/api/settings", {"role_defaults": {
-            "planning": {"tool": "claude", "model": "claude-test-model", "effort": "high"},
-            "verification": {"tool": "zcode", "model": "", "effort": ""}}})
-
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+            connection.request("POST", path, json.dumps(body), headers={"Content-Type": "application/json", "X-Ora-Token": server.token})
+            response = connection.getresponse(); data = json.loads(response.read()); connection.close()
+            self.assertEqual(response.status, 200, data)
+            return data
+        created = request("/api/create", {"directory": "SampleOne", "name": "Sample One", "description": "A sample tool", "goals": "A working sample"})
+        other = request("/api/create", {"directory": "SampleTwo", "name": "Sample Two", "description": "Another sample", "goals": "A working sample"})
+        request("/api/settings", {"role_defaults": {
+            "specification": {"tool": "codex", "model": "configured-model", "effort": "high"},
+            "planning": {"tool": "claude", "model": "saved-unavailable-model", "effort": "high"},
+            "implementation": {"tool": "codex", "model": "configured-model", "effort": "high"},
+            "specification_review": {"tool": "claude", "model": "review-model", "effort": "low"},
+            "planning_review": {"tool": "codex", "model": "review-model", "effort": "high"},
+            "review": {"tool": "hermes", "model": "", "effort": ""},
+            "verification": {"tool": "claude", "model": "verification-model", "effort": "low"}}})
+        native = {"models": [{"id": "configured-model", "label": "Configured model", "efforts": ["low", "high"], "default_effort": "low"},
+                              {"id": "other-model", "label": "Other model", "efforts": ["low"], "default_effort": "low"}],
+                  "configured_model": "configured-model", "configured_effort": "xhigh"}
+        native_reasons = {
+            "codex": "Choices come from Codex native metadata. Use harness default follows its effective configuration; a recommended model is not treated as your configured model.",
+            "claude": "Models and effort levels come from Claude Code native initialization, without a model call. It does not report the effective configured model or effort; Use harness default follows those settings.",
+            "hermes": "This harness’s headless route cannot accept named model or effort choices through Bridge. Use harness default keeps its own configured choices; saved named choices are preserved.",
+        }
         def ready(peer, **kwargs):
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
-
         with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready), \
+                mock.patch("ora_vibe_coder.server.model_inventory", side_effect=lambda tool: {**native, "reason": native_reasons[tool]}), \
                 mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
-            if not Path(playwright.chromium.executable_path).is_file():
-                self.skipTest("Playwright's Chromium is not installed for the browser check")
             browser = playwright.chromium.launch(headless=True)
             try:
-                page = browser.new_page()
+                page = browser.new_page(viewport={"width": 1440, "height": 1100})
+                errors = []; page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(server.url)
                 self.select_project(page, created["id"])
                 page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
                 page.locator("#settings").click()
                 expect(page.locator("#settings-panel")).to_be_visible()
+                expect(page.locator("#settings-roles .role-row[data-role]")).to_have_count(10)
+                self.assertEqual(page.locator('#settings-panel input:not([type="checkbox"])').count(), 0)
+                self.assertEqual(page.locator("#interview-panel, #configure-panel, #settings-spending").count(), 0)
                 planning = page.locator('#settings-roles .role-row[data-role="planning"]')
-                expect(planning.locator("select")).to_have_value("claude")
-                expect(planning.locator("input").first).to_have_value("claude-test-model")
-                expect(planning.locator("input").nth(1)).to_have_value("high")
-                verification = page.locator('#settings-roles .role-row[data-role="verification"]')
-                expect(verification.locator("select")).to_have_value("zcode")
-                # A warning-only save preserves every saved role.
-                page.locator("#settings-warn").uncheck()
+                expect(planning.locator(".role-tool")).to_have_value("claude")
+                expect(planning.locator(".role-model")).to_have_value("saved-unavailable-model")
+                expect(planning.locator(".role-effort")).to_have_value("high")
+                expect(page.locator('#settings-roles [data-role="review"] .role-tool')).to_have_value("hermes")
+                expect(page.locator('#settings-roles [data-role="specification_second_opinion"] .role-tool')).to_have_value("")
+                specification = page.locator('#settings-roles .role-row[data-role="specification"]')
+                expect(specification.locator(".role-model option[value='other-model']")).to_have_count(1)
+                specification.locator(".role-model").select_option("other-model")
+                expect(specification.locator(".role-effort")).to_have_value("")
+                self.assertEqual(specification.locator(".role-effort option").all_text_contents(), ["Use harness default (xhigh)", "low — model recommendation"])
+                # Every option lives on this first screen, and one save persists them all.
+                self.assertEqual(page.locator("#settings-warn").count(), 0)
+                page.locator("#settings-best-guess").check()
+                page.locator("#settings-hide-advisory").check()
+                evidence = os.environ.get("VIBE_CONFIGURATION_EVIDENCE")
+                if evidence:
+                    Path(evidence).mkdir(parents=True, exist_ok=True)
+                # Populate even the optional rows for the layout proof, using the
+                # complete native explanations rather than a short placeholder.
+                layout_choices = page.locator("#settings-roles .role-row[data-role]").evaluate_all("rows => rows.map(row => ({role: row.dataset.role, tool: row.querySelector('.role-tool').value}))")
+                for choice in layout_choices:
+                    row = page.locator(f'#settings-roles [data-role="{choice["role"]}"]')
+                    if not choice["tool"]:
+                        row.locator(".role-tool").select_option("claude" if choice["role"].endswith("second_opinion") else "codex")
+                    expect(row.locator(".role-origin")).to_have_text(native_reasons[row.locator(".role-tool").input_value()])
+                    row.locator(".role-model").select_option("")
+                    row.locator(".role-effort").select_option("")
+                layout_evidence = []
+                for theme, width, height in (("light", 1440, 1100), ("dark", 1440, 1100),
+                                             ("light", 1868, 1200), ("dark", 1868, 1200),
+                                             ("light", 420, 900), ("dark", 420, 900)):
+                    page.set_viewport_size({"width": width, "height": height})
+                    page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+                    panel = page.locator("#settings-panel")
+                    panel.evaluate("element => element.scrollTop = 0")
+                    metrics = panel.evaluate("""element => {
+                        const rect = element.getBoundingClientRect();
+                        const rows = [...element.querySelectorAll('.role-row[data-role]')];
+                        const first = rows[0], role = first.querySelector('label').getBoundingClientRect();
+                        const effort = first.querySelector('.role-effort').getBoundingClientRect();
+                        const canvas = document.createElement('canvas'), context = canvas.getContext('2d');
+                        return {width: innerWidth, height: innerHeight, scrollHeight: element.scrollHeight,
+                            clientHeight: element.clientHeight, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth,
+                            top: rect.top, bottom: rect.bottom, roleWidth: role.width, effortWidth: effort.width,
+                            allRowsInside: rows.every(row => row.getBoundingClientRect().top >= rect.top && row.getBoundingClientRect().bottom <= rect.bottom),
+                            actionsInside: [...element.querySelectorAll('.editor-actions button')].every(button => button.getBoundingClientRect().bottom <= rect.bottom),
+                            defaultLabelsFit: [...element.querySelectorAll('.role-model, .role-effort')].every(select => {
+                                const style = getComputedStyle(select); context.font = style.font;
+                                return context.measureText(select.selectedOptions[0].text).width + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + 24 <= select.clientWidth;
+                            }),
+                            optionsSingleLine: [...element.querySelectorAll('.configuration-option')].every(option => {
+                                const spans = [...option.querySelectorAll('span')];
+                                return spans.every(span => span.getBoundingClientRect().height <= parseFloat(getComputedStyle(span).lineHeight) + 1)
+                                    && Math.abs(spans[0].getBoundingClientRect().bottom - spans[1].getBoundingClientRect().bottom) < 5;
+                            }),
+                            dividers: rows.filter(row => parseFloat(getComputedStyle(row).borderBottomWidth) > 0).map(row => ({role: row.dataset.role, width: getComputedStyle(row).borderBottomWidth, style: getComputedStyle(row).borderBottomStyle})),
+                            descriptions: rows.map(row => row.querySelector('.role-origin').textContent)};
+                    }""")
+                    layout_evidence.append({"theme": theme, **metrics})
+                    if evidence:
+                        (Path(evidence) / "configuration-layout.json").write_text(json.dumps(layout_evidence, indent=2), encoding="utf-8")
+                        page.screenshot(path=str(Path(evidence) / f"configuration-{theme}-{width}-top.png"))
+                    self.assertLessEqual(metrics["scrollWidth"], metrics["clientWidth"], metrics)
+                    self.assertGreaterEqual(metrics["top"], 0, metrics)
+                    self.assertLessEqual(metrics["bottom"], height, metrics)
+                    self.assertEqual(metrics["dividers"], [{"role": "specification_second_opinion", "width": "1px", "style": "solid"}, {"role": "planning_second_opinion", "width": "1px", "style": "solid"}])
+                    if width > 980:
+                        self.assertLessEqual(metrics["scrollHeight"], metrics["clientHeight"], metrics)
+                        self.assertTrue(metrics["allRowsInside"] and metrics["actionsInside"], metrics)
+                        self.assertLessEqual(metrics["roleWidth"], 200, metrics)
+                        self.assertGreaterEqual(metrics["effortWidth"], 245, metrics)
+                        self.assertTrue(metrics["defaultLabelsFit"], metrics)
+                        self.assertTrue(metrics["optionsSingleLine"], metrics)
+                    else:
+                        expect(page.get_by_label("Specification harness", exact=True)).to_be_visible()
+                        page.locator("#settings-close").scroll_into_view_if_needed()
+                        page.locator("#settings-close").focus()
+                        expect(page.locator("#settings-close")).to_be_focused()
+                        if evidence: page.screenshot(path=str(Path(evidence) / f"configuration-{theme}-{width}-options.png"))
+                # Discard the unsaved layout fixture, then make the original
+                # changes for the persistence and run-only behavior checks.
+                page.locator("#settings-close").click()
+                page.set_viewport_size({"width": 1440, "height": 1100})
+                page.locator("#settings").click()
+                specification.locator(".role-model").select_option("other-model")
+                page.locator("#settings-best-guess").check()
+                page.locator("#settings-hide-advisory").check()
                 page.locator("#settings-save").click()
                 expect(page.locator("#settings-panel")).to_be_hidden()
-                _status, readback = request("/api/settings", {})
-                self.assertIs(readback["warn_skip_review"], False)
-                self.assertEqual(readback["role_defaults"]["planning"],
-                                 {"tool": "claude", "model": "claude-test-model", "effort": "high"})
-                self.assertEqual(readback["role_defaults"]["verification"],
-                                 {"tool": "zcode", "model": "", "effort": ""})
+                saved = request("/api/settings", {})
+                self.assertFalse(saved["warn_skip_review"])
+                self.assertTrue(saved["best_guess"])
+                self.assertTrue(saved["hide_advisory"])
+                self.assertEqual(saved["role_defaults"]["specification"], {"tool": "codex", "model": "other-model", "effort": ""})
+                handle = mock.Mock(turn="native-default", retained_images=[])
+                handle.snapshot.return_value = {"state": "running"}
+                with mock.patch("ora_vibe_coder.conversation.start_turn", return_value=handle) as turn:
+                    request("/api/converse", {"id": created["id"], "tool": "codex", "stage": "specification", "text": "Work on the sample.", "images": []})
+                    self.assertEqual(turn.call_args.kwargs["model"], "other-model")
+                    self.assertEqual(turn.call_args.kwargs["effort"], "")
+                self.assertEqual(saved["role_defaults"]["planning"], {"tool": "claude", "model": "saved-unavailable-model", "effort": "high"})
+                # Recreate the settings reader, reload the app, then open another project.
+                server.settings = Settings(settings.path)
+                page.reload()
+                self.select_project(page, other["id"])
+                page.wait_for_function("() => project !== null && workspace !== ''")
+                expect(page.locator("#destination")).to_have_value("Codex")
+                expect(page.locator("#step-reviewer")).to_have_value("claude")
+                expect(page.locator("#transition")).to_have_text("Send to Claude Code")
+                page.locator('[data-stage="plan"]').click()
+                expect(page.locator("#destination")).to_have_value("Claude Code")
+                expect(page.locator("#step-reviewer")).to_have_value("codex")
+                expect(page.locator("#transition")).to_have_text("Send to Codex")
+                page.locator('[data-stage="build"]').click()
+                page.locator("#build-reply-stage").select_option("verification")
+                expect(page.locator("#destination")).to_have_value("Claude Code")
+                page.locator("#destination").select_option("Codex")
+                expect(page.locator("#destination")).to_have_value("Codex")
+                page.locator("#configure-path").click()
+                expect(page.locator("#settings-best-guess")).to_be_checked()
+                verification = page.locator('#settings-roles [data-role="verification"]')
+                verification.locator(".role-tool").select_option("codex")
+                expect(verification.locator(".role-model")).to_have_value("configured-model")
+                expect(verification.locator(".role-effort")).to_have_value("")
+                page.locator("#configure-save").click()
+                page.wait_for_function("() => pendingRunConfig?.roles?.verification?.tool === 'codex'")
+                self.assertEqual(request("/api/settings", {})["role_defaults"]["verification"]["tool"], "claude")
+                page.locator("#configure-path").click()
+                page.locator("#configure-clear").click()
+                page.wait_for_function("() => pendingRunConfig && Object.keys(pendingRunConfig.roles).length === 0")
+                self.assertEqual(request("/api/settings", {})["role_defaults"], saved["role_defaults"])
+                page.locator("#configure-path").click()
+                page.locator('#settings-roles [data-role="verification"] .role-tool').select_option("codex")
+                page.locator("#configure-save").click()
+                self.select_project(page, created["id"])
+                page.wait_for_function("() => project !== null && workspace !== '' && pendingRunConfig === null")
+                # A run captures its defaults; later global saves must not
+                # repaint that run as though its future assignments changed.
+                from ora_vibe_coder.run import RunDriver
+                active_project = server.store.projects[created["id"]]
+                driver = RunDriver(server.conversation, active_project, "build", "Build the sample.",
+                                   {"roles": {}, "best_guess": False, "hide_advisory": False},
+                                   settings.read()["role_defaults"], "codex")
+                driver.run = "0001-20261021-000000"
+                driver.state = "paused-failure"
+                server.runs.by_project[str(active_project.root)] = driver
+                page.evaluate("() => stopPolling()")
+                page.evaluate("() => pollTick()")
+                page.wait_for_function("() => runActive?.run === '0001-20261021-000000'")
+                page.locator("#settings").click()
+                page.locator('#settings-roles [data-role="verification"] .role-tool').select_option("codex")
+                page.locator("#settings-hide-advisory").uncheck()
+                page.locator("#settings-save").click()
+                expect(page.locator("#settings-panel")).to_be_hidden()
+                globals_after = request("/api/settings", {})
+                self.assertEqual(globals_after["role_defaults"]["verification"]["tool"], "codex")
+                self.assertEqual(driver.assignment("verification")[:3], ("claude", "verification-model", "low"))
+                page.locator("#configure-path").click()
+                expect(page.locator('#settings-roles [data-role="verification"] .role-tool')).to_have_value("claude")
+                expect(page.locator('#settings-roles [data-role="verification"] .role-model')).to_have_value("verification-model")
+                page.locator("#settings-best-guess").check()
+                with mock.patch("ora_vibe_coder.run._record_run_note"):
+                    page.locator("#configure-save").click()
+                    expect(page.locator("#settings-panel")).to_be_hidden()
+                self.assertEqual(driver.assignment("verification")[:3], ("claude", "verification-model", "low"))
+                self.assertTrue(driver.config["best_guess"])
+                self.assertEqual(request("/api/settings", {}), globals_after)
+                page.locator("#settings").click()
+                expect(page.locator('#settings-roles [data-role="verification"] .role-tool')).to_have_value("codex")
+                page.locator("#settings-close").click()
+                server.runs.by_project.pop(str(active_project.root))
+                page.evaluate("() => updateRunState({active: null})")
+                # The single warning checkbox is a real run-only override.
+                # Global warnings stay enabled while this run suppresses them.
+                page.locator("#configure-path").click()
+                expect(page.locator("#settings-hide-advisory")).not_to_be_checked()
+                page.locator("#settings-hide-advisory").check()
+                page.locator("#configure-save").click()
+                expect(page.locator("#settings-panel")).to_be_hidden()
+                page.locator("#message").fill("Build the sample.")
+                with mock.patch.object(server.runs, "start", return_value=driver) as start:
+                    page.locator("#run-completion").click()
+                    page.wait_for_function("() => runActive?.run === '0001-20261021-000000'")
+                    self.assertTrue(start.call_args.args[4]["hide_advisory"])
+                    expect(page.locator("#run-warning")).not_to_be_visible()
+                self.assertEqual(request("/api/settings", {}), globals_after)
+                # A legacy saved 'do not warn' choice remains effective, and
+                # a deliberate one-run unchecked choice can still show it.
+                request("/api/settings", {"warn_skip_review": False})
+                page.evaluate("() => { updateRunState({active: null}); pendingRunConfig = null; }")
+                page.reload()
+                self.select_project(page, created["id"])
+                page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
+                page.locator("#configure-path").click()
+                expect(page.locator("#settings-hide-advisory")).to_be_checked()
+                page.locator("#settings-hide-advisory").uncheck()
+                page.locator("#configure-save").click()
+                page.locator("#message").fill("Build the sample.")
+                page.locator("#run-completion").click()
+                expect(page.locator("#run-warning")).to_be_visible()
+                page.locator("#run-warning-back").click()
+                self.assertFalse(request("/api/settings", {})["warn_skip_review"])
+                self.assertFalse(request("/api/settings", {})["hide_advisory"])
+                self.assertEqual(errors, [])
             finally:
                 browser.close()
 

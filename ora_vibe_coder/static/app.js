@@ -14,18 +14,22 @@ let currentId = "", project = null, workspace = "", roles = [], projectsHome = "
 let editorExpected = null, editorConflict = null;
 let selectorRescan = null, projectScanTimer = null, projectScanning = false, projectScanComplete = false, startupProject = null;
 let readerView = null;
+let navigationGeneration = 0, projectOpeningGeneration = 0;
+let workspaceAnimations = [];
+let workspaceReveal = null;
+const workspaceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 let hostChoices = [], browseHome = "", browseFallback = "", browseNote = "", folderChoice = null, folderState = null, folderLimit = null, fileState = null;
 let createUnder = "", parentAutoFill = "", createCode = "", createMaterial = [];
 let lastVisibleInput = null, pendingLocal = Promise.resolve();
-let appSettings = {warn_skip_review: true, spending: "", role_defaults: {}};
-let runActive = null, runLast = null, pendingRunConfig = null, interviewSatisfied = false;
+let appSettings = {warn_skip_review: true, best_guess: false, hide_advisory: false, role_defaults: {}};
+let runActive = null, runLast = null, pendingRunConfig = null;
 const notifiedRuns = new Set();
 const judgmentsSeen = new Set(), sortingSeen = new Set();
 const drafts = new Map(), editDrafts = new Map(), materialDrafts = new Map(), messageFileDrafts = new Map(), projectTools = new Map(), buildReplyStages = new Map();
 let filePickerTarget = "project";
 // Conversation, split view, readiness, and the reliability engine.
 let splitMode = "chat", splitFraction = 0.42;
-let conversationTurns = [], reviewRuns = [], attachments = [];
+let conversationTurns = [], reviewRuns = [], attachments = [], conversationLoaded = false;
 let lastOperation = null, lastFiles = null, pollTimer = null, readinessState = {checking: false, peers: null};
 // The live operation state the last conversation render was drawn under, so
 // a poll redraws an unfinished turn's message only when that state changed.
@@ -180,16 +184,20 @@ function updateHost() {
   updateSendState();
   if (!currentId || !workspace) return;
   const d = draft();
-  const addressed = !!host && d.packetDestination === host.name && d.packet !== null;
-  const ready = selectedReadiness();
-  $("continue").textContent = host?.desktop_request === "prefilled"
-    ? `Open ${host.name} desktop with request` : `Open ${host?.name || "selected"} app + copy request`;
-  $("continue").disabled = !addressed || !host.desktop;
-  $("continue").title = !host?.desktop ? `${host?.name || "The selected tool"} desktop app was not found on this computer.`
-    : host.desktop_request === "prefilled" ? "Opens a new visible desktop chat with a short pointer to the saved full request. Review and send it there."
+  // An external assessment belongs to its saved Reviewer, independently of
+  // the stage's writer and any later change to the configured defaults.
+  const externalReview = ["review-specification", "review-plan"].includes(d.packetPurpose);
+  const recipient = externalReview ? hostChoices.find(h => h.name === d.packetDestination) : host;
+  const addressed = !!recipient && d.packetDestination === recipient.name && d.packet !== null;
+  const ready = externalReview ? peerFacts(recipient?.id) : selectedReadiness();
+  $("continue").textContent = recipient?.desktop_request === "prefilled"
+    ? `Open ${recipient.name} desktop with request` : `Open ${recipient?.name || "selected"} app + copy request`;
+  $("continue").disabled = !addressed || !recipient.desktop;
+  $("continue").title = !recipient?.desktop ? `${recipient?.name || "The selected tool"} desktop app was not found on this computer.`
+    : recipient.desktop_request === "prefilled" ? "Opens a new visible desktop chat with a short pointer to the saved full request. Review and send it there."
     : "Copies the full request, then opens the app. Paste it into a new chat there.";
-  $("terminal").textContent = `Open ${host?.name || "selected tool"} in Terminal`;
-  $("terminal").disabled = !addressed || !host.detected || !ready?.ready || ready.authentication === "required";
+  $("terminal").textContent = `Open ${recipient?.name || "selected tool"} in Terminal`;
+  $("terminal").disabled = !addressed || !recipient.detected || !ready?.ready || ready.authentication === "required";
   $("terminal").title = ready?.ready && ready.authentication === "unknown"
     ? "Sign-in is unconfirmed. The terminal tool may ask you to sign in."
     : "Opens the selected tool in Terminal with the saved request when readiness is confirmed.";
@@ -203,7 +211,7 @@ async function initialize() {
   const data = await api("setup", {});
   hostChoices = data.hosts; browseHome = data.browse_home; browseFallback = data.browse_fallback || browseHome; browseNote = data.browse_note || "";
   appSettings = data.app_settings || appSettings;
-  interviewSatisfied = Object.values(appSettings.role_defaults || {}).some(role => role?.tool);
+
   splitFraction = typeof data.split_fraction === "number" ? Math.min(.95, Math.max(.05, data.split_fraction)) : .42;
   applySplit();
   $("version").textContent = data.version || "";
@@ -241,7 +249,7 @@ async function initialize() {
   $("setup").hidden = !!data.home;
   for (const id of ["new", "open"]) $(id).disabled = !data.home;
   if (!data.home) return;
-  startupProject = data.last_project ? {path: data.last_project, workspace: data.last_workspace} : null;
+  startupProject = data.last_project ? {path: data.last_project} : null;
   await loadProjects();
   if (!currentId && (projectScanning || scanNotices.length))
     status("Project discovery is still checking or could not read some paths. Open shows the paths and Refresh projects retries them.", "warning");
@@ -333,11 +341,11 @@ async function loadProjects(rescan = false) {
   if (startupProject && !currentId) {
     const entry = projectEntries.find(p => p.path === startupProject.path && p.available !== false);
     if (entry) {
-      const saved = startupProject; startupProject = null;
+      startupProject = null;
       if (!entry.archived) {
         try {
           const opened = await api("open", {path: entry.path});
-          await chooseProject(opened.id, saved.workspace);
+          await chooseProject(opened.id);
         } catch (_) { /* A disappeared project remains available through deliberate Open. */ }
       }
     } else if (!projectScanning) startupProject = null;
@@ -727,16 +735,144 @@ function showAbsentPacket() {
 }
 // The saved-request section of More appears whenever a request path is known.
 function renderMoreRequest() { $("more-request").hidden = !$("prepared-path").value; }
-async function chooseProject(id, preferredWorkspace) {
+function openingWorkspace(state) {
+  // A prepared outgoing request is not work on its destination stage. Only
+  // actual document content and the existing live/retained work records count.
+  const stageRank = stage => ({planning: 1, plan: 1, "review-plan": 1,
+    build: 2, programming: 2, implementation: 2, "programming-result": 2,
+    result: 2, verification: 2, correction: 2}[stage] || 0);
+  const plan = project.assessments?.planning;
+  let rank = plan?.path && plan.expected != null && !plan.untouched ? 1 : 0;
+  for (const result of [project.programming_result, project.verification]) {
+    if (result?.path && !result.status?.untouched && !result.status?.unreadable) rank = 2;
+  }
+  for (const stage of ["programming", "verification"]) {
+    const progress = project.statuses?.[stage]?.label;
+    if (progress && !["NOT STARTED", "Not reported"].includes(progress) && !progress.startsWith("Unknown")) rank = 2;
+  }
+  for (const record of [...conversationTurns, ...reviewRuns, state.run?.active || {},
+    ...(state.run?.last?.steps || []), state.operation || {}]) {
+    rank = Math.max(rank, stageRank(record.stage || record.step));
+  }
+  return ["specification", "plan", "build"][rank];
+}
+function finishWorkspaceReveal() {
+  for (const animation of workspaceAnimations) animation.cancel();
+  workspaceAnimations = [];
+  if (!workspaceReveal) return;
+  workspaceReveal.snapshot.remove();
+  workspaceReveal.page.style.clipPath = workspaceReveal.clip;
+  workspaceReveal.page.style.pointerEvents = workspaceReveal.pointerEvents;
+  workspaceReveal = null;
+}
+function positionRails(animate = false) {
+  const rails = [...document.querySelectorAll(".rail")];
+  // Capture the visible position before cancelling: a rapid second click
+  // continues from where the rail actually is, without jumping backwards.
+  const before = rails.map(rail => rail.getBoundingClientRect().left);
+  finishWorkspaceReveal();
+  const page = document.querySelector(".main-col"), oldBox = page.getBoundingClientRect();
+  let snapshot = null, frozen = null;
+  if (animate && !workspaceMotion.matches) {
+    // The inert shadow tree reuses the existing styles, but its IDs and
+    // controls are isolated from the real page. cloneNode copies no handlers.
+    snapshot = document.createElement("div");
+    snapshot.className = "workspace-snapshot";
+    snapshot.inert = true; snapshot.setAttribute("aria-hidden", "true");
+    const shadow = snapshot.attachShadow({mode: "closed"}), styles = new CSSStyleSheet();
+    styles.replaceSync([...document.styleSheets].map(sheet => [...sheet.cssRules].map(rule => rule.cssText).join("\n")).join("\n"));
+    shadow.adoptedStyleSheets = [styles];
+    frozen = page.cloneNode(true);
+    Object.assign(frozen.style, {width: "100%", height: "100%"});
+    shadow.append(document.querySelector(".glyph-defs").cloneNode(true), frozen);
+    for (const name of ["--spine-cols", "--title-shift"]) snapshot.style.setProperty(name, getComputedStyle(page).getPropertyValue(name));
+    const originals = [page, ...page.querySelectorAll("*")];
+    const copies = [frozen, ...frozen.querySelectorAll("*")];
+    originals.forEach((source, index) => {
+      const copy = copies[index];
+      if (source instanceof HTMLTextAreaElement || source instanceof HTMLSelectElement
+          || source instanceof HTMLInputElement && source.type !== "file") copy.value = source.value;
+    });
+    Object.assign(snapshot.style, {position: "fixed", left: `${oldBox.left}px`, top: `${oldBox.top}px`,
+      width: `${oldBox.width}px`, height: `${oldBox.height}px`, margin: "0", zIndex: "1", pointerEvents: "none",
+      overflow: "hidden", background: getComputedStyle(document.querySelector(".app")).backgroundColor});
+    document.body.append(snapshot);
+    originals.forEach((source, index) => { copies[index].scrollTop = source.scrollTop; copies[index].scrollLeft = source.scrollLeft; });
+  }
+  page.style.order = String(Math.max(0, Object.keys(workspaces).indexOf(workspace)) * 2 + 1);
+  for (const rail of rails) rail.setAttribute("aria-expanded", String(workspace === rail.dataset.stage));
+  if (!snapshot) return;
+  const after = rails.map(rail => rail.getBoundingClientRect().left);
+  const moving = rails.map((rail, index) => ({rail, index})).filter(({index}) => Math.abs(before[index] - after[index]) >= 1);
+  if (!moving.length) { snapshot.remove(); return; }
+  const forward = before[moving[0].index] > after[moving[0].index];
+  const edge = positions => forward
+    ? Math.min(...moving.map(({index}) => positions[index]))
+    : Math.max(...moving.map(({rail, index}) => positions[index] + rail.offsetWidth));
+  const clip = (box, boundary, old) => {
+    const left = forward !== old;
+    const amount = left ? boundary - box.left : box.right - boundary;
+    return left ? `inset(0px 0px 0px ${amount}px)` : `inset(0px ${amount}px 0px 0px)`;
+  };
+  const reveal = workspaceReveal = {snapshot, frozen, page, clip: page.style.clipPath, pointerEvents: page.style.pointerEvents};
+  page.style.pointerEvents = "none";  // A click on the old view cannot activate a different new action.
+  const timing = {duration: 1000, easing: "ease-in-out", fill: "both"};
+  rails.forEach((rail, index) => {
+    const distance = before[index] - after[index];
+    if (Math.abs(distance) < 1) return;
+    workspaceAnimations.push(rail.animate([{transform: `translateX(${distance}px)`}, {transform: "translateX(0)"}],
+      timing));
+  });
+  const newBox = page.getBoundingClientRect();
+  for (const [element, box, old] of [[snapshot, oldBox, true], [page, newBox, false]]) {
+    workspaceAnimations.push(element.animate([{clipPath: clip(box, edge(before), old)}, {clipPath: clip(box, edge(after), old)}], timing));
+  }
+  // Loading happens behind the complete old page. Start only when its caller
+  // has refreshed the stage and finished the new document (or its error view).
+  for (const animation of workspaceAnimations) { animation.pause(); animation.currentTime = 0; }
+  reveal.animations = workspaceAnimations;
+  return reveal;
+}
+function startWorkspaceReveal(reveal) {
+  if (!reveal || workspaceReveal !== reveal) return;
+  for (const animation of reveal.animations) animation.play();
+  Promise.all(reveal.animations.map(animation => animation.finished)).then(() => {
+    if (workspaceReveal === reveal) finishWorkspaceReveal();
+  }).catch(() => {});  // A later choice owns cancellation and cleanup.
+}
+workspaceMotion.addEventListener("change", () => { if (workspaceMotion.matches) finishWorkspaceReveal(); });
+document.addEventListener("keydown", event => {
+  if (!workspaceReveal) return;
+  const covered = workspaceReveal.page.contains(event.target);
+  finishWorkspaceReveal();  // Keyboard work always sees the selected real page first.
+  const typing = event.target instanceof HTMLTextAreaElement
+    || event.target instanceof HTMLInputElement && !["button", "submit", "reset", "checkbox", "radio", "file", "range", "color"].includes(event.target.type)
+    || event.target.isContentEditable;
+  const activation = event.key === "Enter" && !(typing && (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.isComposing))
+    || event.key === " " && !typing;
+  if (covered && activation) {
+    // This action was aimed at the covered page. Require a fresh activation;
+    // ordinary typing (including spaces and newlines) still reaches its field.
+    event.preventDefault(); event.stopImmediatePropagation();
+  }
+}, true);
+async function chooseProject(id) {
+  const opening = ++projectOpeningGeneration, generation = ++navigationGeneration;
   startupProject = null;
-  remember(); rememberEditor(); currentId = id; project = null; workspace = "";
+  remember(); rememberEditor();
+  if (id !== currentId) pendingRunConfig = null;
+  currentId = id; project = null; workspace = "";
+  positionRails();
   renderProjectOptions();
-  conversationTurns = []; reviewRuns = []; $("file-picker").hidden = true; filePickerTarget = "project";
+  conversationTurns = []; reviewRuns = []; conversationLoaded = false; $("file-picker").hidden = true; filePickerTarget = "project";
   runActive = null; runLast = null; judgments.clear(); sortingState.clear(); judgmentsSeen.clear(); sortingSeen.clear();
   $("run-banner").hidden = true; $("questions-box").hidden = true; $("repairs-box").hidden = true;
   composerGeneration += 1;  // The composer now holds another project's draft context.
-  stopPolling(); readinessChain += 1; lastOperation = null; lastFiles = null; contactLost = false; conversationLiveMark = ""; conversationRunMark = "";
-  renderStatusActivity();
+  // undefined means unobserved; only a successful status read may report idle (null).
+  stopPolling(); readinessChain += 1; lastOperation = undefined; lastFiles = null; contactLost = false; conversationLiveMark = ""; conversationRunMark = "";
+  $("status-bar").dataset.operationKey = "";
+  status("");
+  renderRunBanner();
   $("project").value = id;
   $("editor").hidden = true; $("stage-panel").hidden = true;
   $("rails").hidden = true; $("workspace-head").hidden = true;
@@ -751,8 +887,30 @@ async function chooseProject(id, preferredWorkspace) {
   renderConversation();
   if (!id) { renderReadiness(); return; }
   await refreshProject();
-  await chooseWorkspace(preferredWorkspace in workspaces ? preferredWorkspace : "specification");
-  await loadConversation();
+  if (opening !== projectOpeningGeneration) return;
+  const notices = [];
+  try { await loadConversation(); }
+  catch (error) {
+    if (opening !== projectOpeningGeneration) return;
+    notices.push(`Conversation history could not be loaded: ${error.message} Automatic refresh will try again.`);
+  }
+  if (opening !== projectOpeningGeneration) return;
+  let state = {};
+  try { state = await api("turn-state", {id}); }
+  catch (error) {
+    if (opening !== projectOpeningGeneration) return;
+    notices.push(`Live work status could not be loaded: ${error.message} Whether work is running is unknown; automatic refresh will check again.`);
+  }
+  if (opening !== projectOpeningGeneration) return;
+  // An early rail click owns the page choice, while this project opening
+  // still owns startup. Only a later project opening cancels that startup.
+  if (generation === navigationGeneration) await chooseWorkspace(openingWorkspace(state));
+  if (opening !== projectOpeningGeneration) return;
+  if ("operation" in state) {
+    updateRunState(state.run);
+    updateOperation(state.operation);
+  }
+  if (notices.length) status(`${notices.join(" ")} Available project documents remain open.`, "warning");
   startPolling();
   // Startup explicitly initiates this project's first readiness check; the
   // poll chain that follows only reads, so it ends when the check finishes
@@ -761,7 +919,11 @@ async function chooseProject(id, preferredWorkspace) {
 }
 async function chooseWorkspace(next) {
   if (!currentId || !project) { status("Choose or reopen a project successfully first."); return; }
+  if (!(next in workspaces)) return;
+  const generation = ++navigationGeneration, id = currentId, previous = workspace;
   remember(); rememberEditor(); workspace = next; $("editor").hidden = true;
+  readerView = null;  // Any older document read no longer owns this stage.
+  const reveal = positionRails(!!previous && previous !== next);
   readerAnchor = null;  // Each workspace starts from its own default document.
   const config = workspaces[workspace];
   const d = draft();
@@ -773,7 +935,7 @@ async function chooseWorkspace(next) {
   updateMessageSuggestion(); renderMaterialChosen();
   $("build-reply-choice").hidden = workspace !== "build";
   $("build-reply-stage").value = buildReplyStages.get(currentId) || "programming";
-  updateHost();
+  applyStageDefaults();
   $("stage-title").textContent = config.title;
   $("work-step-title").textContent = `Work with AI on ${workspace === "build" ? "the implementation" : `the ${config.title}`}`;
   $("result-step").hidden = workspace !== "build";
@@ -794,19 +956,24 @@ async function chooseWorkspace(next) {
   applySplit();  // The title-over-spine shift can only be measured once the row is visible.
   $("packet-tools").hidden = true; $("raw").value = "";
   $("reader").textContent = `Loading ${config.title}…`;
-  for (const button of document.querySelectorAll(".rail")) button.setAttribute("aria-expanded", String(workspace === button.dataset.stage));
   updateSecondOpinion();
   updateApprovePlan();
   api("workspace", {workspace}).catch(() => {});
   syncVisibleInput();
-  try { await refreshProject(); }
-  catch (error) {
-    $("reader").textContent = `Could not load ${config.title}. ${error.message}`;
-    throw error;
+  try {
+    try { await refreshProject(); }
+    catch (error) {
+      if (generation !== navigationGeneration || id !== currentId) return;
+      $("reader").textContent = `Could not load ${config.title}. ${error.message}`;
+      throw error;
+    }
+    if (generation !== navigationGeneration || id !== currentId) return;
+    if (d.packet !== null) showPacket(d.packet, d.packetPurpose);
+    else if (d.recoveryPacket !== null) showAbsentPacket();
+    else await readDocument();
+  } finally {
+    if (generation === navigationGeneration && id === currentId) startWorkspaceReveal(reveal);
   }
-  if (d.packet !== null) showPacket(d.packet, d.packetPurpose);
-  else if (d.recoveryPacket !== null) showAbsentPacket();
-  else await readDocument();
 }
 function codeLine(element, path) {
   element.dataset.path = path || "";
@@ -990,11 +1157,15 @@ function composerMaterial(stage, id) {
   return [...new Set([...(id === currentId ? material() : []), ...messageFilesFor(id, stage)].map(item => item.path))];
 }
 async function preparePurpose(purpose, instruction = null) {
-  remember(); const d = draft(), id = currentId, selectedWorkspace = workspace, submitted = signature(d), submittedDestination = d.destination, view = readerView;
+  remember(); const d = draft(), id = currentId, selectedWorkspace = workspace, submitted = signature(d), view = readerView;
+  const externalReview = ["review-specification", "review-plan"].includes(purpose);
+  const submittedDestination = externalReview
+    ? hostChoices.find(h => h.id === $("step-reviewer").value)?.name || "" : d.destination;
+  if (!submittedDestination) throw new Error(externalReview ? "Choose the Reviewer first." : "Choose a coding tool first.");
   const path = purpose === "implement-plan" ? project?.implementation_request_path : project?.handoff_path;
   $("prepare").disabled = true; $("review").disabled = true; $("transition").disabled = true;
   try {
-    const result = await api("prepare", {id, stage: purpose, input: instruction === null ? composerInstruction() : instruction, destination: d.destination,
+    const result = await api("prepare", {id, stage: purpose, input: instruction === null ? composerInstruction() : instruction, destination: submittedDestination,
       context: {material: composerMaterial(selectedWorkspace, id)},
       upstream: (() => { const a = project?.assessments?.[purpose === "create-plan" ? "specification" : purpose === "implement-plan" ? "planning" : ""]; return a?.path && a.expected != null ? {path: a.path, expected: a.expected} : null; })(),
       expected: d.packetPath === path ? d.packet : null});
@@ -1050,7 +1221,7 @@ $("copy-request").onclick = local(() => {
   return deliverStep(config.forward, "copy");
 });
 $("request-result").onclick = local(() => buildStepDialog("result"));
-$("build-reply-stage").onchange = () => { buildReplyStages.set(currentId, $("build-reply-stage").value); composerGeneration += 1; renderReadiness(); updateSendState(); };
+$("build-reply-stage").onchange = () => { buildReplyStages.set(currentId, $("build-reply-stage").value); composerGeneration += 1; applyStageDefaults(); renderReadiness(); updateSendState(); };
 $("add-message-files").onclick = guard(() => openMaterialPicker("message"));
 $("approve-plan").onclick = local(async () => {
   if (!currentId) return;
@@ -1139,10 +1310,11 @@ window.addEventListener("pagehide", () => { stopPolling(); if (!stopped) sendVis
 $("destination").onchange = () => { remember(); updateHost(); if (currentId && workspace && draft().packet) status("Coding tool changed. Prepare Again to create a snapshot addressed to this tool."); };
 async function deliverPrepared(route) {
   remember(); const d = draft(), id = currentId, selectedWorkspace = workspace, packet = d.packet, destination = d.packetDestination;
-  if (!d.packet || d.packetDestination !== d.destination) throw new Error("Prepare Again for this coding tool before opening it.");
+  const externalReview = ["review-specification", "review-plan"].includes(d.packetPurpose);
+  if (!d.packet || !destination || (!externalReview && destination !== d.destination)) throw new Error("Prepare Again for this coding tool before opening it.");
   const host = hostChoices.find(item => item.name === destination);
   const samePacket = () => id === currentId && selectedWorkspace === workspace && packet === d.packet
-    && destination === d.packetDestination && destination === $("destination").value;
+    && destination === d.packetDestination && (externalReview || destination === $("destination").value);
   if (deliversImplementation(d.packetPurpose)) {
     await refreshProject();
     if (!samePacket()) return;
@@ -1312,7 +1484,7 @@ function rememberSplit() {
   api("preferences", {split_fraction: splitFraction}).catch(() => {});
 }
 $("single-toggle").onclick = () => { splitMode = splitMode === "doc" ? "chat" : "doc"; applySplit(); };
-window.addEventListener("resize", applySplit);
+window.addEventListener("resize", () => { finishWorkspaceReveal(); applySplit(); });
 {
   // The branded spine is the divider between AI Work and the document.
   const divider = $("spine");
@@ -1460,6 +1632,8 @@ async function send() {
   }
   const tool = selectedToolId();
   if (!tool) { status("Choose the coding tool for this conversation, then send."); return; }
+  const blocked = routeBlock(tool);
+  if (blocked) { status(`${blocked.reason}. ${blocked.remedy}`, "warning"); return; }
   // The originating project and the composer's draft identity are captured
   // before dispatch: a switch or an edit while the acknowledgement is awaited
   // must never reassign this submission, its result, or its consumption of
@@ -1581,9 +1755,16 @@ function updateSendState() {
 // The saved conversation and the retained review runs, derived from records.
 async function loadConversation() {
   if (!currentId) { conversationTurns = []; reviewRuns = []; renderConversation(); return; }
-  const id = currentId;
-  const data = await api("conversation", {id});
-  if (id !== currentId) return;
+  const id = currentId, opening = projectOpeningGeneration;
+  let data;
+  try { data = await api("conversation", {id}); }
+  catch (error) {
+    if (id !== currentId || opening !== projectOpeningGeneration) return;
+    conversationLoaded = false;
+    throw error;
+  }
+  if (id !== currentId || opening !== projectOpeningGeneration) return;
+  conversationLoaded = true;
   conversationTurns = data.turns || [];
   reviewRuns = data.runs || [];
   updateMessageSuggestion();
@@ -1810,6 +1991,7 @@ function resolvePendingDraft(operation) {
   else if (turn.state === "failed") { pendingDrafts.delete(currentId); restorePendingDraft(draft, turn.maintenance?.notice); }
 }
 function updateOperation(operation) {
+  const wasUnknown = lastOperation === undefined;
   resolvePendingDraft(operation);
   const bar = $("status-bar");
   if (operation && !["starting", "running"].includes(operation.state)) {
@@ -1871,6 +2053,7 @@ function updateOperation(operation) {
   }
   if (summary) status(summary, warned ? "warning" : "");
   else renderStatusActivity();
+  if (wasUnknown) { updateSecondOpinion(); renderRunBanner(); }
   updateSendState();
 }
 // Secondary detail of the last turn: the saved-file readback and the Bridge
@@ -1903,6 +2086,7 @@ function renderMoreTurn(operation, diagnostics) {
 // start the worker; the chain's own polls just read the report, so the chain
 // ends when checking turns false instead of restarting the worker forever.
 async function refreshReadiness(recheck = false) {
+  if (recheck) modelInventories.clear();
   if (!currentId || stopped) return;
   const id = currentId, chain = ++readinessChain;
   let data;
@@ -1941,6 +2125,9 @@ function peerFacts(id) {
 // then the tool's own Bridge capability; authentication never blocks here —
 // a missing sign-in does not erase an implemented capability.
 function routeBlock(id) {
+  if (lastOperation === undefined)
+    return {reason: "This project's work status is unknown",
+            remedy: "Automatic refresh will check again before new work can start. Available documents and your draft stay here."};
   const host = hostChoices.find(h => h.id === id);
   if (!id || !host) return null;
   const bridge = readinessState.components?.bridge;
@@ -1961,8 +2148,8 @@ function routeBlock(id) {
 }
 // The step-6 / dialog label follows the same truth: Send for a work-capable
 // tool, Open in Terminal for a courier-only one.
-function routeLabelHost() {
-  const host = selectedHost();
+function routeLabelHost(id = selectedToolId()) {
+  const host = hostChoices.find(host => host.id === id);
   if (!host) return host;
   const facts = peerFacts(host.id);
   const conversation = facts ? facts.work === "supported" : host.conversation !== false;
@@ -2168,6 +2355,8 @@ async function runReview() {
     const tool = $("step-reviewer").value, secondOpinion = $("opinion-toggle").checked;
     const reviewer = secondOpinion ? $("reviewer").value : "";
     if (!tool || (secondOpinion && !reviewer)) { status("Choose the Reviewer and, for a second opinion, a work-capable peer first."); return; }
+    const blocked = routeBlock(tool);
+    if (blocked) { status(`${blocked.reason}. ${blocked.remedy}`, "warning"); return; }
     const id = currentId;
     let result;
     try {
@@ -2254,9 +2443,13 @@ function updateBuildNextStep() {
 
 // The step-6 button names the delivery: Send to the selected tool, or Open in
 // Terminal for Hermes and Qwen Code, which have no in-app conversation.
+function deliveryTool(step) {
+  const role = {"create-plan": "planning", "implement-plan": "implementation", result: "implementation", verification: "verification", correction: "correction"}[step];
+  return stageChoice(role).tool || selectedToolId();
+}
 function updateTransitionLabel() {
   if (!workspace) return;
-  const host = routeLabelHost();
+  const host = routeLabelHost(deliveryTool(workspace === "build" ? buildNextAction() : workspaces[workspace].forward));
   $("transition").textContent = workspace === "build"
     ? (buildNextAction() === "verification" ? "Finish verification" : "Request repairs")
     : host && host.conversation !== false ? `Send to ${host.name}`
@@ -2267,9 +2460,9 @@ function chooseDelivery(step, note) {
   // Build's steps keep their explanatory dialog; the named buttons carry the
   // one-click actions. Hermes and Qwen Code get Open in Terminal as primary.
   const dialog = $("build-action-dialog");
-  const host = routeLabelHost();
+  const tool = deliveryTool(step), host = routeLabelHost(tool);
   $("build-action-title").textContent = DELIVERY_STEPS[step]?.title || step;
-  const blocked = routeBlock(selectedToolId());
+  const blocked = routeBlock(tool);
   $("build-action-note").textContent = note
     + (host ? "" : " Choose a coding tool in step 3 to Send; Copy works without one.")
     + (blocked && host ? ` ${blocked.reason}. ${blocked.remedy}` : "");
@@ -2302,16 +2495,20 @@ function chooseDelivery(step, note) {
 
 async function deliverStep(step, action = null, note = "") {
   if (!currentId || !workspace) return;
-  const tool = selectedToolId();
+  const tool = deliveryTool(step);
   // A manual Copy request works without an in-app coding tool, as the step
   // dialog says: the server prepares and saves the packet for an external
   // chat without starting a tool. Send and the terminal route keep the
   // step-3 requirement.
   if (!tool && action !== "copy") { status("Choose the coding tool in step 3 first; Copy works only from a prepared request."); return; }
-  const host = routeLabelHost();
+  const host = routeLabelHost(tool);
   if (!action) {
     action = host && host.conversation !== false ? "send" : "terminal";
     if (host && host.conversation === false && !host.detected) action = "copy";
+  }
+  if (action !== "copy" && lastOperation === undefined) {
+    const blocked = routeBlock(tool);
+    status(`${blocked.reason}. ${blocked.remedy}`, "warning"); return;
   }
   const id = currentId, selectedWorkspace = workspace;
   const upstreamStage = step === "create-plan" ? "specification" : step === "implement-plan" ? "planning" : null;
@@ -2524,6 +2721,8 @@ function renderRepairsResult(trigger, result) {
         if (!currentId) return;
         const tool = selectedToolId();
         if (!tool) { status("Choose the coding tool in step 3 first."); return; }
+        const blocked = routeBlock(tool);
+        if (blocked) { status(`${blocked.reason}. ${blocked.remedy}`, "warning"); return; }
         const result = await api("repair", {id: currentId, stage: trigger.stage, tool});
         lastOperation = result.operation;
         await loadConversation();
@@ -2728,129 +2927,153 @@ function updateRunState(report) {
   renderQuestions();
   updateSendState();
 }
-function ensureDefaults(next) {
-  // The setup interview appears the first time Configure Path or Run is used
-  // with no saved defaults. It makes no model call.
-  if (interviewSatisfied) return Promise.resolve(true);
-  return new Promise(resolve => {
-    const panel = $("interview-panel");
-    renderRoleRows($("interview-roles"), appSettings.role_defaults);
-    $("interview-spending").value = appSettings.spending || "";
-    panel.hidden = false;
-    const finish = saved => { panel.hidden = true; resolve(saved); };
-    $("interview-skip").onclick = () => finish(true);
-    $("interview-save").onclick = guard(async () => {
-      appSettings = await api("settings", {spending: $("interview-spending").value, role_defaults: readRoleRows($("interview-roles"))});
-      interviewSatisfied = true;
-      status("Defaults saved in Settings. They apply to later runs; Configure Path can still change one run.");
-      finish(true);
-    });
-    void next;
-  });
+const CONFIG_ROLES = [
+  ["specification", "Specification"], ["specification_review", "Specification Review"],
+  ["specification_second_opinion", "Specification Review Second Opinion"],
+  ["planning", "Planning"], ["planning_review", "Planning Review"],
+  ["planning_second_opinion", "Planning Review Second Opinion"],
+  ["implementation", "Implementation"], ["review", "Implementation Review"],
+  ["verification", "Verification"], ["correction", "Correction"],
+];
+const modelInventories = new Map();
+const optionalRole = role => role.endsWith("_second_opinion");
+function configurationRole() {
+  return workspace === "specification" ? "specification" : workspace === "plan" ? "planning" : messageStage() === "verification" ? "verification" : "implementation";
 }
-function roleRow(role, choice, resolved) {
-  const row = document.createElement("div"); row.className = "role-row";
-  const label = document.createElement("label"); label.textContent = role[0].toUpperCase() + role.slice(1);
-  const tool = document.createElement("select");
-  const model = document.createElement("input"); model.placeholder = "model name (requested)";
-  const effort = document.createElement("input"); effort.placeholder = "effort (requested)";
-  row.append(label, tool, model, effort);
-  if (resolved) {
-    const origin = document.createElement("span"); origin.className = "role-origin"; origin.textContent = resolved;
-    row.append(origin);
+function stageChoice(role) {
+  return appSettings.role_defaults?.[role] || {};
+}
+function applyStageDefaults() {
+  const choice = stageChoice(configurationRole());
+  if (choice.tool) $("destination").value = hostChoices.find(h => h.id === choice.tool)?.name || "";
+  const verification = stageChoice("verification");
+  if (verification.tool) $("verification-verifier").value = verification.tool;
+  updateHost();
+  const reviewRole = workspace === "plan" ? "planning" : "specification";
+  const reviewer = stageChoice(`${reviewRole}_review`), peer = stageChoice(`${reviewRole}_second_opinion`);
+  $("step-reviewer").value = reviewer.tool || selectedToolId();
+  stepReviewerChosen = !!reviewer.tool;
+  $("opinion-toggle").checked = !!peer.tool;
+  if (peer.tool) { $("reviewer").value = peer.tool; reviewerChosen = true; }
+  renderReviewerChoices();
+}
+
+function inventory(tool) {
+  if (!modelInventories.has(tool)) {
+    modelInventories.set(tool, api("harness-models", {tool}).catch(() => ({models: [], reason: "Native choices could not be read. Use harness default follows the harness’s own model and effort. Saved choices are preserved."})));
   }
-  // One consistent role key — the lowercase key the saved defaults and this
-  // run's overrides use. The select's own choice is applied by fillRoleTools,
-  // only after that select's options exist: a select cannot hold a value
-  // whose option is not present yet.
-  row.dataset.role = role;
-  model.value = choice?.model || "";
-  effort.value = choice?.effort || "";
+  return modelInventories.get(tool);
+}
+function retainedOption(select, value, label) {
+  if (value && ![...select.options].some(option => option.value === value)) select.add(new Option(label || `${value} — saved choice (not in current inventory)`, value));
+  select.value = value || "";
+}
+function roleRow(role, label, choice) {
+  const row = document.createElement("div"); row.className = "role-row"; row.dataset.role = role;
+  const heading = document.createElement("label"); heading.textContent = label;
+  const tool = document.createElement("select"); tool.className = "role-tool"; tool.setAttribute("aria-label", `${label} harness`);
+  const model = document.createElement("select"); model.className = "role-model"; model.setAttribute("aria-label", `${label} model`);
+  const effort = document.createElement("select"); effort.className = "role-effort"; effort.setAttribute("aria-label", `${label} effort`);
+  const note = document.createElement("small"); note.className = "role-origin";
+  row.append(heading);
+  for (const [title, select] of [["Harness", tool], ["Model", model], ["Effort", effort]]) {
+    const field = document.createElement("div"); field.className = "role-choice";
+    const fieldLabel = document.createElement("span"); fieldLabel.className = "role-field-label"; fieldLabel.textContent = title;
+    field.append(fieldLabel, select); row.append(field);
+  }
+  row.append(note);
+  tool.replaceChildren(new Option(optionalRole(role) ? "Off" : "Use selected harness", ""), ...hostChoices.map(h => new Option(h.name + (h.detected ? "" : " — unavailable"), h.id)));
+  retainedOption(tool, choice.tool || "");
+  const load = async (fresh = false) => {
+    const selected = tool.value;
+    const heldModel = fresh ? "" : choice.model || "", heldEffort = fresh ? "" : choice.effort || "";
+    model.replaceChildren(new Option("Use harness default", ""));
+    effort.replaceChildren(new Option("Use harness default", ""));
+    retainedOption(model, heldModel); retainedOption(effort, heldEffort);
+    model.disabled = effort.disabled = !selected;
+    note.textContent = selected ? "Reading native model choices…" : optionalRole(role) ? "No second opinion will run." : "Uses the harness selected for the active stage, with its own defaults.";
+    if (!selected) return;
+    const facts = await inventory(selected);
+    if (tool.value !== selected || !row.isConnected) return;
+    const models = facts.models || [];
+    const configured = facts.configured_model || "";
+    model.replaceChildren(new Option(`Use harness default${configured ? ` (${configured})` : ""}`, ""), ...models.map(m => new Option(m.label || m.id, m.id)));
+    retainedOption(model, fresh ? (models.some(m => m.id === configured) ? configured : "") : heldModel);
+    const fillEfforts = value => {
+      const selectedModel = models.find(m => m.id === (model.value || configured));
+      const configuredEffort = facts.configured_effort || "";
+      effort.replaceChildren(new Option(`Use harness default${configuredEffort ? ` (${configuredEffort})` : ""}`, ""), ...(selectedModel?.efforts || []).map(e => new Option(e === selectedModel.default_effort ? `${e} — model recommendation` : e, e)));
+      retainedOption(effort, value);
+    };
+    fillEfforts(heldEffort);
+    model.onchange = () => fillEfforts("");
+    note.textContent = facts.reason || "Native harness choices; saved choices remain available.";
+  };
+  tool.onchange = () => { choice = {tool: tool.value}; load(true); };
+  // Run after the row has been attached; discovery is optional and cannot block Save.
+  queueMicrotask(() => load());
   return row;
-}
-function fillRoleTools(holder, overrides) {
-  for (const row of holder.querySelectorAll(".role-row")) {
-    const select = row.querySelector("select");
-    const held = select.value;
-    // The options come first; the saved choice is restored only once the
-    // option it names exists, so a reopened panel shows what was saved.
-    select.replaceChildren(new Option("Step-3 tool", ""), ...hostChoices.map(h => new Option(h.name, h.id)));
-    select.value = held && hostChoices.some(h => h.id === held) ? held : (overrides?.[row.dataset.role]?.tool || "");
-    const host = hostChoices.find(h => h.id === select.value);
-    const facts = (readinessState.peers || []).find(peer => peer.peer === select.value);
-    const modelInput = row.querySelectorAll("input")[0], effortInput = row.querySelectorAll("input")[1];
-    modelInput.disabled = !host || !facts?.model_switch;
-    effortInput.disabled = !host || !facts?.effort_switch;
-    modelInput.placeholder = facts?.model_switch ? `model name via ${facts.model_switch}` : "this tool takes no named model";
-    effortInput.placeholder = facts?.effort_switch ? `effort via ${facts.effort_switch}` : "this tool takes no named effort";
-    if (!select.onchange) select.onchange = () => fillRoleTools(holder, overrides);
-  }
 }
 function renderRoleRows(holder, values) {
   holder.replaceChildren();
-  // The lowercase role keys are the one vocabulary: rows carry them in
-  // data-role, so fillRoleTools restores the saved choice and readRoleRows
-  // writes back under the same key every caller — Settings, the setup
-  // interview and Configure Path — already uses.
-  for (const role of ["specification", "planning", "review", "implementation", "verification", "correction"]) {
-    holder.append(roleRow(role, values?.[role] || {}));
-  }
-  fillRoleTools(holder, values);
+  const header = document.createElement("div"); header.className = "role-row role-header";
+  for (const title of ["Role", "Harness", "Model", "Effort"]) { const cell = document.createElement("strong"); cell.textContent = title; header.append(cell); }
+  holder.append(header);
+  for (const [role, label] of CONFIG_ROLES) holder.append(roleRow(role, label, values?.[role] || {}));
 }
 function readRoleRows(holder) {
   const values = {};
-  for (const row of holder.querySelectorAll(".role-row")) {
-    const tool = row.querySelector("select").value;
-    const [model, effort] = [...row.querySelectorAll("input")].map(input => input.value.trim());
-    values[row.dataset.role.toLowerCase()] = {tool, model: tool ? model : "", effort: tool ? effort : ""};
+  for (const row of holder.querySelectorAll(".role-row[data-role]")) {
+    const tool = row.querySelector(".role-tool").value;
+    values[row.dataset.role] = {tool, model: tool ? row.querySelector(".role-model").value : "", effort: tool ? row.querySelector(".role-effort").value : ""};
   }
   return values;
 }
-$("settings").onclick = guard(() => {
-  const panel = $("settings-panel");
-  renderRoleRows($("settings-roles"), appSettings.role_defaults);
-  fillRoleTools($("settings-roles"), appSettings.role_defaults);
-  $("settings-warn").checked = appSettings.warn_skip_review !== false;
-  $("settings-spending").value = appSettings.spending || "";
-  panel.hidden = false;
-});
+function openConfiguration(forRun = false) {
+  const config = forRun ? runActive?.config || pendingRunConfig || {} : {};
+  const values = forRun && runActive ? runActive.effective_roles : {...appSettings.role_defaults, ...(config.roles || {})};
+  renderRoleRows($("settings-roles"), values);
+  $("settings-best-guess").checked = config.best_guess ?? appSettings.best_guess ?? false;
+  $("settings-hide-advisory").checked = config.hide_advisory ?? savedHideAdvisory();
+  $("configure-save").disabled = !currentId;
+  $("configure-clear").disabled = !currentId;
+  $("settings-location").textContent = appSettings.settings_path ? `Saved in ${appSettings.settings_path}` : "Saved in this installation’s settings.json.";
+  $("configure-explain").textContent = forRun && runActive
+    ? "Showing this run’s effective choices. Changes apply after any call already in progress. Save defaults applies to every project and future run; Apply to this run only leaves those defaults unchanged."
+    : "Saved defaults apply to every project and future run until you change them. Apply to this run only is optional. Nothing here starts work.";
+  $("settings-panel").hidden = false;
+}
+$("settings").onclick = guard(() => openConfiguration());
+$("configure-path").onclick = guard(() => openConfiguration(true));
 $("settings-close").onclick = () => { $("settings-panel").hidden = true; };
+function savedHideAdvisory() {
+  // Preserve the effective preference saved by either of the former warning controls.
+  return !!appSettings.hide_advisory || appSettings.warn_skip_review === false;
+}
 $("settings-save").onclick = guard(async () => {
-  appSettings = await api("settings", {warn_skip_review: $("settings-warn").checked,
-                                       spending: $("settings-spending").value,
-                                       role_defaults: readRoleRows($("settings-roles"))});
-  interviewSatisfied = Object.values(appSettings.role_defaults || {}).some(role => role?.tool);
+  appSettings = await api("settings", {warn_skip_review: !$("settings-hide-advisory").checked,
+    best_guess: $("settings-best-guess").checked, hide_advisory: $("settings-hide-advisory").checked,
+    role_defaults: readRoleRows($("settings-roles"))});
+  if (currentId && workspace && !lastOperation?.active) applyStageDefaults();
   $("settings-panel").hidden = true;
-  status("Settings saved. The warning switch and role defaults apply to later runs.");
+  status("Defaults saved for all projects and future runs. Work already in progress keeps its current choices.");
 });
-$("configure-path").onclick = guard(async () => {
-  if (!currentId) { status("Choose or create a project first."); return; }
-  await ensureDefaults();
-  const panel = $("configure-panel");
-  const overrides = runActive?.config?.roles || pendingRunConfig?.roles || {};
-  $("configure-best-guess").checked = !!(runActive?.config?.best_guess ?? pendingRunConfig?.best_guess);
-  $("configure-hide-advisory").checked = !!(runActive?.config?.hide_advisory ?? pendingRunConfig?.hide_advisory);
-  renderRoleRows($("configure-roles"), overrides);
-  fillRoleTools($("configure-roles"), overrides);
-  $("configure-explain").textContent = runActive
-    ? `This run (entered at ${STEP_NAMES[runActive.entry] || runActive.entry}) is ${runActive.state === "running" ? "working" : "paused"}. Changes below apply to this run only, are stored in its run record, and never touch your saved Settings.`
-    : "These choices apply to the next run only and are stored in that run's record; your saved Settings are unchanged. Configuring alone starts nothing.";
-  panel.hidden = false;
-});
-$("configure-close").onclick = () => { $("configure-panel").hidden = true; };
-$("configure-save").onclick = guard(async () => {
-  const config = {roles: readRoleRows($("configure-roles")),
-                  best_guess: $("configure-best-guess").checked,
-                  hide_advisory: $("configure-hide-advisory").checked};
+async function saveRunConfiguration(config) {
   if (runActive) {
     const result = await api("run-configure", {id: currentId, config});
     updateRunState(result.run);
-    status("This run's choices are updated in its run record. Saved Settings are unchanged.");
-  } else {
-    pendingRunConfig = config;
-    status("Run choices staged for the next run. Run to Completion will use them; nothing has started.");
-  }
-  $("configure-panel").hidden = true;
+  } else pendingRunConfig = config;
+  $("settings-panel").hidden = true;
+}
+$("configure-save").onclick = guard(async () => {
+  await saveRunConfiguration({roles: readRoleRows($("settings-roles")), best_guess: $("settings-best-guess").checked,
+    hide_advisory: $("settings-hide-advisory").checked});
+  status("Choices applied to this run only. Saved defaults for all projects are unchanged.");
+});
+$("configure-clear").onclick = guard(async () => {
+  // An active run captured its defaults on entry; explicitly using saved defaults refreshes that snapshot through overrides.
+  await saveRunConfiguration({roles: runActive ? appSettings.role_defaults : {}, best_guess: !!appSettings.best_guess, hide_advisory: savedHideAdvisory()});
+  status("This run now uses saved defaults. Global defaults are unchanged.");
 });
 $("run-completion").onclick = guard(async () => {
   if (!currentId || !workspace) { status("Choose or create a project first."); return; }
@@ -2864,14 +3087,13 @@ $("run-completion").onclick = guard(async () => {
     status("Run stopped: recorded unfinished. Files already changed remain; nothing replays by itself.");
     return;
   }
-  await ensureDefaults();
-  const config = pendingRunConfig || {roles: {}, best_guess: false, hide_advisory: false};
+  const config = pendingRunConfig || {roles: {}, best_guess: !!appSettings.best_guess, hide_advisory: savedHideAdvisory()};
   // The skip-review warning is advisory; Continue is one click, and the
-  // Settings switch or this run's hide-advisory preference removes it.
+  // saved or run-only hide-advisory preference removes it.
   const spec = project?.assessments?.specification, plan = project?.assessments?.planning;
   const missing = [ ["Specification", spec], ["Plan", plan] ].filter(([_, a]) =>
     !(["COMPLETE", "PASSED"].includes(a?.outcome || a?.verdict) && ["current", "unconfirmed"].includes(a.applies) && !a.issues?.length && !a.unreadable));
-  if (missing.length && appSettings.warn_skip_review !== false && !config.hide_advisory) {
+  if (missing.length && !config.hide_advisory) {
     const proceed = await new Promise(resolve => {
       const dialog = $("run-warning");
       $("run-warning-text").replaceChildren(...missing.map(([label, _]) => {
@@ -2893,6 +3115,8 @@ $("run-completion").onclick = guard(async () => {
   const images = attachments.slice().map(item => ({name: item.name, data: item.data}));
   const tool = selectedToolId();
   if (!tool) { status("Choose the step-3 coding tool for the active stage before starting a run."); return; }
+  const blocked = routeBlock(tool);
+  if (blocked) { status(`${blocked.reason}. ${blocked.remedy}`, "warning"); return; }
   status("Saving the brief and starting the run…");
   let result;
   try {
@@ -2951,23 +3175,38 @@ function stopPolling() {
 }
 async function pollTick() {
   if (!currentId || stopped || document.visibilityState === "hidden") return;
-  const id = currentId;
+  const id = currentId, opening = projectOpeningGeneration;
   let state;
   try { state = await api("turn-state", {id}); }
   catch (error) {
     // The failed poll belonged to the project captured above. After a switch
     // or stop, the displayed project's own polling reports current truth; a
     // stale origin error must never pose as the displayed project's state.
-    if (id !== currentId || stopped) return;
+    if (id !== currentId || opening !== projectOpeningGeneration || stopped) return;
     if (!error.status) lostContact();  // The server did not answer at all.
-    else status(error.message, "warning");  // It answered with an error; it is not lost.
+    else status(lastOperation === undefined
+      ? `Live work status could not be loaded: ${error.message} Whether work is running is unknown; automatic refresh will check again.`
+      : error.message, "warning");  // It answered with an error; it is not lost.
     return;
   }
-  if (id !== currentId || stopped) return;
+  if (id !== currentId || opening !== projectOpeningGeneration || stopped) return;
   contactRestored();
   updateRunState(state.run);
-  const previous = lastOperation?.state;
+  const wasUnknown = lastOperation === undefined, previous = lastOperation?.state;
   updateOperation(state.operation);
+  if (wasUnknown && !state.operation && !runActive)
+    status("Live work status is available again; no work is running in this project.");
+  const reloadConversation = async () => {
+    try { await loadConversation(); }
+    catch (error) {
+      if (id === currentId && opening === projectOpeningGeneration && !stopped)
+        status(`Conversation history could not be loaded: ${error.message} Automatic refresh will try again; available documents remain open.`, "warning");
+    }
+  };
+  if (!conversationLoaded) {
+    await reloadConversation();
+    if (id !== currentId || opening !== projectOpeningGeneration || stopped) return;
+  }
   const operation = state.operation;
   // A run moves to its next step's turn without this poll ever observing a
   // terminal operation, so a completed step's saved reply would stay missing
@@ -2979,8 +3218,8 @@ async function pollTick() {
   if (runMark !== conversationRunMark) {
     conversationRunMark = runMark;
     if (runMark) {
-      await loadConversation();
-      if (id !== currentId || stopped) return;  // The switch owns the view now.
+      await reloadConversation();
+      if (id !== currentId || opening !== projectOpeningGeneration || stopped) return;  // The switch owns the view now.
       await refreshChanged([], {silent: true});
       return;
     }
@@ -3011,8 +3250,8 @@ async function pollTick() {
     const outcomeKnownRecordable = operation.outcome_recorded !== false;
     if (["finished", "failed", "interrupted"].includes(operation.state)
         && ((openRecord || outcomeUnreflected) && outcomeKnownRecordable || (previous && previous !== operation.state))) {
-      await loadConversation();
-      if (id !== currentId || stopped) return;  // The switch owns the view now; its own polling refreshes it.
+      await reloadConversation();
+      if (id !== currentId || opening !== projectOpeningGeneration || stopped) return;  // The switch owns the view now; its own polling refreshes it.
       await refreshChanged([], {silent: true});
       return;
     }

@@ -889,53 +889,75 @@ class RunCase(unittest.TestCase):
 
     def test_unsupported_role_refused_before_start_with_disclosure(self):
         project = self.project()
-        with self.assertRaises(ProjectError) as refused:
-            self.start(project, "build", defaults={"verification": {"tool": "hermes", "model": "", "effort": ""}})
-        self.assertIn("Verification", refused.exception.args[0])
-        self.assertIn("Hermes", refused.exception.args[0])
-        self.assertIn("cannot exchange turns in-app", refused.exception.args[0])
+        for config, defaults in (({}, {"verification": {"tool": "hermes"}}),
+                                 ({"roles": {"verification": {"tool": "hermes"}}}, {"verification": {"tool": "codex"}})):
+            with self.subTest(config=config), self.assertRaises(ProjectError) as refused:
+                self.start(project, "build", config=config, defaults=defaults)
+            self.assertIn("Verification", refused.exception.args[0])
+            self.assertIn("Hermes", refused.exception.args[0])
+            self.assertIn("cannot exchange turns in-app", refused.exception.args[0])
         self.assertIsNone(self.runs.find(project))
         self.assertEqual(run_module.read_runs(project), [])
 
     def test_per_run_override_leaves_saved_defaults_unchanged(self):
-        project = self.project()
         settings = Settings(self.root / "settings.json")
-        settings.update(role_defaults={"implementation": {"tool": "codex", "model": "", "effort": ""}})
-        root = project.root
-        (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
-        (root / "Plan.md").write_text("# P\n\n## Approach\n\nFilled.\n", encoding="utf-8")
-        self.directive(0, reply="Built.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-        self.directive(1, reply="Verified.\n", writes={str(root / "One — Verification Report.md"): report("PASSED")})
-        driver = self.start(project, "build",
-                            config={"roles": {"verification": {"tool": "zcode", "model": "", "effort": ""}},
-                                    "best_guess": False, "hide_advisory": False},
-                            defaults=settings.read().get("role_defaults", {}))
-        self.settle(driver, lambda status: status["state"] == "complete")
-        self.assertEqual(settings.read()["role_defaults"]["implementation"]["tool"], "codex")
-        tools = [conversation.read_turn(self.store.home / "One" / ".vibe" / step["turn"])["tool"]
-                 for step in run_module.read_runs(project)[-1]["steps"]]
-        self.assertEqual(tools, ["codex", "zcode"])
+        defaults = {"implementation": {"tool": "claude", "model": "saved-model", "effort": "high"},
+                    "review": {"tool": "hermes", "model": "", "effort": ""},
+                    "specification_second_opinion": {"tool": "claude", "model": "peer-model", "effort": "low"}}
+        settings.update(role_defaults=defaults)
+        for index, selected_override in enumerate((False, True)):
+            with self.subTest(selected_override=selected_override):
+                project = self.project("Selected" if selected_override else "Inherited")
+                root = project.root
+                (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
+                (root / "Plan.md").write_text("# P\n\n## Approach\n\nFilled.\n", encoding="utf-8")
+                name = project.brief()["name"]
+                self.directive(index * 2, reply="Built.\n", writes={
+                    str(root / f"{name} — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
+                self.directive(index * 2 + 1, reply="Verified.\n", writes={str(root / f"{name} — Verification Report.md"): report("PASSED")})
+                roles = {"review": {"tool": "codex"}, "verification": {"tool": "zcode"},
+                         "specification_second_opinion": {"tool": ""}}
+                if selected_override:
+                    roles["implementation"] = {"tool": "", "model": "ignored-stale-model", "effort": "low"}
+                driver = self.start(project, "build", config={"roles": roles, "best_guess": False, "hide_advisory": False},
+                                    defaults=settings.read()["role_defaults"], tool="codex")
+                self.settle(driver, lambda status: status["state"] == "complete")
+                tools = [conversation.read_turn(root / ".vibe" / step["turn"])["tool"]
+                         for step in run_module.read_runs(project)[-1]["steps"]]
+                self.assertEqual(tools, ["codex" if selected_override else "claude", "zcode"])
+                self.assertEqual(driver.assignment("specification_second_opinion")[:3], ("", "", ""))
+                self.assertEqual(settings.read()["role_defaults"], defaults)
+        work_calls = [entry for entry in map(json.loads, self.argv_log.read_text().splitlines()) if entry["purpose"] == "work"]
+        self.assertEqual([(entry["model"], entry["effort"]) for entry in work_calls],
+                         [("saved-model", "high"), (None, None), (None, None), (None, None)])
 
     def test_requested_model_and_effort_reach_the_bridge_call(self):
         project = self.project()
         root = project.root
-        (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
-        (root / "Plan.md").write_text("# P\n\n## Approach\n\nFilled.\n", encoding="utf-8")
-        self.directive(0, reply="Built.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-        self.directive(1, reply="Verified.\n", model="MiniMax-Text-01", writes={
-            str(root / "One — Verification Report.md"): report("PASSED")})
-        driver = self.start(project, "build",
-                            defaults={"verification": {"tool": "codex", "model": "gpt-5.2-codex", "effort": "low"}})
+        writes = [
+            {str(root / "Specification.md"): "# Specification\n\n## Description\n\nA sample tool.\n"},
+            {str(root / "Plan.md"): "# Plan\n\n## Approach\n\nOne executable approach.\n"},
+            {str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"},
+            {str(root / "One — Verification Report.md"): report("NOT PASSED")},
+            {str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nCorrected.\n"},
+            {str(root / "One — Verification Report.md"): report("PASSED")},
+        ]
+        for index, files in enumerate(writes):
+            self.directive(index, reply="Saved.\n", model="reported-native-model", writes=files)
+        choices = {role: {"tool": tool, "model": role + "-model", "effort": effort} for role, tool, effort in (
+            ("specification", "codex", "high"), ("planning", "claude", "low"),
+            ("implementation", "codex", "high"), ("review", "claude", "low"),
+            ("verification", "claude", "low"), ("correction", "codex", "high"))}
+        driver = self.start(project, "specification", defaults=choices, tool="zcode")
         final = self.settle(driver, lambda status: status["state"] == "complete")
-        self.assertIn("model gpt-5.2-codex (requested)", self.step_requests(project, "verification")[0])
         argv = [json.loads(line) for line in self.argv_log.read_text(encoding="utf-8").splitlines()]
         work_calls = [entry for entry in argv if entry.get("purpose") == "work"]
-        self.assertEqual(work_calls[-1]["model"], "gpt-5.2-codex")
-        self.assertEqual(work_calls[-1]["effort"], "low")
-        # A model the tool reported is shown; a requested name never poses as proof.
-        self.assertEqual(final["reported_model"], "MiniMax-Text-01")
+        order = ["specification", "planning", "implementation", "verification", "correction", "verification"]
+        self.assertEqual([(entry["model"], entry["effort"]) for entry in work_calls],
+                         [(choices[role]["model"], choices[role]["effort"]) for role in order])
+        for step in ("build", "correction"):
+            self.assertIn("review-model (requested)", self.step_requests(project, step)[0])
+        self.assertEqual(final["reported_model"], "reported-native-model")
 
     def test_skip_review_warning_switch_round_trip(self):
         import http.client

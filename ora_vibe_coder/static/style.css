@@ -3,7 +3,7 @@
 :root[data-theme="dark"] { color-scheme: dark; } :root[data-theme="light"] { color-scheme: light; }
 * { box-sizing: border-box; }
 body { margin: 0; padding: 12px; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
-.app { flex: 1; min-height: 0; display: flex; background: var(--ovc-panel); border: 1px solid var(--ovc-border); border-radius: 12px; overflow: hidden; }
+.app { flex: 1; min-height: 0; display: flex; gap: 5px; padding-inline: 9px; background: var(--ovc-panel); border: 1px solid var(--ovc-border); border-radius: 12px; overflow: hidden; }
 button, select, input, textarea { font: inherit; color: inherit; border: 1px solid var(--ovc-border); border-radius: 7px; background: var(--ovc-panel-2); padding: 7px 11px; }
 button { cursor: pointer; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; background: var(--ovc-panel-2); }
 button:hover { filter: brightness(1.04); } button:disabled { cursor: not-allowed; opacity: .48; }
@@ -23,15 +23,19 @@ h2 { font-size: 1.2rem; margin: 0; font-weight: 500; } h3 { font-size: 1rem; mar
 .glyph-caret { width: 13px; height: 13px; stroke-width: 2; }
 .more[open] .glyph-caret { transform: rotate(180deg); }
 
-/* Workspace rails: full height at the far left, beside header, work area and footer. */
-.rails { flex: none; display: flex; gap: 5px; padding: 9px 0 9px 9px; }
-.rail { position: relative; flex: 0 0 32px; width: 32px; min-height: 420px; padding: 30px 5px 9px; background: var(--ovc-panel-2); display: block; font-size: 15px; font-weight: 500; text-align: right; border-radius: 8px; }
+/* The selected rail and earlier stages sit before the page; later stages
+   sit after it. The one nav retains all three real buttons as they move. */
+.rails { display: contents; }
+.rail { position: relative; flex: 0 0 32px; width: 32px; min-height: 420px; margin-block: 9px; padding: 30px 5px 9px; background: var(--ovc-panel-2); display: block; font-size: 15px; font-weight: 500; text-align: right; border-radius: 8px; z-index: 2; }
+.rail[data-stage=specification] { order: 0; }
+.rail[data-stage=plan] { order: 2; }
+.rail[data-stage=build] { order: 4; }
 .rail .rail-label { position: absolute; top: 52px; left: 50%; writing-mode: vertical-rl; transform: translateX(-50%) rotate(180deg); white-space: nowrap; }
 .rail small { position: absolute; top: 9px; left: 0; right: 0; text-align: center; color: var(--ovc-muted); font-size: 12px; font-weight: 400; }
 .rail .status-icon { position: absolute; top: 24px; left: 0; right: 0; text-align: center; font-size: 13px; }
 .rail[aria-expanded=true] { background: color-mix(in srgb, var(--ovc-accent) 23%, var(--ovc-panel)); border-color: var(--ovc-accent); }
 
-.main-col { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.main-col { order: 1; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
 /* Header rows: 1 project, 2 Details/status/More, 3 tool/title/run actions.
    No border under the header: the page background continues through the title
@@ -221,12 +225,36 @@ button.small { min-height: 28px; padding: 3px 9px; font-size: .8rem; }
 .run-banner .run-reason { flex-basis: 100%; margin: 0; color: var(--ovc-text); font-size: .82rem; overflow-wrap: anywhere; }
 .run-banner .run-reason.warning { color: var(--ovc-red); }
 
-/* Role rows in Settings, Configure Path and the setup interview. */
-.role-row { display: grid; grid-template-columns: minmax(90px, auto) minmax(120px, 1fr) minmax(110px, 1fr) minmax(90px, 1fr); gap: 7px; align-items: center; margin: 6px 0; }
+/* Shared configuration form. */
+.role-row { display: grid; grid-template-columns: 190px minmax(155px, 1fr) minmax(225px, 1.25fr) minmax(245px, 1.1fr); gap: 4px 8px; align-items: center; margin: 6px 0; }
 .role-row label { margin: 0; font-size: .85rem; }
-.role-row .role-origin { font-size: .75rem; color: var(--ovc-muted); overflow-wrap: anywhere; }
-@media (max-width: 600px) { .role-row { grid-template-columns: 1fr 1fr; } }
-#settings-roles .role-row, #interview-roles .role-row, #configure-roles .role-row { padding: 2px 0; }
+.role-row select { width: 100%; min-width: 0; }
+.role-choice { min-width: 0; }
+.role-field-label { display: none; }
+.role-row .role-origin { grid-column: 2 / -1; font-size: .75rem; color: var(--ovc-muted); overflow-wrap: anywhere; }
+.role-header { border-bottom: 1px solid var(--ovc-border); padding-bottom: 6px; }
+@media (max-width: 980px) {
+  .role-row { grid-template-columns: 1fr 1fr; }
+  .role-row label { grid-column: 1 / -1; font-weight: 600; }
+  .role-row .role-choice:first-of-type { grid-column: 1 / -1; }
+  .role-field-label { display: block; font-size: .75rem; color: var(--ovc-muted); }
+  .role-row .role-origin { grid-column: 1 / -1; }
+  .role-header { display: none; }
+}
+#settings-panel { top: 3dvh; width: min(1280px, 96vw); max-height: 94dvh; padding: 18px; overflow-wrap: anywhere; }
+#settings-panel h2 { margin-bottom: 10px; }
+#settings-panel > .field-group { margin: 8px 0; padding-bottom: 4px; }
+#settings-roles .role-row[data-role="specification_second_opinion"],
+#settings-roles .role-row[data-role="planning_second_opinion"] { border-bottom: 1px solid var(--ovc-border); padding-bottom: 8px; margin-bottom: 8px; }
+#settings-panel .configuration-option { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: baseline; gap: 6px; margin: 8px 0; }
+#settings-panel .configuration-option input { margin: 0; align-self: center; }
+#settings-panel .editor-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+#settings-location { margin-top: 8px; }
+@media (max-width: 700px) {
+  #settings-panel { padding: 14px; }
+  #settings-panel .configuration-option { grid-template-columns: auto minmax(0, 1fr); }
+  #settings-panel .configuration-option .hint { grid-column: 2; }
+}
 
 .reader-caption { margin: 0 0 8px; }
 .markdown { overflow-wrap: anywhere; line-height: 1.6; }

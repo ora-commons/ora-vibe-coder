@@ -1107,7 +1107,8 @@ def retain_document_version(project, role, document):
                 "\n\n# Approved document\n\n" + document["path"] + "\n\nContent:\n\n" + document["text"])
 
 
-def conversation_request(project, tool, stage, text, attachments, exchanges, unresolved, selected_files=(), supplied_documents=None):
+def conversation_request(project, tool, stage, text, attachments, exchanges, unresolved, selected_files=(), supplied_documents=None,
+                         application_instructions=""):
     """One ordinary work turn's body: user material first, clearly divided."""
     code = project.code_folder()
     parts = []
@@ -1161,6 +1162,8 @@ def conversation_request(project, tool, stage, text, attachments, exchanges, unr
             "instructions may end the turn with truthful unfinished status and remaining work; never fabricate results "
             "or claim pending work is complete.\n\n"
         )
+    if application_instructions:
+        turn_instructions += "## Selected implementation choices\n\n" + application_instructions + "\n\n"
     parts.append("# Work-turn instructions\n\n" + turn_instructions + "## Stage instructions\n\n"
                  f"Selected stage: {stage}\n\n" + framework_text(stage, TOOL_LABELS[tool][0]))
     if stage in {"specification", "planning"}:
@@ -1725,7 +1728,7 @@ def _artifact_readback(project, before):
 
 
 def start_turn(registry, project, tool, stage, text, images, files=(), run_fields=None,
-               model="", effort="", supplied_documents=None):
+               model="", effort="", supplied_documents=None, application_instructions=""):
     """Validate, save durably, and start one bounded work turn; return promptly."""
     if tool not in PEERS:
         raise ProjectError("Select one of the six supported coding tools.")
@@ -1763,6 +1766,7 @@ def start_turn(registry, project, tool, stage, text, images, files=(), run_field
     locations = _turn_locations(project, code, project.reference("Registry"))
     handle = registry.admit(project.root, tool, stage, locations)
     handle.supplied_documents = supplied_documents or {}
+    handle.application_instructions = application_instructions
     handle.artifact_start = _artifact_start(project, stage)
     handle.model, handle.effort = str(model or ""), str(effort or "")
     try:
@@ -1795,7 +1799,7 @@ def start_turn(registry, project, tool, stage, text, images, files=(), run_field
     return handle
 
 
-def _bridge_run(handle, session, arguments, body):
+def _bridge_run(handle, session, arguments, body, model=None, effort=None):
     """One Bridge run in the worker thread: feed the body, observe the
     event stream for aliveness and phase, and return the published reply's
     exact body. Raises ProjectError with the peer's own reason on failure."""
@@ -1812,10 +1816,12 @@ def _bridge_run(handle, session, arguments, body):
     # verification, result-only, and document-repair calls have other stages.
     if handle.tool == "zcode" and handle.stage == "programming":
         argv += ["--work-permission", "full-access"]
-    if handle.model:
-        argv += ["--model", handle.model]
-    if handle.effort:
-        argv += ["--effort", handle.effort]
+    requested_model = handle.model if model is None else model
+    requested_effort = handle.effort if effort is None else effort
+    if requested_model:
+        argv += ["--model", requested_model]
+    if requested_effort:
+        argv += ["--effort", requested_effort]
     process = subprocess.Popen(argv, cwd=str(bridge_root()), stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, encoding="utf-8", shell=False,
@@ -1924,7 +1930,8 @@ def _run_turn(handle, project, folder, session, stage, note_ref, attachments, te
         # exact prior turns a `resolved:` line may name for this turn.
         unresolved = [] if stage == "verification" else unresolved_maintenance(project)
         request = conversation_request(project, tool, stage, text, attachments,
-                                       recent_exchanges(project), unresolved, selected_files, getattr(handle, "supplied_documents", None))
+                                       recent_exchanges(project), unresolved, selected_files, getattr(handle, "supplied_documents", None),
+                                       getattr(handle, "application_instructions", ""))
         arguments = [*(part for path in attachments for part in ("--attachment", str(path))),
                      "--note-ref", note_ref, "--purpose", PURPOSE_WORK]
         reply = _bridge_run(handle, session, arguments, request)
@@ -2308,7 +2315,7 @@ def apply_assessment(project, stage, content, assessed_basis=None, assessed_docu
         return "applied", str(reference), ""
 
 
-def _pipeline_pass(handle, project, purpose, run, stage_key, tool, round_index, body):
+def _pipeline_pass(handle, project, purpose, run, stage_key, tool, round_index, body, model=None, effort=None):
     """One reliability pass: its own turn folder, records, and bounded call."""
     if handle.is_cancelled():
         raise TurnInterrupted(INTERRUPTED_REASON)
@@ -2327,10 +2334,10 @@ def _pipeline_pass(handle, project, purpose, run, stage_key, tool, round_index, 
     match = re.match(r"(\d{4})-", Path(note).name)
     if not match:
         raise ProjectError("Agent Bridge returned an unrecognized record path; the pass was not dispatched.")
-    return _bridge_run(handle, session, ["--note-ref", match[1], "--purpose", purpose], body)
+    return _bridge_run(handle, session, ["--note-ref", match[1], "--purpose", purpose], body, model=model, effort=effort)
 
 
-def start_assessment(registry, project, tool, stage, reviewer, iterate):
+def start_assessment(registry, project, tool, stage, reviewer, iterate, model="", effort="", reviewer_model="", reviewer_effort=""):
     """Start one review, with an optional second-opinion pass; return promptly."""
     if tool not in PEERS or (reviewer and reviewer not in PEERS):
         raise ProjectError("Select supported coding tools for the author and the reviewer.")
@@ -2356,6 +2363,7 @@ def start_assessment(registry, project, tool, stage, reviewer, iterate):
     locations = _turn_locations(project, code, document)
     handle = registry.admit(project.root, tool, REVIEW_KEYS[stage], locations)
     handle.artifact_start = _artifact_start(project, stage, assessed_document)
+    handle.model, handle.effort = model, effort
     try:
         folder = reserve_turn_folder(project)
         run = folder.name
@@ -2382,12 +2390,12 @@ def start_assessment(registry, project, tool, stage, reviewer, iterate):
         handle.finish(state, reason=str(error))
         raise
     handle.start_worker(_run_assessment,
-                        (handle, project, folder, session, stage, reviewer, iterate, match[1], assessed_document),
+                        (handle, project, folder, session, stage, reviewer, iterate, match[1], assessed_document, reviewer_model, reviewer_effort),
                         f"Ora Vibe Coder review {run}")
     return handle
 
 
-def _run_assessment(handle, project, folder, session, stage, reviewer, iterate, note_ref, assessed_document):
+def _run_assessment(handle, project, folder, session, stage, reviewer, iterate, note_ref, assessed_document, reviewer_model="", reviewer_effort=""):
     """The bounded worker: author, then evaluate/revise rounds, then save.
 
     Rounds: with iteration off, exactly one evaluate then one revise (three
@@ -2437,7 +2445,7 @@ def _run_assessment(handle, project, folder, session, stage, reviewer, iterate, 
                 last_round = ITERATE_ROUNDS if iterate else 1
                 for round_index in range(1, last_round + 1):
                     evaluation = _pipeline_pass(handle, project, PURPOSE_EVALUATE, run, stage_key,
-                                                reviewer, round_index, evaluate_request(stage_key, current))
+                                                reviewer, round_index, evaluate_request(stage_key, current), reviewer_model, reviewer_effort)
                     remember_identity("Reviewer")
                     rounds = round_index
                     agreement = verdict_of(evaluation) or "unclear"
