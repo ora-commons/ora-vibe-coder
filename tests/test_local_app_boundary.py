@@ -2508,39 +2508,209 @@ elif skill.exists():
             with self.subTest(linked=linked.rsplit("turn=", 1)[1]):
                 self.assertEqual(self.request(linked, {}, method="GET")[0], 404)
 
+    def test_composer_default_size_and_divider_keep_message_accessible(self):
+        from playwright.sync_api import expect, sync_playwright
+
+        project_id = self.request("/api/create", {"directory": "Composer", "name": "Composer", "description": "", "goals": ""})[1]["id"]
+        evidence = Path(os.environ["VIBE_COMPOSER_EVIDENCE"]) if os.environ.get("VIBE_COMPOSER_EVIDENCE") else None
+        if evidence:
+            evidence.mkdir(parents=True, exist_ok=True)
+        measurements, errors = {}, []
+        questions = ["Which code folder should I use for these corrections?"]
+        repairs = ["Keep the corrections within the selected stage."]
+        with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=lambda peer, **kwargs: {
+                "peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}), \
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 1100}, reduced_motion="reduce")
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(self.server.url)
+                self.select_project(page, project_id)
+                page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
+                page.evaluate("() => stopPolling()")
+                page.locator("#destination").select_option(label="Codex")
+                page.locator("#message").fill("Keep my unsent message through every stage.")
+
+                def content(question_list, repair_list):
+                    # Use the real renderers with local stand-in answers. A
+                    # long history must not squeeze the response controls.
+                    page.evaluate(r"""data => {
+                        conversationTurns = [{turn: '0001', state: 'complete', tool: 'codex', stage: 'specification',
+                            text: 'Please review this project.', reply: ('A complete paragraph from the previous conversation.\n\n').repeat(40), questions: data.questions}];
+                        reviewRuns = [];
+                        renderConversation(); renderQuestions();
+                        if (data.repairs.length) renderRepairsResult({stage: 'specification', key: 'composer-fixture'},
+                            {state: 'answered', answer: {ai: data.repairs, user: []}});
+                        else { document.getElementById('repairs-box').hidden = true; document.getElementById('repairs-box').replaceChildren(); }
+                        document.querySelector('.compose-message').scrollTop = 0;
+                    }""", {"questions": question_list, "repairs": repair_list})
+
+                def capture(name):
+                    result = page.evaluate("""() => {
+                        const box = id => document.getElementById(id).getBoundingClientRect().toJSON();
+                        const compose = document.querySelector('.compose-message');
+                        return {pane: box('work-step-body'), conversation: box('conversation'),
+                            compose: {...compose.getBoundingClientRect().toJSON(), clientHeight: compose.clientHeight,
+                                scrollHeight: compose.scrollHeight, clientWidth: compose.clientWidth, scrollWidth: compose.scrollWidth},
+                            message: box('message'), send: box('send'), scrollTop: compose.scrollTop,
+                            viewport: {width: innerWidth, height: innerHeight},
+                            pageWidth: document.documentElement.scrollWidth};
+                    }""")
+                    measurements[name] = result
+                    if evidence:
+                        page.screenshot(path=str(evidence / f"{name}.png"), full_page=True)
+                    self.assertLessEqual(result["pageWidth"], result["viewport"]["width"])
+                    self.assertLessEqual(result["compose"]["scrollWidth"], result["compose"]["clientWidth"] + 1)
+                    return result
+
+                for width, height in ((1440, 1100), (1280, 720), (420, 900)):
+                    page.set_viewport_size({"width": width, "height": height})
+                    for name, question_list, repair_list in (("plain", [], []), ("questions-repairs", questions, repairs)):
+                        content(question_list, repair_list)
+                        metrics = capture(f"{width}-{height}-{name}")
+                        self.assertGreaterEqual(metrics["conversation"]["height"], min(150, metrics["pane"]["height"] * .24))
+                        if width >= 1280:
+                            self.assertGreater(metrics["compose"]["height"], 120)
+                            # Fit everything together when the content leaves
+                            # reading room; wrapped controls on a short window
+                            # may need the same honest scroll as long content.
+                            if metrics["compose"]["scrollHeight"] <= metrics["pane"]["height"] - 150:
+                                self.assertGreaterEqual(metrics["message"]["top"], metrics["compose"]["top"])
+                                self.assertLessEqual(metrics["send"]["bottom"], metrics["compose"]["bottom"] + 1)
+                                self.assertLessEqual(metrics["compose"]["scrollHeight"], metrics["compose"]["clientHeight"] + 1)
+                        page.locator("#message").scroll_into_view_if_needed()
+                        expect(page.locator("#message")).to_be_in_viewport()
+                        page.locator("#send").scroll_into_view_if_needed()
+                        expect(page.locator("#send")).to_be_in_viewport()
+
+                # Content is retained whole; scroll to both ends on a short
+                # desktop and on the narrow layout, then reach the controls.
+                long_questions = [f"Question {index}: " + "Which correction should be made first? " * 4 for index in range(20)]
+                long_repairs = [f"Finding {index}: " + "Preserve the complete existing behavior. " * 4 for index in range(20)]
+                for width, height in ((1280, 720), (420, 900)):
+                    page.set_viewport_size({"width": width, "height": height})
+                    content(long_questions, long_repairs)
+                    capture(f"{width}-{height}-long-top")
+                    self.assertEqual(page.locator("#questions-box li").all_text_contents(), long_questions)
+                    self.assertEqual(page.locator("#repairs-box li").all_text_contents(), long_repairs)
+                    page.locator("#send").scroll_into_view_if_needed()
+                    expect(page.locator("#send")).to_be_in_viewport()
+                    capture(f"{width}-{height}-long-send")
+                    page.locator("#message").scroll_into_view_if_needed()
+                    expect(page.locator("#message")).to_be_in_viewport()
+
+                # The user's pointer and keyboard choices still size the
+                # pane, and adding questions does not reset that choice.
+                page.set_viewport_size({"width": 1440, "height": 1100})
+                content(questions, repairs)
+                before = capture("divider-default")
+                divider = page.locator("#conversation-divider").bounding_box()
+                pane = before["pane"]
+                page.mouse.move(divider["x"] + divider["width"] / 2, divider["y"] + divider["height"] / 2)
+                page.mouse.down()
+                page.mouse.move(divider["x"] + divider["width"] / 2, pane["top"] + pane["height"] * .4)
+                page.mouse.up()
+                dragged = capture("divider-pointer")
+                self.assertAlmostEqual(dragged["conversation"]["height"] / pane["height"], .4, delta=.02)
+                page.locator("#conversation-divider").press("ArrowDown")
+                keyed = capture("divider-keyboard")
+                self.assertAlmostEqual(keyed["conversation"]["height"] / pane["height"], .45, delta=.02)
+                content(long_questions, long_repairs)
+                retained = capture("divider-long-content")
+                self.assertAlmostEqual(retained["conversation"]["height"], keyed["conversation"]["height"], delta=1)
+
+                picture = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c020000000b4944415478da6364f80f00010501012718e3660000000049454e44ae426082")
+                page.locator("#image-input").set_input_files({"name": "draft.png", "mimeType": "image/png", "buffer": picture})
+                for stage in ("plan", "build", "specification"):
+                    page.locator(f'.rail[data-stage="{stage}"]').click()
+                    page.wait_for_function("stage => workspace === stage && workspaceReveal === null", arg=stage)
+                    expect(page.locator("#message")).to_have_value("Keep my unsent message through every stage.")
+                    expect(page.locator("#attachment-bar img")).to_have_count(1)
+                    self.assertAlmostEqual(page.locator("#conversation").bounding_box()["height"], keyed["conversation"]["height"], delta=1)
+                page.evaluate("() => updateOperation({turn: 'stand-in-active', state: 'running', elapsed_seconds: 1, last_contact_seconds: 0})")
+                expect(page.locator("#send")).to_be_disabled()
+                page.evaluate("() => updateOperation(null)")
+                expect(page.locator("#send")).to_be_enabled()
+                self.assertEqual(errors, [])
+            finally:
+                if evidence:
+                    (evidence / "composer-metrics.json").write_text(json.dumps(measurements, indent=2) + "\n", encoding="utf-8")
+                browser.close()
+
     def test_check_updates_answers_and_failure_path_use_a_stand_in_lookup(self):
+        from playwright.sync_api import expect, sync_playwright
+
         # The deliberate check answers one of four ways through a stand-in
         # release record: no request leaves the machine in this test.
         running = (Path(__file__).resolve().parents[1] / "plugins" / "ora-vibe-coder" / "VERSION").read_text(encoding="utf-8").strip()
         major, minor, patch = (int(part) for part in running.split("."))
-        page = lambda tag: f"https://github.com/ora-commons/ora-vibe-coder/releases/tag/v{tag}"
+        release_page = lambda tag: f"https://github.com/ora-commons/ora-vibe-coder/releases/tag/v{tag}"
         def stand_in(tag):
-            return lambda: {"tag_name": f"v{tag}", "html_url": page(tag)}
-        for tag, expected in ((f"{major}.{minor + 1}.0", "newer"), (f"{major}.{minor}.{patch}", "same"), ("0.0.1", "ahead")):
-            with self.subTest(answer=expected):
-                self.server.update_lookup = stand_in(tag)
-                status, result, _ = self.request("/api/check-updates", {})
-                self.assertEqual(status, 200)
-                self.assertEqual(result["answer"], expected)
-                if expected == "newer":
-                    self.assertIn(f"{major}.{minor + 1}.0", result["label"])
-                    self.assertEqual(result["url"], page(f"{major}.{minor + 1}.0"))
-                    self.assertRegex(result["note"], r"Stop Vibe.*Install or update")
-                elif expected == "same":
-                    self.assertIn("up to date", result["label"])
-                    self.assertIsNone(result["url"])
-                else:
-                    self.assertIn("newer than the newest public release", result["label"])
-                    self.assertIsNone(result["url"])
-        for name, stand in (("transport failure", lambda: (_ for _ in ()).throw(OSError("rate limited"))),
-                            ("unreadable record", lambda: {"message": "API rate limit exceeded"})):
-            with self.subTest(failure=name):
-                self.server.update_lookup = stand
-                status, result, _ = self.request("/api/check-updates", {})
-                self.assertEqual((status, result["answer"]), (200, "cant_tell"))
-                self.assertIn("Couldn't check for updates.", result["label"])
-                self.assertNotIn("up to date", result["label"])  # A failure is never reported as up to date.
-                self.assertIsNone(result["url"])
+            return lambda: {"tag_name": f"v{tag}", "html_url": release_page(tag)}
+        evidence = Path(os.environ["VIBE_COMPOSER_EVIDENCE"]) if os.environ.get("VIBE_COMPOSER_EVIDENCE") else None
+        if evidence:
+            evidence.mkdir(parents=True, exist_ok=True)
+        errors = []
+        with mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 1100})
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(self.server.url)
+                expect(page.locator("#check-updates")).to_be_visible()
+
+                def browser_check(result, name):
+                    with page.expect_response("**/api/check-updates") as response:
+                        page.locator("#check-updates").click()
+                    self.assertEqual(response.value.json(), result)
+                    expect(page.locator("#update-status")).to_contain_text(result["label"])
+                    expect(page.locator("#status-bar")).to_have_text(result["note"])
+                    expect(page.locator("#check-updates")).to_be_enabled()
+                    link = page.locator("#update-status a")
+                    if result["url"]:
+                        expect(link).to_have_count(1)
+                        expect(link).to_have_attribute("href", result["url"])
+                        expect(link).to_have_text("Release page")
+                    else:
+                        expect(link).to_have_count(0)
+                    self.assertEqual(errors, [])
+                    if evidence:
+                        page.screenshot(path=str(evidence / f"updates-{name}.png"), full_page=True)
+
+                # The final newer result repeats a check after every other
+                # answer, proving the button and release link can be reused.
+                for tag, expected in ((f"{major}.{minor + 1}.0", "newer"), (f"{major}.{minor}.{patch}", "same"), ("0.0.1", "ahead")):
+                    with self.subTest(answer=expected):
+                        self.server.update_lookup = stand_in(tag)
+                        status, result, _ = self.request("/api/check-updates", {})
+                        self.assertEqual(status, 200)
+                        self.assertEqual(result["answer"], expected)
+                        if expected == "newer":
+                            self.assertIn(f"{major}.{minor + 1}.0", result["label"])
+                            self.assertEqual(result["url"], release_page(f"{major}.{minor + 1}.0"))
+                            self.assertRegex(result["note"], r"Stop Vibe.*Install or update")
+                        elif expected == "same":
+                            self.assertIn("up to date", result["label"])
+                            self.assertIsNone(result["url"])
+                        else:
+                            self.assertIn("newer than the newest public release", result["label"])
+                            self.assertIsNone(result["url"])
+                        browser_check(result, expected)
+                for name, stand in (("transport-failure", lambda: (_ for _ in ()).throw(OSError("rate limited"))),
+                                    ("unreadable-record", lambda: {"message": "API rate limit exceeded"})):
+                    with self.subTest(failure=name):
+                        self.server.update_lookup = stand
+                        status, result, _ = self.request("/api/check-updates", {})
+                        self.assertEqual((status, result["answer"]), (200, "cant_tell"))
+                        self.assertIn("Couldn't check for updates.", result["label"])
+                        self.assertNotIn("up to date", result["label"])
+                        self.assertIsNone(result["url"])
+                        browser_check(result, name)
+                self.server.update_lookup = stand_in(f"{major}.{minor + 1}.0")
+                browser_check(self.request("/api/check-updates", {})[1], "repeated-newer")
+            finally:
+                browser.close()
 
     def test_malformed_or_cross_boundary_writes_preserve_project(self):
         code, response, _ = self.request("/api/create", {"directory": "One", "name": "One", "description": "Keep", "goals": "Goals"})

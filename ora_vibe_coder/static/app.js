@@ -1347,17 +1347,17 @@ $("check-updates").onclick = guard(async () => {
     const result = await api("check-updates", {});
     // The result line carries the answer itself, plus the release-page link
     // when there is one; nothing was downloaded or installed by the check.
-    const status = $("update-status");
-    status.replaceChildren();
-    status.append(result.label);
+    const updateStatus = $("update-status");
+    updateStatus.replaceChildren();
+    updateStatus.append(result.label);
     if (result.url) {
-      status.append(" ");
+      updateStatus.append(" ");
       const link = document.createElement("a");
       link.href = result.url;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.textContent = "Release page";
-      status.append(link);
+      updateStatus.append(link);
     }
     status(result.note);
   } finally { $("check-updates").disabled = false; }
