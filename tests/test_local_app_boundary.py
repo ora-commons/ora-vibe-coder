@@ -1514,7 +1514,7 @@ elif skill.exists():
         result = folder / f"{project_name} — Programming Result current.md"
         report = folder / f"{project_name} — Verification Report current.md"
         result.write_text("# Programming Result\n\nProgramming completed 8 October 2026 under the approved Plan.\n", encoding="utf-8")
-        report.write_text("# Verification Report\n\nStatus: PASSED\n\n## Result\nThe corrected delivery meets its requirements.\n", encoding="utf-8")
+        report.write_text("# Verification Report\n\nOra Verification verdict: PASSED\n\n## Result\nThe corrected delivery meets its requirements.\n", encoding="utf-8")
         (folder / f"{project_name} — Implementation Request.md").write_text("EXACT_IMPLEMENTATION_REQUEST", encoding="utf-8")
         (folder / f"{directory} — Working notes v2.1.MARKDOWN").write_text("EXACT_WORKING_NOTES", encoding="utf-8")
         evidence = folder / "Selected evidence.txt"
@@ -1571,7 +1571,7 @@ elif skill.exists():
                 expect(page.locator("#result-status")).to_have_text("PASSED")
                 expect(page.locator("#assessment")).to_have_text("PASSED")
                 expect(page.locator("#assessment-note summary")).to_contain_text(report.name)
-                expect(page.locator("#reader")).to_contain_text("Status: PASSED")
+                expect(page.locator("#reader")).to_contain_text("Ora Verification verdict: PASSED")
                 expect(page.locator("#project-completion .completion-wide")).to_have_text("REPORTED COMPLETE")
 
                 report.write_text("# Verification Report\n\n**Verdict: PASSED.** But the current candidate failed.\n", encoding="utf-8")
@@ -2292,6 +2292,218 @@ elif skill.exists():
                 self.assertEqual(bar.evaluate(appearance), active_style)
                 page.evaluate("() => { stopped = true; status('Vibe stopped.'); }")
                 self.assertEqual(bar.evaluate(appearance), idle)
+            finally:
+                browser.close()
+
+    def test_completed_review_polling_settles_without_repainting(self):
+        from playwright.sync_api import expect, sync_playwright
+        project_id = self.request("/api/create", {"directory": "Settled", "name": "Settled",
+                                                  "description": "", "goals": ""})[1]["id"]
+        folder = self.home / "Settled"
+        document = folder / "Specification.md"
+        original = "# Specification\n\n" + "\n\n".join(f"Paragraph {i}: preserve the reader's place." for i in range(90))
+        document.write_text(original, encoding="utf-8")
+        # Same terminal shape as the observed completed second-opinion review,
+        # with disposable names and text rather than private project material.
+        operation = {"project": str(folder), "tool": "codex", "stage": "review-plan",
+                     "turn": "completed-review", "state": "finished", "phase": "done",
+                     "started": "2000-01-01T00:00:00Z", "elapsed_seconds": 335.387,
+                     "last_contact_seconds": 678.77, "reason": "", "maintenance": "applied",
+                     "warnings": ["Connector version evidence."], "bridge_diagnostics": ["Connector version evidence."],
+                     "visible_warnings": [], "maintenance_reason": "", "outcome_recorded": True,
+                     "artifact": {"role": "Plan", "path": str(folder / "Plan.md"), "outcome": "changed",
+                                  "reason": "The selected Plan changed.", "label": "PASSED", "applies": "current"}}
+        review = {"run": operation["turn"], "stage": "review-plan", "tool": "codex", "reviewer": "claude",
+                  "iterate": True, "same_lab": False, "author_provider": "openai", "reviewer_provider": "anthropic",
+                  "passes": [], "state": "complete", "rounds": 2, "agreement": "pass", "assessment": "applied",
+                  "notice": "", "output": "Verdict: COMPLETE\nThe document is sufficient.", "changes": None,
+                  "evaluation": "No material findings.", "verdict": "PASSED", "artifact": operation["artifact"],
+                  "bridge_diagnostics": operation["bridge_diagnostics"]}
+        records = {"turns": [], "runs": [review]}
+        conversations, reads, errors = [], [], []
+        unreadable, held_reads = False, []
+        delay_read = False
+
+        def ready(peer, **kwargs):
+            return {"peer": peer, "ready": True, "work": "supported", "authentication": "unknown", "warnings": []}
+
+        with mock.patch.object(conversation, "bridge_check", side_effect=ready), sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 1000}, reduced_motion="reduce")
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(self.server.url)
+                self.select_project(page, project_id)
+                page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
+                page.evaluate("() => stopPolling()")
+                page.locator("#document").select_option("Specification.md")
+                expect(page.locator("#reader")).to_contain_text("Paragraph 89")
+                page.locator("#message").fill("Keep this unsent instruction.")
+
+                def state(route):
+                    files = self.request("/api/turn-state", {"id": project_id})[1]["files"]
+                    route.fulfill(json={"operation": operation, "files": files, "run": {"active": None, "last": None}})
+
+                def history(route):
+                    conversations.append(1)
+                    route.fulfill(json=records)
+
+                def read(route):
+                    reads.append(route.request.post_data_json["path"])
+                    if delay_read and reads[-1] == "Specification.md":
+                        held_reads.append(route)
+                    elif unreadable and reads[-1] == "Specification.md":
+                        route.fulfill(json={"path": "Specification.md", "name": "Specification.md", "text": None,
+                                            "reason": "The document is unreadable.", "needs_selection": False, "not_started": False})
+                    else:
+                        route.fallback()
+
+                page.route("**/api/turn-state", state)
+                page.route("**/api/conversation", history)
+                page.route("**/api/read-file", read)
+                page.evaluate("() => loadConversation()")
+                page.evaluate("() => pollTick()")  # Establish the watched-file baseline.
+                page.evaluate("""() => {
+                    window.readerMutations = 0;
+                    new MutationObserver(events => { readerMutations += events.length; })
+                        .observe($('reader'), {childList: true, characterData: true, subtree: true});
+                    window.heldNode = $('reader').lastElementChild;
+                    document.querySelector('.result-body').scrollTop = 280;
+                    $('message').setSelectionRange(5, 9);
+                }""")
+                position = page.locator(".result-body").evaluate("element => element.scrollTop")
+                self.assertGreater(position, 0)
+                baseline = (len(conversations), len(reads))
+                for _ in range(3):
+                    page.evaluate("() => pollTick()")
+                self.assertEqual((len(conversations), len(reads)), baseline)
+                expect(page.locator("#status-bar")).to_have_text("Review completed in 335s. Assessment saved.")
+
+                # Real mtime-only touches, then another file changing: no flash,
+                # node replacement, reading-position loss or input consumption.
+                for touched in (document, document, folder / "Plan.md"):
+                    stamp = touched.stat()
+                    os.utime(touched, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
+                    page.evaluate("() => pollTick()")
+                self.assertEqual(document.read_text(encoding="utf-8"), original)
+                self.assertEqual(page.evaluate("readerMutations"), 0)
+                self.assertTrue(page.evaluate("heldNode === $('reader').lastElementChild"))
+                self.assertEqual(page.locator(".result-body").evaluate("element => element.scrollTop"), position)
+                self.assertEqual(page.locator("#message").evaluate("element => [element.selectionStart, element.selectionEnd]"), [5, 9])
+                expect(page.locator("#message")).to_have_value("Keep this unsent instruction.")
+                expect(page.locator("#status-bar")).to_have_text("Review completed in 335s. Assessment saved.")
+                evidence = os.environ.get("ORA_VIBE_TEST_EVIDENCE")
+                if evidence:
+                    Path(evidence).mkdir(parents=True, exist_ok=True)
+                    page.screenshot(path=str(Path(evidence) / "settled-reader.png"))
+
+                # A genuine edit renders once; subsequent idle polls settle.
+                document.write_text(original + "\n\nA genuinely new paragraph.\n", encoding="utf-8")
+                page.evaluate("() => pollTick()")
+                expect(page.locator("#reader")).to_contain_text("A genuinely new paragraph.")
+                self.assertFalse(page.evaluate("heldNode === $('reader').lastElementChild"))
+                changed_mutations = page.evaluate("readerMutations")
+                self.assertGreater(changed_mutations, 0)
+                for _ in range(3):
+                    page.evaluate("() => pollTick()")
+                self.assertEqual(page.evaluate("readerMutations"), changed_mutations)
+                self.assertEqual(page.locator(".result-body").evaluate("element => element.scrollTop"), position)
+
+                # Auxiliary outcomes are intentionally absent from both readers.
+                # Each transition refreshes once; the terminal operation settles.
+                for purpose in ("judgment", "sorting", "materiality"):
+                    operation.update(turn=f"aux-{purpose}", stage=f"{purpose}-planning", state="running", maintenance=purpose)
+                    page.evaluate("() => pollTick()")
+                    stamp = document.stat()
+                    os.utime(document, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
+                    page.evaluate("() => pollTick()")
+                    expect(page.locator("#status-bar")).to_contain_text("Working —")
+                    operation.update(state="finished")
+                    before = len(conversations)
+                    page.evaluate("() => pollTick()")
+                    self.assertEqual(len(conversations), before + 1)
+                    expect(page.locator("#status-bar")).to_have_text("Read-only check completed in 335s.")
+                    expect(page.locator("#status-bar")).not_to_have_class("warning")
+                    for _ in range(3):
+                        page.evaluate("() => pollTick()")
+                    self.assertEqual(len(conversations), before + 1)
+                operation.update(warnings=["The outcome note could not be recorded."],
+                                 visible_warnings=["The outcome note could not be recorded."], outcome_recorded=False)
+                page.evaluate("() => pollTick()")
+                stamp = document.stat()
+                os.utime(document, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
+                page.evaluate("() => pollTick()")
+                expect(page.locator("#status-bar")).to_contain_text("The outcome note could not be recorded.")
+                expect(page.locator("#status-bar")).to_have_class("warning")
+                operation.update(state="failed", reason="The read-only check failed.")
+                page.evaluate("() => pollTick()")
+                expect(page.locator("#status-bar")).to_contain_text("The read-only check failed.")
+                expect(page.locator("#status-bar")).to_have_class("warning")
+
+                # Ordinary and review results can appear after terminal status.
+                # Missing records and late maintenance still catch up normally.
+                operation.update(turn="late-work", stage="specification", state="finished", maintenance="no-change",
+                                 warnings=[], visible_warnings=[], outcome_recorded=True, reason="")
+                late = {"turn": "late-work", "stage": "specification", "tool": "codex", "purpose": "work",
+                        "text": "The saved request.", "images": [], "files": [], "state": "complete",
+                        "reply": "The late saved answer.", "maintenance": None, "outcome_recorded": False,
+                        "artifact": None, "bridge_diagnostics": [], "questions": []}
+                records["turns"] = [late]
+                page.evaluate("() => pollTick()")
+                expect(page.locator("#conversation")).to_contain_text("The late saved answer.")
+                late.update(outcome_recorded=True, maintenance={"outcome": "no-change", "notice": "", "unsaved": False})
+                page.evaluate("() => pollTick()")
+                expect(page.locator("#conversation")).to_contain_text("Registry: no change needed")
+                before = len(conversations)
+                page.evaluate("() => pollTick()")
+                self.assertEqual(len(conversations), before)
+                operation.update(turn=review["run"], stage="review-plan")
+                page.evaluate("() => { reviewRuns[0].state = 'open'; }")
+                page.evaluate("() => pollTick()")
+                self.assertEqual(len(conversations), before + 1)
+                page.evaluate("() => pollTick()")
+                self.assertEqual(len(conversations), before + 1)
+                operation.update(turn="unrecordable", outcome_recorded=False, state="failed", reason="Could not save the outcome.")
+                page.evaluate("() => pollTick()")
+                before = len(conversations)
+                page.evaluate("() => pollTick()")
+                self.assertEqual(len(conversations), before)
+                expect(page.locator("#status-bar")).to_contain_text("Could not save the outcome.")
+
+                # Unreadable states replace old content honestly and settle too.
+                unreadable = True
+                stamp = document.stat()
+                os.utime(document, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
+                page.evaluate("() => pollTick()")
+                expect(page.locator("#reader")).to_contain_text("The document is unreadable.")
+                unreadable = False
+                stamp = document.stat()
+                os.utime(document, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
+                page.evaluate("() => pollTick()")
+                expect(page.locator("#reader")).to_contain_text("A genuinely new paragraph.")
+
+                # A newer reader choice owns the pane even if the automatic
+                # read of the old document finishes afterward.
+                delay_read = True
+                document.write_text(original + "\n\nStale pending read.\n", encoding="utf-8")
+                with page.expect_request("**/api/read-file"):
+                    page.evaluate("() => { window.pendingRefresh = pollTick(); }")
+                page.locator("#document").select_option("Plan.md")
+                expect(page.locator("#reader .reader-caption")).to_have_text("File: Plan.md — Not started")
+                held_reads.pop().fulfill(json={"path": "Specification.md", "name": "Specification.md",
+                                               "text": "Stale pending read.", "reason": "", "needs_selection": False, "not_started": False})
+                page.evaluate("() => pendingRefresh")
+                expect(page.locator("#reader .reader-caption")).to_have_text("File: Plan.md — Not started")
+                expect(page.locator("#reader")).not_to_contain_text("Stale pending read.")
+                delay_read = False
+                page.locator("#document").select_option("Specification.md")
+                expect(page.locator("#reader")).to_contain_text("Stale pending read.")
+                document.unlink()
+                page.evaluate("() => pollTick()")
+                expect(page.locator("#reader")).to_contain_text("is no longer present in this project")
+                expect(page.locator("#reader")).not_to_contain_text("Stale pending read.")
+                expect(page.locator("#message")).to_have_value("Keep this unsent instruction.")
+                self.assertEqual(errors, [])
             finally:
                 browser.close()
 

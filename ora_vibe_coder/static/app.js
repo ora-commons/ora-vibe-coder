@@ -649,8 +649,12 @@ async function refreshProject() {
     if (workspace === "build") updateBuildNextStep();
   }
 }
-async function readFile(path, element) {
-  const view = readerView = {id: currentId, workspace, path, element};
+async function readFile(path, element, {background = false} = {}) {
+  const held = readerView;
+  const continuing = background && held?.id === currentId && held.workspace === workspace
+    && held.path === path && held.element === element;
+  const view = readerView = continuing ? held : {id: currentId, workspace, path, element};
+  const reading = view.reading = (view.reading || 0) + 1;
   // This read's own identity: it is returned to the caller so whoever started
   // the read can tell, once it finishes, whether the reader they see is still
   // the one this read produced — the same comparison the guards below make
@@ -661,6 +665,7 @@ async function readFile(path, element) {
     // No document is resolved yet: an empty reader adds no sentence, because
     // the document picker above it already says what can be opened.
     element.replaceChildren();
+    view.content = null;
     return view;
   }
   if (!entry) {
@@ -669,6 +674,9 @@ async function readFile(path, element) {
     // failed read of a file the project no longer lists, and the anchor lets
     // go so the next render falls back to the workspace default.
     if (readerView !== view) return view;
+    const content = JSON.stringify(["missing", path]);
+    if (view.content === content) return view;
+    view.content = content;
     element.replaceChildren();
     const message = document.createElement("p");
     message.textContent = `${path.split("/").pop()} is no longer present in this project; it may have been deleted outside the app. Choose another document to read.`;
@@ -676,15 +684,24 @@ async function readFile(path, element) {
     readerAnchor = null;
     return view;
   }
-  element.textContent = `Loading ${entry.name}…`;
+  // Automatic rereads leave the displayed document in place while fetching.
+  // A timestamp change alone must not flash Loading or replace its DOM.
+  if (!continuing) element.textContent = `Loading ${entry.name}…`;
   let result;
   try { result = await api("read-file", {id: view.id, path}); }
   catch (error) {
-    if (readerView !== view) return view;
-    element.textContent = `Could not read ${entry.name}. ${error.message}`;
+    if (readerView !== view || view.reading !== reading) return view;
+    const content = JSON.stringify(["error", entry.name, error.message]);
+    if (view.content !== content) element.textContent = `Could not read ${entry.name}. ${error.message}`;
+    view.content = content;
     throw error;
   }
-  if (readerView !== view) return view;
+  if (readerView !== view || view.reading !== reading) return view;
+  const content = JSON.stringify(result);
+  if (view.content === content) return view;
+  view.content = content;
+  const body = continuing ? element.closest(".result-body") : null;
+  const top = body?.scrollTop;
   element.replaceChildren();
   const caption = document.createElement("p"); caption.className = "reader-caption";
   caption.textContent = `File: ${result.path}${result.not_started ? " — Not started" : ""}`;
@@ -701,12 +718,13 @@ async function readFile(path, element) {
       await readFile(path, element); await refreshProject();
     }); element.append(button);
   }
+  if (body) body.scrollTop = top;
   return view;
 }
-async function readDocument(path = $("document").value) {
+async function readDocument(path = $("document").value, options = {}) {
   if (!workspace) return;
   $("packet-tools").hidden = true; $("raw").value = "";
-  return await readFile(path, $("reader"));
+  return await readFile(path, $("reader"), options);
 }
 function showPacket(text, purpose) {
   const currentOnly = draft().packetCurrentOnly;
@@ -2037,7 +2055,9 @@ function updateOperation(operation) {
     warned = true;
   } else if (operation.state === "finished") {
     const maintenance = operation.maintenance;
-    if (["review-specification", "review-plan"].includes(operation.stage)) {
+    if (/^(judgment|sorting|materiality)-/.test(operation.stage || "")) {
+      summary = `Read-only check completed in ${Math.round(operation.elapsed_seconds)}s.`;
+    } else if (["review-specification", "review-plan"].includes(operation.stage)) {
       const assessment = maintenance === "applied" ? " Assessment saved."
         : ` Assessment not saved.${operation.maintenance_reason ? ` ${operation.maintenance_reason}` : ""}`;
       summary = `Review completed in ${Math.round(operation.elapsed_seconds)}s.${assessment}`;
@@ -3287,7 +3307,10 @@ async function pollTick() {
     // load never reaches it without a reload. The same holds when the turn
     // or run is not displayed at all: the record exists, the display merely
     // predates it.
-    const outcomeUnreflected = (turn && !turn.outcome_recorded) || (!turn && !run && !!operation.turn);
+    // These read-only auxiliary calls have their own readers and never enter
+    // either conversation list. Their absence is not a late saved outcome.
+    const auxiliary = /^(judgment|sorting|materiality)-/.test(operation.stage || "");
+    const outcomeUnreflected = (turn && !turn.outcome_recorded) || (!turn && !run && !!operation.turn && !auxiliary);
     // An operation that reports its own outcome note could not be recorded can
     // never be reflected in the retained records, so refetching on an open or
     // unreflected record would never converge; the live status line and its
@@ -3316,26 +3339,21 @@ async function refreshChanged(changed, {silent = false} = {}) {
   const id = currentId;
   const space = workspace;
   const view = readerView;
-  const body = document.querySelector(".result-body");
-  const top = body ? body.scrollTop : 0;
   const anchor = readerAnchor;
   await refreshProject();
   if (id !== currentId) return;  // The switch owns the view: this project's changed-file notice and its saved document selection never apply to the displayed project.
   // One place names which files changed: the status bar.
-  if (!silent && changed.length) status(`Changed on disk: ${[...new Set(changed.map(path => path.split("/").pop()))].join(", ")}`);
+  const bar = $("status-bar");
+  if (!silent && changed.length && (!bar.textContent || bar.textContent.startsWith("Changed on disk:")))
+    status(`Changed on disk: ${[...new Set(changed.map(path => path.split("/").pop()))].join(", ")}`);
   if (!$("packet-tools").hidden) return;  // A request or recovery view stays in place until the user opens a document.
   // A document or workspace selection made in this same project while the
   // refresh was underway owns the reader now; this refresh never rereads its
   // captured selection over the newer one.
   if (workspace !== space || readerView !== view) return;
-  const opened = await readDocument(anchor || $("document").value);
-  if (id !== currentId) return;  // Nor does the previously displayed project's reading position.
-  // The same reader-identity protection, applied once the read finishes and
-  // before the position is restored: a document or workspace selected while
-  // this refresh's own read was underway owns the reader now, and its reading
-  // position is never moved by the completing refresh.
-  if (workspace !== space || readerView !== opened) return;
-  if (body) body.scrollTop = top;  // Selection and reading position survive the refresh.
+  // readFile preserves the current position only when it actually replaces
+  // content, after checking that this read still owns the selected pane.
+  await readDocument(anchor || $("document").value, {background: true});
 }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") pollTick(); });
 $("refresh").onclick = guard(async () => {

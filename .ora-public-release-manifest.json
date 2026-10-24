@@ -468,7 +468,7 @@
     {
       "executable": false,
       "path": "ora_vibe_coder/static/app.js",
-      "sha256": "ec21e2e33acb596e876a52d6a8576023f5cd863aef8e75d4c0dde604bdc2325c"
+      "sha256": "9116ac24425da40497d27dd4db94d1be6e3f54c91a70354f592b237a676d8051"
     },
     {
       "executable": false,
@@ -508,22 +508,22 @@
     {
       "executable": false,
       "path": "ora_vibe_coder/status.py",
-      "sha256": "51a54723d84fd746e6bf68cbfed026bf7393acc16b1f0197c494f4cddb16bf46"
+      "sha256": "5dedf672890cccf6072a73e325c806619f726ef175851aa11845381234a1f5b6"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/.claude-plugin/plugin.json",
-      "sha256": "d3792757753b0b6776789b4db20c4a8a0fb2157754ba4e3b8c43a652a333e625"
+      "sha256": "131a1000bb77d6a21c4b423eaead01bb51074e878bac1725aa2d5ad31d0ff0bf"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/.codex-plugin/plugin.json",
-      "sha256": "48514302333aa204bce22863f01ce14470f5a2f35411219a3852f5b130219c8d"
+      "sha256": "fa31a75b4475729fc9079e364570e9a8ab207ab455e71e89286aac3bb6c277df"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/VERSION",
-      "sha256": "ad5adcac95aff5c3ad7deea82369f78901765729dbc12933056cad1483e27f39"
+      "sha256": "6fe6f0c68d9a83ebbdb529c1782664c4934fb9f5a63215ab5ad29250d72fe5ed"
     },
     {
       "executable": false,
@@ -878,7 +878,7 @@
     {
       "executable": false,
       "path": "tests/test_local_app_boundary.py",
-      "sha256": "a617c9d6d8ae2dc9e0d067211c157b2d6bed5ac424db37d03752c90153ec8590"
+      "sha256": "c3576269fc773194b13a35f24ebcd561674bc8959e27bcaa3a45eae566e54939"
     },
     {
       "executable": false,
@@ -888,7 +888,7 @@
     {
       "executable": false,
       "path": "tests/test_reported_status.py",
-      "sha256": "909bb881977d89cac1dae654f7b1dcce411b234dece8f7a26bd1b9e83fe0a74d"
+      "sha256": "cc6dbaf44e1c3a2bfd7f6ef6e450e2d600a884ca8863f0ce75038f9440be4cd5"
     },
     {
       "executable": false,
