@@ -176,8 +176,8 @@ button.pending::after { content: "·"; margin-left: 2px; color: var(--ovc-muted)
 #reader { min-height: 70px; }
 
 /* Conversation / AI work pane */
-.conversation { flex: 1 1 auto; min-height: 0; overflow-y: scroll; scrollbar-gutter: stable; padding: 10px 12px; display: flex; flex-direction: column; gap: 12px; }
-.conversation.resized { flex: 0 1 clamp(80px, var(--conversation-size), calc(100% - 135px)); }
+.conversation { flex: 1 1 0; min-height: 0; overflow-y: scroll; scrollbar-gutter: stable; padding: 10px 12px; display: flex; flex-direction: column; gap: 12px; }
+.conversation.resized { flex: 0 0 clamp(80px, var(--conversation-size), calc(100% - 135px)); min-height: 0; }
 .conversation-divider { flex: none; height: 7px; background: var(--ovc-border); cursor: row-resize; touch-action: none; }
 .conversation-divider:hover, .conversation-divider:focus-visible { background: var(--ovc-accent); outline: none; }
 .exchange { display: flex; flex-direction: column; gap: 6px; }
@@ -188,7 +188,11 @@ button.pending::after { content: "·"; margin-left: 2px; color: var(--ovc-muted)
 .msg-meta { font-size: .75rem; color: var(--ovc-muted); margin: 0; }
 .exchange .maintenance-chip { font-size: .75rem; color: var(--ovc-muted); align-self: flex-start; border: 1px solid var(--ovc-border); border-radius: 999px; padding: 2px 8px; }
 .exchange .maintenance-chip.unsaved { color: var(--ovc-red); border-color: var(--ovc-red); }
-.pane-chat .compose { border-bottom: 0; border-top: 1px solid var(--ovc-border); max-height: 42%; min-height: 120px; flex: 0 1 auto; }
+/* Fit the response controls before giving the remaining room to history.
+   Long content scrolls while leaving some conversation visible. */
+.pane-chat .compose { border-bottom: 0; border-top: 1px solid var(--ovc-border); max-height: calc(100% - min(160px, 25%) - 7px); min-height: 120px; flex: 0 0 auto; }
+/* An explicit divider choice takes precedence over the content-sized default. */
+.conversation.resized ~ .compose { flex: 1 1 0; min-height: 0; max-height: none; }
 #message { min-height: 54px; }
 #message.has-suggestion { min-height: 100px; }
 .attachment-bar { display: flex; gap: 8px; flex-wrap: wrap; }
