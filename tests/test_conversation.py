@@ -1754,6 +1754,9 @@ class Reliability(ConversationCase):
         from ora_vibe_coder.status import assessment_facts
 
         variants = ("Verdict: COMPLETE\n\nAll required decisions are present.\n",
+                    "Verdict: PASSED\n\nComplete reviewer evidence and source authority have concrete implementation routes.\n\n"
+                    "PASSED means the available Plan is sufficient to guide the intended work.\n\n"
+                    "This is planning-only evidence; it does not certify unbuilt software.\n",
                     "**Status: COMPLETE.**\n\n## Findings\n\nNo material gaps remain.\n",
                     "Status: COMPLETE\n\n## Current result\nVerdict: COMPLETE\n\n"
                     "## Earlier review\n### Result\nStatus: INCOMPLETE\n",

@@ -125,10 +125,10 @@ def build_input(step, project, user_text="", verifier=None, extra=()):
     the assignment. A brief therefore cannot widen a step beyond its stage.
     """
     parts = []
-    text = (user_text or "").strip()
+    text = user_text or ""
     if step in DEFAULT_INPUTS:
         parts.append(DEFAULT_INPUTS[step])
-    if text:
+    if text.strip():
         parts.append("The user's brief for this work, preserved as context for the intended outcome:\n\n" + text)
     if step == "verification":
         parts.append(verifier_direction(verifier or ""))
@@ -141,7 +141,7 @@ def build_input(step, project, user_text="", verifier=None, extra=()):
 
 
 def step_request(project, step, user_text, destination, material=(), verifier=None, extra=(), supplied_documents=None,
-                 model="", effort=""):
+                 model="", effort="", portable=False):
     """One complete step request, shared by the manual buttons and the run.
 
     Returns the full prepared packet text. Ordinary requests are saved as
@@ -151,7 +151,7 @@ def step_request(project, step, user_text, destination, material=(), verifier=No
     stage = STEP_STAGE[step]
     return prepare_request(project, stage, build_input(step, project, user_text, verifier, extra),
                            destination, list(material or []), supplied_documents=supplied_documents,
-                           model=model, effort=effort)
+                           model=model, effort=effort, portable=portable)
 
 
 # --- Resolving each assignment's tool and model -------------------------------
@@ -442,6 +442,10 @@ class RunDriver:
         """
         return [item.get("name", "") for item in self.brief_images] if self._brief_pending() else []
 
+    def pending_files(self):
+        """Selected brief files still owed to the entry step's first dispatch."""
+        return list(self.brief_files) if self._brief_pending() else []
+
     # -- the fixed route ----------------------------------------------------
 
     def _drive(self):
@@ -523,7 +527,7 @@ class RunDriver:
         extra.append(f"This step runs on {model_label(tool, model, effort)} ({origin} for this run).")
         text = build_input(self.step, self.project, user_text, verifier, extra)
         images = self.brief_images if self._brief_pending() else []
-        files = self.brief_files if self._brief_pending() else []
+        files = self.pending_files()
         self.step_requested = model_label(tool, model, effort)
         try:
             supplied_documents = self.project.approve_transition(self.step)

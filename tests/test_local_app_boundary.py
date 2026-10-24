@@ -1511,9 +1511,10 @@ elif skill.exists():
                 page.goto(self.server.url)
                 page.evaluate("() => { window.clipboardText = ''; navigator.clipboard.writeText = text => { window.clipboardText = text; return Promise.resolve(); }; }")
                 self.select_project(page, project_id)
+                page.locator('.rail[data-stage="specification"]').click()
                 # The displayed verdict is binary: a current COMPLETE assessment is PASSED.
                 expect(page.locator("#assessment")).to_have_text("PASSED")
-                expect(page.locator("#assessment-note")).to_contain_text("does not identify which document version")
+                expect(page.locator("#assessment-note")).to_contain_text("applicability to the current document version is unconfirmed")
                 expected_labels = {
                     f"{project_name} — Specification.md": f"Specification — {project_name}",
                     f"{project_name} — Plan.md": f"Plan — {project_name}",
@@ -1547,7 +1548,7 @@ elif skill.exists():
                 expect(page.locator("#document option:checked")).to_have_text(f"Selected evidence — {project_name}")
                 self.assertEqual({path.name: path.read_bytes() for path in folder.iterdir() if path.is_file()}, original_files)
                 page.locator('.rail[data-stage="build"]').click()
-                expect(page.locator("#result-status")).to_have_text("COMPLETE")
+                expect(page.locator("#result-status")).to_have_text("PASSED")
                 expect(page.locator("#assessment")).to_have_text("PASSED")
                 expect(page.locator("#assessment-note summary")).to_contain_text(report.name)
                 expect(page.locator("#reader")).to_contain_text("Status: PASSED")
@@ -1555,7 +1556,7 @@ elif skill.exists():
 
                 report.write_text("# Verification Report\n\n**Verdict: PASSED.** But the current candidate failed.\n", encoding="utf-8")
                 page.locator("#refresh").click()
-                expect(page.locator("#assessment")).to_have_text("CONCLUSION UNCLEAR")
+                expect(page.locator("#assessment")).to_have_text("REPORT ERROR")
                 expect(page.locator("#assessment-note")).to_contain_text("current candidate failed")
                 expect(page.locator("#project-completion")).to_be_hidden()
                 report.write_text("# Verification Report\n\nStatus: PASSED\n\n## Earlier review\nVerdict: NOT PASSED\n", encoding="utf-8")
@@ -2085,10 +2086,15 @@ elif skill.exists():
                 expect(page.locator("#settings-best-guess")).to_be_checked()
                 verification = page.locator('#settings-roles [data-role="verification"]')
                 verification.locator(".role-tool").select_option("codex")
-                expect(verification.locator(".role-model")).to_have_value("configured-model")
+                expect(verification.locator(".role-model")).to_have_value("")
                 expect(verification.locator(".role-effort")).to_have_value("")
                 page.locator("#configure-save").click()
                 page.wait_for_function("() => pendingRunConfig?.roles?.verification?.tool === 'codex'")
+                expect(page.locator("#destination")).to_have_value("Codex")
+                page.locator('[data-stage="plan"]').click()
+                page.locator('[data-stage="build"]').click()
+                page.locator("#build-reply-stage").select_option("verification")
+                expect(page.locator("#destination")).to_have_value("Codex")
                 self.assertEqual(request("/api/settings", {})["role_defaults"]["verification"]["tool"], "claude")
                 page.locator("#configure-path").click()
                 page.locator("#configure-clear").click()
@@ -2352,6 +2358,109 @@ elif skill.exists():
                 asked.assert_called_once_with("darwin")
                 self.assertEqual([call.args[2] for call in post.call_args_list],
                                  ["/api/quit-state", "/api/stop"] if confirmed else ["/api/quit-state"])
+
+    def test_conversation_opens_at_latest_and_keeps_reading_position(self):
+        from playwright.sync_api import expect, sync_playwright
+        first = self.request("/api/create", {"directory": "ScrollOne", "name": "Scroll One", "description": "", "goals": ""})[1]["id"]
+        second = self.request("/api/create", {"directory": "ScrollTwo", "name": "Scroll Two", "description": "", "goals": ""})[1]["id"]
+        turns = [{"turn": f"{index:04}", "tool": "codex", "stage": "planning", "state": "finished",
+                  "text": f"Message {index}", "reply": (f"Answer {index}. " * 100)} for index in range(25)]
+        def ready(peer, **kwargs):
+            return {"peer": peer, "ready": True, "work": "supported", "authentication": "unknown", "warnings": []}
+        with mock.patch.object(conversation, "bridge_check", side_effect=ready), sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1280, "height": 720}, reduced_motion="reduce")
+                errors = []; page.on("pageerror", lambda error: errors.append(str(error)))
+                page.route("**/api/conversation", lambda route: route.fulfill(json={"turns": turns, "runs": []}))
+                page.goto(self.server.url)
+                self.select_project(page, first)
+                page.wait_for_function("() => workspace !== '' && conversationLoaded")
+                at_bottom = "() => { const e = document.getElementById('conversation'); return e.clientHeight > 0 && e.scrollHeight - e.scrollTop - e.clientHeight < 3; }"
+                page.wait_for_function(at_bottom)
+                page.evaluate("() => stopPolling()")
+                turns.append({"turn": "0025", "tool": "codex", "stage": "planning", "state": "finished",
+                              "text": "Newly completed exchange", "reply": "The newest answer. " * 100})
+                page.evaluate("() => loadConversation()")
+                page.wait_for_function(at_bottom)
+                page.evaluate("() => { stopPolling(); document.getElementById('conversation').scrollTop = 180; }")
+                top = page.locator("#conversation").evaluate("e => e.scrollTop")
+                page.evaluate("() => loadConversation()")
+                self.assertEqual(page.locator("#conversation").evaluate("e => e.scrollTop"), top)
+                page.locator('[data-stage="plan"]').click()
+                page.wait_for_function(at_bottom)
+                page.locator("#conversation").evaluate("e => e.scrollTop = 200")
+                page.locator('[data-stage="build"]').click()
+                page.wait_for_function(at_bottom)
+                self.select_project(page, second)
+                page.wait_for_function("() => project?.name === 'Scroll Two' && conversationLoaded")
+                page.wait_for_function(at_bottom)
+                page.set_viewport_size({"width": 420, "height": 720})
+                page.get_by_role("button", name="Show document", exact=True).click()
+                page.evaluate("() => loadConversation()")
+                page.get_by_role("button", name="Show conversation", exact=True).click()
+                page.wait_for_function(at_bottom)
+                evidence = os.environ.get("VIBE_CONFIGURATION_EVIDENCE")
+                if evidence:
+                    Path(evidence).mkdir(parents=True, exist_ok=True)
+                    page.screenshot(path=str(Path(evidence) / "conversation-latest-narrow.png"))
+                    (Path(evidence) / "conversation-scroll.json").write_text(json.dumps({"older_reading_top_before": top,
+                        "older_reading_top_after": top, "latest": page.locator("#conversation").evaluate("e => ({top:e.scrollTop, height:e.clientHeight, content:e.scrollHeight})")}, indent=2))
+                self.assertEqual(errors, [])
+            finally:
+                browser.close()
+
+    def test_close_warning_only_protects_unsaved_user_content(self):
+        from playwright.sync_api import expect, sync_playwright
+        project_id = self.request("/api/create", {"directory": "Close", "name": "Close", "description": "", "goals": ""})[1]["id"]
+        def ready(peer, **kwargs):
+            return {"peer": peer, "ready": True, "work": "supported", "authentication": "unknown", "warnings": []}
+        with mock.patch.object(conversation, "bridge_check", side_effect=ready), sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                errors = []; page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(self.server.url)
+                self.select_project(page, project_id)
+                page.wait_for_function("() => workspace !== '' && lastFiles !== null")
+                page.evaluate("() => stopPolling()")
+                def warns():
+                    return page.evaluate("() => { const event = new Event('beforeunload', {cancelable:true}); window.dispatchEvent(event); return event.defaultPrevented; }")
+                results = {"fresh": warns()}
+                page.locator("#destination").select_option("Codex")
+                results["tool_selected"] = warns()
+                page.evaluate("() => { draft().packet = 'saved snapshot'; draft().packetDestination = 'Claude Code'; }")
+                results["stale_prepared_packet"] = warns()
+                page.locator("#message").fill("Do not lose this unsent text.")
+                results["unsent_text"] = warns()
+                page.locator("#message").fill("")
+                page.evaluate("() => attachments.push({name:'unsent.png', data:'data:image/png;base64,AA=='})")
+                results["unsent_image"] = warns()
+                page.evaluate("() => { attachments = []; messageFiles().push({name:'evidence.txt', path:'/disposable/evidence.txt'}); }")
+                results["selected_message_file"] = warns()
+                page.evaluate("() => { messageFiles().splice(0); material().push({name:'material.txt', path:'/disposable/material.txt'}); }")
+                results["selected_project_material"] = warns()
+                page.evaluate("() => material().splice(0)")
+                page.locator("#project-card").click()
+                page.locator("#edit-description").fill("An unsaved project change.")
+                results["unsaved_project_edit"] = warns()
+                evidence = os.environ.get("VIBE_CONFIGURATION_EVIDENCE")
+                if evidence:
+                    Path(evidence).mkdir(parents=True, exist_ok=True)
+                    page.screenshot(path=str(Path(evidence) / "close-unsaved-project.png"))
+                page.locator("#edit-description").fill("")
+                page.locator("#edit-close").click()
+                results["cleared"] = warns()
+                page.locator("#new").click()
+                page.locator("#new-name").fill("Uncreated project")
+                results["unsaved_new_project"] = warns()
+                self.assertEqual(results, {"fresh": False, "tool_selected": False, "stale_prepared_packet": False,
+                    "unsent_text": True, "unsent_image": True, "selected_message_file": True,
+                    "selected_project_material": True, "unsaved_project_edit": True, "cleared": False, "unsaved_new_project": True})
+                if evidence: (Path(evidence) / "close-warning-results.json").write_text(json.dumps(results, indent=2))
+                self.assertEqual(errors, [])
+            finally:
+                browser.close()
 
     def test_copy_ready_requests_use_the_right_ora_method_without_replacing_a_saved_request(self):
         project_id = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]

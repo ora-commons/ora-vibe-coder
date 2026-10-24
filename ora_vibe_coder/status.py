@@ -535,17 +535,21 @@ def _current_suffix(text, current_round=None):
     return "; ".join(kept)
 
 
-def _qualified_success(text, current_round=None):
+def _qualified_success(text, current_round=None, *, review=False):
     # Ordinary absence-of-findings wording is not a failure qualification.
     text = _current_suffix(text, current_round)
+    if review:
+        # A document review can disclaim implementation proof without retracting its own verdict.
+        subject = r"(?:code|the implementation|implementation|live publication|unbuilt software)"
+        text = re.sub(rf"\bnot (?:a |an )?(?:verification|validation|certification|proof) of {subject}(?: or {subject})*", "", text, flags=re.I)
     text = re.sub(r"\bno (?:material |remaining |unresolved )*(?:findings?|failures?|defects?|issues?|gaps?)\b", "", text, flags=re.I)
     text = re.sub(r"\bnone (?:remaining|unresolved)\b", "", text, flags=re.I)
-    return bool(re.search(r"\b(?:but|except|however|partially|partial|failed|failing|failure|not|incomplete|unfinished|unresolved|pending|remaining)\b|\b\d+\s+of\s+\d+\b", text, re.I))
+    return bool(re.search(r"\b(?:but|except|however|partially|partial|only|solely|limited|restricted|failed|failing|failure|not|incomplete|unfinished|unresolved|pending|remaining|withdraw|withdrawn|retract|retracted|revoke|revoked|rescind|rescinded|premature|cannot|unconfirmed|unjustified|unsupported|invalid|unwarranted)\b|\b(?:is|was|are|were|has|have|had|ca|could|does|do|did|wo|would|should|must|need)n['’]t\b|\bno\s+longer\b|\b\d+\s+of\s+\d+\b", text, re.I))
 
 
-def _status_token(literal, values, *, current_round=None):
+def _status_token(literal, values, *, current_round=None, review=False):
     """Read a complete conclusion and preserve qualifications outside bold text."""
-    literal = _plain(literal)
+    literal = re.sub(r"^[🟢✅🔴❌🟡⚠][\ufe0f ]*", "", _plain(literal))
     for value in sorted(values, key=len, reverse=True):
         if literal.upper() == value:
             return value
@@ -556,7 +560,7 @@ def _status_token(literal, values, *, current_round=None):
                 suffix = re.sub(r"\bverification\s+PASSED\b", "", suffix, flags=re.I)
             alternatives = "|".join(re.escape(item) for item in sorted(values, key=len, reverse=True))
             competing = re.findall(rf"(?<![A-Z])(?:{alternatives})(?![A-Z])", suffix.upper())
-            if any(canonical_verdict(item) != canonical_verdict(value) for item in competing) or (value in {"COMPLETE", "PASSED"} and _qualified_success(suffix, current_round)):
+            if any(canonical_verdict(item) != canonical_verdict(value) for item in competing) or (value in {"COMPLETE", "PASSED"} and _qualified_success(suffix, current_round, review=review)):
                 return ""
             return value
     return ""
@@ -611,8 +615,21 @@ def _current_regions(text):
     return regions
 
 
+def _explanatory_conclusion(sentence, allowed, review=False):
+    # A noun phrase describes evidence; definition verbs explain the label.
+    # Judge each sentence separately so an ordinary explanation can continue.
+    noun_word = r"[a-z][a-z'’\-]*"
+    return bool(re.fullmatch(
+        rf"(?:Complete\s+{noun_word}(?:\s+{noun_word})*\s+"
+        r"(?:is|are|was|were|has|have|[a-z]+s)|(?i:PASSED\s+(?:means|establishes|denotes|indicates)))"
+        r"\s+[^.!?;:—–]+[.!?]?", sentence)
+        and not _qualified_success(sentence, review=review)
+        and not any(re.search(r"\b" + re.escape(value) + r"\b", sentence.split(None, 1)[1], re.I)
+                    for value in allowed))
+
+
 def _prose_conclusion(stage, paragraph, review=False):
-    sentence = _plain(paragraph)
+    paragraph = _plain(paragraph)
     if review:
         subject = r"(?:(?:the|this|current)\s+)?(?:specification|spec|plan|planning|assessment|review)(?:\s+(?:review|assessment))?"
         outcomes = ((r"(?:has\s+|is\s+|was\s+)?(?:not\s+passed|failed)", "NOT PASSED"),
@@ -628,12 +645,33 @@ def _prose_conclusion(stage, paragraph, review=False):
         subject = r"(?:(?:the|this)\s+)?(?:(?:independent|current|final)\s+)?verification"
         outcomes = ((r"(?:has\s+|was\s+|is\s+)?(?:not\s+passed|failed|incomplete)", "NOT PASSED"),
                     (r"(?:has\s+|was\s+|is\s+)?(?:passed|succeeded)", "PASSED"))
-    for phrase, value in outcomes:
-        match = re.match(rf"^{subject}\s+{phrase}\b", sentence, re.I)
-        if match:
-            # Check the whole paragraph: a second sentence can retract a pass.
-            return ("" if value in {"COMPLETE", "PASSED"} and _qualified_success(sentence[match.end():]) else value), True
-    return "", False
+    allowed = {"COMPLETE", "PASSED", "NOT PASSED", "INCOMPLETE"} if review else VALUES[stage]
+    target = r"(?:(?:this|that|the|my|our)\s+(?:current\s+)?(?:verdict|conclusion|assessment)|it)"
+    withdrawn = r"(?:withdrawn|retracted|revoked|rescinded)"
+    values = []
+    offset = 0
+    for sentence in re.split(r"(?<=[.!?])\s+|;\s*", paragraph):
+        position = paragraph.find(sentence, offset)
+        offset = position + len(sentence)
+        if _explanatory_conclusion(sentence, allowed, review):
+            continue
+        # Only a present assertion about this conclusion retracts it. Quoted,
+        # historical and future/conditional instructions do not match these subjects.
+        current = re.sub(r"^(?:but|however|except)[, ]+", "", sentence, flags=re.I)
+        if re.match(rf"^(?:{target}\s+(?:is|was|has been)\s+{withdrawn}|(?:I|we)\s+(?:(?:now|hereby)\s+)?(?:withdraw|retract|revoke|rescind|have\s+{withdrawn})\s+{target})\b", current, re.I):
+            return "", True
+        token = _status_token(sentence, allowed, review=review)
+        if token or any(re.match(re.escape(value) + r"(?:[.!?—–;:]|\s|$)", sentence, re.I) for value in allowed):
+            values.append(token)
+            continue
+        for phrase, value in outcomes:
+            match = re.match(rf"^{subject}\s+{phrase}\b", sentence, re.I)
+            if match:
+                values.append("" if value in {"COMPLETE", "PASSED"} and _qualified_success(paragraph[position + match.end():], review=review) else value)
+                break
+        if any(value in {"COMPLETE", "PASSED"} for value in values) and re.match(r"^(?:but|however|except)\b", sentence, re.I):
+            return "", True
+    return (values[0] if values and all(values) and len({canonical_verdict(value) for value in values}) == 1 else ""), bool(values)
 
 
 def read_conclusion(stage, text, *, review=False):
@@ -660,24 +698,27 @@ def read_conclusion(stage, text, *, review=False):
                     break
                 plain = _plain(stripped)
                 current_field = re.fullmatch(r"Current verdict(?:\s*\(([^)]*)\))?\s*:\s*(.*)", plain, re.I)
-                if current_field and not narrative and not review:
+                if current_field and not review:
                     declarations.append("current verdict")
                     literal = current_field[2].strip()
                     round_match = re.search(r"\bround\s+(\d+)\b", current_field[1] or "", re.I)
                     current_round = int(round_match[1]) if round_match else None
-                    candidates.append((_status_token(literal, allowed, current_round=current_round), literal, stripped))
+                    candidates.append((_status_token(literal, allowed, current_round=current_round, review=review), literal, stripped))
                     continue
+                token = _status_token(plain, allowed, review=review)
+                first_sentence = re.split(r"(?<=[.!?])\s+|;\s*", plain)[0]
+                explanatory = _explanatory_conclusion(first_sentence, allowed, review)
+                starts_outcome = not explanatory and any(
+                    re.match(re.escape(value) + r"(?:[.!?—–;:]|\s|$)", plain, re.I)
+                    for value in allowed)
                 field = re.fullmatch(FIELD, plain)
-                if field and not narrative:
+                if field and not starts_outcome:
                     if (field[2].strip().casefold() in names or (not review and re.fullmatch(r"current verdict(?: \(.*\))?", field[2].strip(), re.I))):
                         declarations.append(field[2].strip().casefold())
                         literal = field[3].strip()
-                        candidates.append((_status_token(literal, allowed), literal, stripped))
+                        candidates.append((_status_token(literal, allowed, review=review), literal, stripped))
                     continue
-                token = _status_token(plain, allowed)
-                starts_outcome = any(re.match(re.escape(value) + r"(?:[.!?—–;:]|\s|$)", plain, re.I)
-                                     for value in allowed)
-                if (token or starts_outcome) and not narrative:
+                if token or starts_outcome:
                     candidates.append((token, plain, stripped))
                     continue
                 narrative.append(stripped)
@@ -686,8 +727,8 @@ def read_conclusion(stage, text, *, review=False):
                 token, identified = _prose_conclusion(stage, paragraph, review)
                 if identified:
                     candidates.append((token, _plain(paragraph), paragraph))
-                elif candidates and (not review or any(item[0] in {"COMPLETE", "PASSED"} for item in candidates)) and re.match(
-                        r"^(?:but|however|except)\b", _plain(paragraph), re.I):
+                elif candidates and (not review or any(item[0] in {"COMPLETE", "PASSED"} for item in candidates)) and re.search(
+                        r"(?:^|[.!?;]\s+)(?:but|however|except)\b", _plain(paragraph), re.I):
                     candidates.append(("", _plain(paragraph), paragraph))
     evidence = [item[2] for item in candidates]
     result = {"label": "", "literal": candidates[0][1] if candidates else "", "evidence": evidence,

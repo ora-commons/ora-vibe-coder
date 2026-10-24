@@ -34,6 +34,7 @@ let lastOperation = null, lastFiles = null, pollTimer = null, readinessState = {
 // The live operation state the last conversation render was drawn under, so
 // a poll redraws an unfinished turn's message only when that state changed.
 let conversationLiveMark = "";
+let conversationNeedsLatest = true;
 // The run, step and running turn the last poll observed. A run's driver
 // starts its next step's turn as soon as the previous one finishes, so a poll
 // can miss every terminal operation while the run continues; the mark names
@@ -143,7 +144,7 @@ function rememberEditor() {
 }
 function dirty() {
   remember();
-  return [...drafts.values()].some(d => signature(d) !== (d.saved || emptySignature)) || [...editDrafts.values()].some(d => d.dirty)
+  return [...materialDrafts.values()].some(files => files.length) || [...editDrafts.values()].some(d => d.dirty)
     || ["new-name", "new-description", "new-goals", "new-directory"].some(id => $(id).value) || createCode || createMaterial.length
     || !!$("message").value.trim() || attachments.length > 0 || [...messageFileDrafts.values()].some(files => files.length);
 }
@@ -861,7 +862,7 @@ async function chooseProject(id) {
   startupProject = null;
   remember(); rememberEditor();
   if (id !== currentId) pendingRunConfig = null;
-  currentId = id; project = null; workspace = "";
+  currentId = id; project = null; workspace = ""; conversationNeedsLatest = true;
   positionRails();
   renderProjectOptions();
   conversationTurns = []; reviewRuns = []; conversationLoaded = false; $("file-picker").hidden = true; filePickerTarget = "project";
@@ -921,7 +922,7 @@ async function chooseWorkspace(next) {
   if (!currentId || !project) { status("Choose or reopen a project successfully first."); return; }
   if (!(next in workspaces)) return;
   const generation = ++navigationGeneration, id = currentId, previous = workspace;
-  remember(); rememberEditor(); workspace = next; $("editor").hidden = true;
+  remember(); rememberEditor(); workspace = next; conversationNeedsLatest = true; $("editor").hidden = true;
   readerView = null;  // Any older document read no longer owns this stage.
   const reveal = positionRails(!!previous && previous !== next);
   readerAnchor = null;  // Each workspace starts from its own default document.
@@ -935,7 +936,7 @@ async function chooseWorkspace(next) {
   updateMessageSuggestion(); renderMaterialChosen();
   $("build-reply-choice").hidden = workspace !== "build";
   $("build-reply-stage").value = buildReplyStages.get(currentId) || "programming";
-  applyStageDefaults();
+  applyManualConfiguration();
   $("stage-title").textContent = config.title;
   $("work-step-title").textContent = `Work with AI on ${workspace === "build" ? "the implementation" : `the ${config.title}`}`;
   $("result-step").hidden = workspace !== "build";
@@ -972,7 +973,7 @@ async function chooseWorkspace(next) {
     else if (d.recoveryPacket !== null) showAbsentPacket();
     else await readDocument();
   } finally {
-    if (generation === navigationGeneration && id === currentId) startWorkspaceReveal(reveal);
+    if (generation === navigationGeneration && id === currentId) { startWorkspaceReveal(reveal); showLatestConversation(); }
   }
 }
 function codeLine(element, path) {
@@ -1166,6 +1167,7 @@ async function preparePurpose(purpose, instruction = null) {
   $("prepare").disabled = true; $("review").disabled = true; $("transition").disabled = true;
   try {
     const result = await api("prepare", {id, stage: purpose, input: instruction === null ? composerInstruction() : instruction, destination: submittedDestination,
+      roles: oneTimeRoles(),
       context: {material: composerMaterial(selectedWorkspace, id)},
       upstream: (() => { const a = project?.assessments?.[purpose === "create-plan" ? "specification" : purpose === "implement-plan" ? "planning" : ""]; return a?.path && a.expected != null ? {path: a.path, expected: a.expected} : null; })(),
       expected: d.packetPath === path ? d.packet : null});
@@ -1221,7 +1223,7 @@ $("copy-request").onclick = local(() => {
   return deliverStep(config.forward, "copy");
 });
 $("request-result").onclick = local(() => buildStepDialog("result"));
-$("build-reply-stage").onchange = () => { buildReplyStages.set(currentId, $("build-reply-stage").value); composerGeneration += 1; applyStageDefaults(); renderReadiness(); updateSendState(); };
+$("build-reply-stage").onchange = () => { buildReplyStages.set(currentId, $("build-reply-stage").value); composerGeneration += 1; applyManualConfiguration(); renderReadiness(); updateSendState(); };
 $("add-message-files").onclick = guard(() => openMaterialPicker("message"));
 $("approve-plan").onclick = local(async () => {
   if (!currentId) return;
@@ -1432,6 +1434,7 @@ function applySplit() {
   const narrow = window.innerWidth <= 900;
   const mode = narrow ? splitMode : "split";
   const docVisible = mode !== "chat";
+  const chatWasHidden = split.dataset.mode === "doc";
   const body = document.querySelector(".result-body");
   // Hiding a pane resets its scroll; the reading position travels with the
   // pane instead of being lost.
@@ -1451,6 +1454,7 @@ function applySplit() {
   applyTitleShift();
   if (docVisible && !docWasVisible && body) body.scrollTop = docScrollPosition;
   docWasVisible = docVisible;
+  if (mode !== "doc" && chatWasHidden) { conversationNeedsLatest = true; showLatestConversation(); }
   $("single-toggle").textContent = mode === "doc" ? "Show conversation" : "Show document";
 }
 // The stage title stays centered over the spine itself, wherever the divider
@@ -1659,7 +1663,7 @@ async function send() {
     try {
       // The server saves the submission durably before dispatch and answers
       // only once the bounded worker has started.
-      result = await api("converse", {id: originId, tool, stage, text, files: submittedFiles.map(item => item.path),
+      result = await api("converse", {id: originId, tool, stage, text, roles: oneTimeRoles(), files: submittedFiles.map(item => item.path),
                                       images: submitted.map(item => ({name: item.name, data: item.data}))});
     } catch (error) {
       // Pre-acknowledgement, in two distinct states. The server answered with
@@ -1931,13 +1935,22 @@ function appendArtifactReadback(element, artifact) {
   line.textContent = [artifact.role, artifact.reason || outcomes[artifact.outcome], artifact.applies === "earlier" ? "This assessment covers an earlier document version." : ""].filter(Boolean).join(" — ");
   element.append(line);
 }
+function showLatestConversation() {
+  requestAnimationFrame(() => {
+    const holder = $("conversation");
+    if (!conversationNeedsLatest || !holder?.clientHeight) return;
+    holder.scrollTop = holder.scrollHeight;
+    conversationNeedsLatest = false;
+  });
+}
 function renderConversation() {
   const holder = $("conversation");
   if (!holder) return;
   // This render already reconciles the live operation it is drawn under;
   // polling compares against it before redrawing an unfinished turn.
   if (lastOperation && ["starting", "running"].includes(lastOperation.state)) conversationLiveMark = `${lastOperation.turn}:${lastOperation.state}`;
-  const nearBottom = holder.scrollHeight - holder.scrollTop - holder.clientHeight < 90;
+  const top = holder.scrollTop;
+  const nearBottom = holder.scrollHeight - top - holder.clientHeight < 90;
   holder.replaceChildren();
   if (!currentId) return;
   const entries = [
@@ -1945,7 +1958,9 @@ function renderConversation() {
     ...reviewRuns.map(run => ({order: run.run, card: () => runCard(run)})),
   ].sort((a, b) => String(a.order).localeCompare(String(b.order)));
   for (const entry of entries) holder.append(entry.card());
-  if (nearBottom) holder.scrollTop = holder.scrollHeight;
+  if (conversationNeedsLatest) showLatestConversation();
+  else if (nearBottom) holder.scrollTop = holder.scrollHeight;
+  else holder.scrollTop = top;
 }
 
 // Live operation status: elapsed time and recent Bridge contact, never progress.
@@ -2365,7 +2380,7 @@ async function runReview() {
       // originating project is captured before dispatch, so a switch while
       // the acknowledgement is awaited never shows this run under the other
       // project.
-      result = await api("review", {id, tool, reviewer, stage: config.assessment,
+      result = await api("review", {id, tool, reviewer, stage: config.assessment, roles: oneTimeRoles(),
                                     iterate: secondOpinion && $("iterate-toggle").checked});
       if (currentId !== id) return;
       lastOperation = result.operation;
@@ -2445,10 +2460,11 @@ function updateBuildNextStep() {
 // Terminal for Hermes and Qwen Code, which have no in-app conversation.
 function deliveryTool(step) {
   const role = {"create-plan": "planning", "implement-plan": "implementation", result: "implementation", verification: "verification", correction: "correction"}[step];
-  return stageChoice(role).tool || selectedToolId();
+  return effectiveChoice(role).tool || selectedToolId();
 }
-function updateTransitionLabel() {
+function updateTransitionLabel(refreshChoice = true) {
   if (!workspace) return;
+  if (refreshChoice) renderImplementationChoice();
   const host = routeLabelHost(deliveryTool(workspace === "build" ? buildNextAction() : workspaces[workspace].forward));
   $("transition").textContent = workspace === "build"
     ? (buildNextAction() === "verification" ? "Finish verification" : "Request repairs")
@@ -2514,7 +2530,7 @@ async function deliverStep(step, action = null, note = "") {
   const upstreamStage = step === "create-plan" ? "specification" : step === "implement-plan" ? "planning" : null;
   const observedUpstream = upstreamStage ? project?.assessments?.[upstreamStage] : null;
   const upstream = observedUpstream?.path && observedUpstream.expected != null ? {path: observedUpstream.path, expected: observedUpstream.expected} : null;
-  const text = $("message").value.trim();
+  const text = $("message").value;
   // The request carries the visible unsent step-4 text and the currently
   // attached files: project material plus this message's file choices.
   const files = workspace === "build"
@@ -2536,7 +2552,7 @@ async function deliverStep(step, action = null, note = "") {
   const filePaths = files.map(item => item.path);
   let result;
   try {
-    result = await api("deliver", {id, step, action, tool, text,
+    result = await api("deliver", {id, step, action, tool, text, roles: oneTimeRoles(),
       files: filePaths,
       images: action === "send" ? submittedAttachments.map(item => ({name: item.name, data: item.data}))
                                 : submittedAttachments.map(item => ({name: item.name})),
@@ -2559,7 +2575,7 @@ async function deliverStep(step, action = null, note = "") {
         const item = originFiles.find(entry => entry.path === path);
         if (item) { const at = originFiles.indexOf(item); originFiles.splice(at, 1); }
       }
-      if (currentId === id && workspace === selectedWorkspace && $("message").value.trim() === text) {
+      if (currentId === id && workspace === selectedWorkspace && $("message").value === text) {
         $("message").value = "";
         composerGeneration += 1;
       }
@@ -2591,7 +2607,7 @@ async function deliverStep(step, action = null, note = "") {
   }
   attachments = attachments.filter(held => !submittedAttachments.includes(held));
   for (const item of submittedAttachments) if (!attachments.includes(item)) URL.revokeObjectURL(item.url);
-  if (currentId === id && workspace === selectedWorkspace && $("message").value.trim() === text) {
+  if (currentId === id && workspace === selectedWorkspace && $("message").value === text) {
     $("message").value = "";
     composerGeneration += 1;
   }
@@ -2723,7 +2739,7 @@ function renderRepairsResult(trigger, result) {
         if (!tool) { status("Choose the coding tool in step 3 first."); return; }
         const blocked = routeBlock(tool);
         if (blocked) { status(`${blocked.reason}. ${blocked.remedy}`, "warning"); return; }
-        const result = await api("repair", {id: currentId, stage: trigger.stage, tool});
+        const result = await api("repair", {id: currentId, stage: trigger.stage, tool, roles: oneTimeRoles()});
         lastOperation = result.operation;
         await loadConversation();
         if (currentId) updateOperation(result.operation);
@@ -2940,24 +2956,21 @@ const optionalRole = role => role.endsWith("_second_opinion");
 function configurationRole() {
   return workspace === "specification" ? "specification" : workspace === "plan" ? "planning" : messageStage() === "verification" ? "verification" : "implementation";
 }
-function stageChoice(role) {
-  return appSettings.role_defaults?.[role] || {};
+function savedChoices() {
+  return {...appSettings.role_defaults, ...(project?.configuration?.roles || {})};
 }
-function applyStageDefaults() {
-  const choice = stageChoice(configurationRole());
-  if (choice.tool) $("destination").value = hostChoices.find(h => h.id === choice.tool)?.name || "";
-  const verification = stageChoice("verification");
-  if (verification.tool) $("verification-verifier").value = verification.tool;
-  updateHost();
-  const reviewRole = workspace === "plan" ? "planning" : "specification";
-  const reviewer = stageChoice(`${reviewRole}_review`), peer = stageChoice(`${reviewRole}_second_opinion`);
-  $("step-reviewer").value = reviewer.tool || selectedToolId();
-  stepReviewerChosen = !!reviewer.tool;
-  $("opinion-toggle").checked = !!peer.tool;
-  if (peer.tool) { $("reviewer").value = peer.tool; reviewerChosen = true; }
-  renderReviewerChoices();
+function stageChoice(role) { return savedChoices()[role] || {}; }
+function effectiveChoice(role) { return pendingRunConfig?.roles?.[role] || stageChoice(role); }
+function oneTimeRoles() { return pendingRunConfig?.roles || {}; }
+function renderImplementationChoice() {
+  const holder = $("implementation-choice");
+  holder.hidden = workspace !== "plan";
+  if (holder.hidden) return;
+  holder.replaceChildren(roleRow("implementation", "Implement with (this project, one time)", effectiveChoice("implementation"), choice => {
+    pendingRunConfig = {...(pendingRunConfig || {}), roles: {...oneTimeRoles(), implementation: choice}};
+    updateTransitionLabel(false);
+  }));
 }
-
 function inventory(tool) {
   if (!modelInventories.has(tool)) {
     modelInventories.set(tool, api("harness-models", {tool}).catch(() => ({models: [], reason: "Native choices could not be read. Use harness default follows the harness’s own model and effort. Saved choices are preserved."})));
@@ -2968,7 +2981,7 @@ function retainedOption(select, value, label) {
   if (value && ![...select.options].some(option => option.value === value)) select.add(new Option(label || `${value} — saved choice (not in current inventory)`, value));
   select.value = value || "";
 }
-function roleRow(role, label, choice) {
+function roleRow(role, label, choice, changed = null) {
   const row = document.createElement("div"); row.className = "role-row"; row.dataset.role = role;
   const heading = document.createElement("label"); heading.textContent = label;
   const tool = document.createElement("select"); tool.className = "role-tool"; tool.setAttribute("aria-label", `${label} harness`);
@@ -2984,6 +2997,7 @@ function roleRow(role, label, choice) {
   row.append(note);
   tool.replaceChildren(new Option(optionalRole(role) ? "Off" : "Use selected harness", ""), ...hostChoices.map(h => new Option(h.name + (h.detected ? "" : " — unavailable"), h.id)));
   retainedOption(tool, choice.tool || "");
+  const notify = () => changed?.({tool: tool.value, model: tool.value ? model.value : "", effort: tool.value ? effort.value : ""});
   const load = async (fresh = false) => {
     const selected = tool.value;
     const heldModel = fresh ? "" : choice.model || "", heldEffort = fresh ? "" : choice.effort || "";
@@ -2998,7 +3012,7 @@ function roleRow(role, label, choice) {
     const models = facts.models || [];
     const configured = facts.configured_model || "";
     model.replaceChildren(new Option(`Use harness default${configured ? ` (${configured})` : ""}`, ""), ...models.map(m => new Option(m.label || m.id, m.id)));
-    retainedOption(model, fresh ? (models.some(m => m.id === configured) ? configured : "") : heldModel);
+    retainedOption(model, fresh ? "" : heldModel);
     const fillEfforts = value => {
       const selectedModel = models.find(m => m.id === (model.value || configured));
       const configuredEffort = facts.configured_effort || "";
@@ -3006,10 +3020,11 @@ function roleRow(role, label, choice) {
       retainedOption(effort, value);
     };
     fillEfforts(heldEffort);
-    model.onchange = () => fillEfforts("");
+    model.onchange = () => { choice = {tool: tool.value, model: model.value, effort: ""}; fillEfforts(""); notify(); };
+    effort.onchange = notify;
     note.textContent = facts.reason || "Native harness choices; saved choices remain available.";
   };
-  tool.onchange = () => { choice = {tool: tool.value}; load(true); };
+  tool.onchange = () => { choice = {tool: tool.value}; load(true); notify(); };
   // Run after the row has been attached; discovery is optional and cannot block Save.
   queueMicrotask(() => load());
   return row;
@@ -3031,16 +3046,17 @@ function readRoleRows(holder) {
 }
 function openConfiguration(forRun = false) {
   const config = forRun ? runActive?.config || pendingRunConfig || {} : {};
-  const values = forRun && runActive ? runActive.effective_roles : {...appSettings.role_defaults, ...(config.roles || {})};
+  const values = forRun && runActive ? runActive.effective_roles : {...savedChoices(), ...(config.roles || {})};
   renderRoleRows($("settings-roles"), values);
-  $("settings-best-guess").checked = config.best_guess ?? appSettings.best_guess ?? false;
+  $("settings-best-guess").checked = config.best_guess ?? project?.configuration?.best_guess ?? appSettings.best_guess ?? false;
   $("settings-hide-advisory").checked = config.hide_advisory ?? savedHideAdvisory();
   $("configure-save").disabled = !currentId;
   $("configure-clear").disabled = !currentId;
+  $("project-settings-save").disabled = $("project-settings-clear").disabled = !currentId;
   $("settings-location").textContent = appSettings.settings_path ? `Saved in ${appSettings.settings_path}` : "Saved in this installation’s settings.json.";
   $("configure-explain").textContent = forRun && runActive
     ? "Showing this run’s effective choices. Changes apply after any call already in progress. Save defaults applies to every project and future run; Apply to this run only leaves those defaults unchanged."
-    : "Saved defaults apply to every project and future run until you change them. Apply to this run only is optional. Nothing here starts work.";
+    : "Save defaults for all projects, save choices for this project, or apply them one time to manual actions and the next run. One-time choices take priority over project choices, then global defaults. Nothing here starts work.";
   $("settings-panel").hidden = false;
 }
 $("settings").onclick = guard(() => openConfiguration());
@@ -3048,21 +3064,49 @@ $("configure-path").onclick = guard(() => openConfiguration(true));
 $("settings-close").onclick = () => { $("settings-panel").hidden = true; };
 function savedHideAdvisory() {
   // Preserve the effective preference saved by either of the former warning controls.
-  return !!appSettings.hide_advisory || appSettings.warn_skip_review === false;
+  return project?.configuration?.hide_advisory ?? (!!appSettings.hide_advisory || appSettings.warn_skip_review === false);
 }
 $("settings-save").onclick = guard(async () => {
   appSettings = await api("settings", {warn_skip_review: !$("settings-hide-advisory").checked,
     best_guess: $("settings-best-guess").checked, hide_advisory: $("settings-hide-advisory").checked,
     role_defaults: readRoleRows($("settings-roles"))});
-  if (currentId && workspace && !lastOperation?.active) applyStageDefaults();
+  if (currentId && workspace && !lastOperation?.active) applyManualConfiguration();
   $("settings-panel").hidden = true;
   status("Defaults saved for all projects and future runs. Work already in progress keeps its current choices.");
+});
+function applyManualConfiguration() {
+  const writer = effectiveChoice(configurationRole());
+  if (writer.tool) $("destination").value = hostChoices.find(h => h.id === writer.tool)?.name || "";
+  renderReviewerChoices();
+  const role = workspace === "plan" ? "planning" : "specification";
+  const reviewer = effectiveChoice(`${role}_review`), peer = effectiveChoice(`${role}_second_opinion`);
+  $("step-reviewer").value = reviewer.tool || selectedToolId(); stepReviewerChosen = !!reviewer.tool;
+  $("opinion-toggle").checked = !!peer.tool;
+  if (peer.tool) { $("reviewer").value = peer.tool; reviewerChosen = true; }
+  const verification = effectiveChoice("verification");
+  if (verification.tool) $("verification-verifier").value = verification.tool;
+  updateHost();
+}
+$("project-settings-save").onclick = guard(async () => {
+  const result = await api("project-settings", {id: currentId, roles: readRoleRows($("settings-roles")),
+    best_guess: $("settings-best-guess").checked, hide_advisory: $("settings-hide-advisory").checked});
+  project.configuration = result.configuration;
+  if (!lastOperation?.active) applyManualConfiguration();
+  $("settings-panel").hidden = true;
+  status("Choices saved for this project. One-time choices still take priority; global defaults are unchanged.");
+});
+$("project-settings-clear").onclick = guard(async () => {
+  const result = await api("project-settings", {id: currentId, clear: true});
+  project.configuration = result.configuration;
+  if (!lastOperation?.active) applyManualConfiguration();
+  $("settings-panel").hidden = true;
+  status("Saved project choices removed. One-time choices and global defaults still apply.");
 });
 async function saveRunConfiguration(config) {
   if (runActive) {
     const result = await api("run-configure", {id: currentId, config});
     updateRunState(result.run);
-  } else pendingRunConfig = config;
+  } else { pendingRunConfig = config; applyManualConfiguration(); }
   $("settings-panel").hidden = true;
 }
 $("configure-save").onclick = guard(async () => {
@@ -3072,8 +3116,8 @@ $("configure-save").onclick = guard(async () => {
 });
 $("configure-clear").onclick = guard(async () => {
   // An active run captured its defaults on entry; explicitly using saved defaults refreshes that snapshot through overrides.
-  await saveRunConfiguration({roles: runActive ? appSettings.role_defaults : {}, best_guess: !!appSettings.best_guess, hide_advisory: savedHideAdvisory()});
-  status("This run now uses saved defaults. Global defaults are unchanged.");
+  await saveRunConfiguration({roles: runActive ? savedChoices() : {}, best_guess: project?.configuration?.best_guess ?? !!appSettings.best_guess, hide_advisory: savedHideAdvisory()});
+  status("One-time choices cleared. Project choices and global defaults now apply.");
 });
 $("run-completion").onclick = guard(async () => {
   if (!currentId || !workspace) { status("Choose or create a project first."); return; }
@@ -3087,7 +3131,7 @@ $("run-completion").onclick = guard(async () => {
     status("Run stopped: recorded unfinished. Files already changed remain; nothing replays by itself.");
     return;
   }
-  const config = pendingRunConfig || {roles: {}, best_guess: !!appSettings.best_guess, hide_advisory: savedHideAdvisory()};
+  const config = {best_guess: project?.configuration?.best_guess ?? !!appSettings.best_guess, hide_advisory: savedHideAdvisory(), ...(pendingRunConfig || {}), roles: oneTimeRoles()};
   // The skip-review warning is advisory; Continue is one click, and the
   // saved or run-only hide-advisory preference removes it.
   const spec = project?.assessments?.specification, plan = project?.assessments?.planning;
@@ -3135,6 +3179,7 @@ $("run-completion").onclick = guard(async () => {
   renderMaterialChosen();
   syncVisibleInput();
   pendingRunConfig = null;
+  updateTransitionLabel();
   updateRunState(result.run);
   status("Run to Completion started. The status bar carries the current step; the composer answers pauses only.");
 });
