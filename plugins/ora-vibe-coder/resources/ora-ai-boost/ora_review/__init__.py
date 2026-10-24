@@ -4,7 +4,7 @@ from .adapters import ANALYTICAL_ENGINES
 from .runner import ReviewRunner, RunRequest, RunResult
 
 #: Release identity of this copy. Kept in step with ``pyproject.toml``.
-VERSION = "0.3.0"
+VERSION = "0.5.0"
 
 #: This component's machine-readable facts: its identity and version, the
 #: analytical roles each of the six tools can hold, which engines keep a

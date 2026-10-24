@@ -252,9 +252,9 @@ class ConversationCase(unittest.TestCase):
         self.home.mkdir()
         self.store = ProjectStore(self.home)
         self.bridge = self.root / "bridge-home"
-        (self.bridge / "bridge").mkdir(parents=True)
-        (self.bridge / "bridge" / "__init__.py").write_text("", encoding="utf-8")
-        (self.bridge / "bridge" / "__main__.py").write_text(FAKE_BRIDGE, encoding="utf-8")
+        (self.bridge / "ora_agent_bridge").mkdir(parents=True)
+        (self.bridge / "ora_agent_bridge" / "__init__.py").write_text("", encoding="utf-8")
+        (self.bridge / "ora_agent_bridge" / "__main__.py").write_text(FAKE_BRIDGE, encoding="utf-8")
         self.replies = self.root / "replies"
         self.replies.mkdir()
         self._bridge_patch = patch.object(conversation, "BRIDGE_HOME", self.bridge)
@@ -309,7 +309,7 @@ class ConversationCase(unittest.TestCase):
         note = conversation.bridge_call(["record", "--session", str(session), "--kind", "note"], body)
         note_ref = re.match(r"(\d{4})-", Path(note).name)[1]
         result = subprocess.run(
-            [sys.executable, "-m", "bridge", "run", "--session", str(session), "--timeout", "60",
+            [sys.executable, "-m", "ora_agent_bridge", "run", "--session", str(session), "--timeout", "60",
              "--events-jsonl", "--note-ref", note_ref, "--purpose", purpose],
             cwd=str(self.bridge), input="scripted request body", capture_output=True,
             text=True, encoding="utf-8", shell=False,
@@ -1026,15 +1026,15 @@ class Conversation(ConversationCase):
         # The same order under a synthetic layout: a developer checkout beside
         # the application never overrides the repository's own vendor.
         repository = self.root / "repository"
-        (repository / "components" / "agent-bridge" / "bridge").mkdir(parents=True)
-        (repository / "components" / "agent-bridge" / "bridge" / "__main__.py").write_text("", encoding="utf-8")
+        (repository / "components" / "agent-bridge" / "ora_agent_bridge").mkdir(parents=True)
+        (repository / "components" / "agent-bridge" / "ora_agent_bridge" / "__main__.py").write_text("", encoding="utf-8")
         developer = self.root / "agent-bridge"  # Beside the "application".
-        (developer / "bridge").mkdir(parents=True)
-        (developer / "bridge" / "__main__.py").write_text("", encoding="utf-8")
+        (developer / "ora_agent_bridge").mkdir(parents=True)
+        (developer / "ora_agent_bridge" / "__main__.py").write_text("", encoding="utf-8")
         candidates = conversation._bridge_candidates(repository)
         self.assertEqual(candidates, (repository / "components" / "agent-bridge", developer))
         self.assertEqual(next((candidate for candidate in candidates
-                               if (candidate / "bridge" / "__main__.py").is_file()), None),
+                               if (candidate / "ora_agent_bridge" / "__main__.py").is_file()), None),
                          repository / "components" / "agent-bridge")
         # The installed layout ships no components/ tree beside the app, so
         # the copy bundled beside the application serves it.
@@ -1042,10 +1042,10 @@ class Conversation(ConversationCase):
         application = apps / "Ora Vibe Coder"
         application.mkdir(parents=True)
         beside = apps / "agent-bridge"
-        (beside / "bridge").mkdir(parents=True)
-        (beside / "bridge" / "__main__.py").write_text("", encoding="utf-8")
+        (beside / "ora_agent_bridge").mkdir(parents=True)
+        (beside / "ora_agent_bridge" / "__main__.py").write_text("", encoding="utf-8")
         self.assertEqual(next((candidate for candidate in conversation._bridge_candidates(application)
-                               if (candidate / "bridge" / "__main__.py").is_file()), None),
+                               if (candidate / "ora_agent_bridge" / "__main__.py").is_file()), None),
                          beside)
 
     def test_readiness_poll_reads_only_and_recheck_starts_one_worker(self):
@@ -1204,7 +1204,7 @@ class Conversation(ConversationCase):
         state = {"work": "unsupported"}
         # The fake bundle reports a version, so the sweep's component block
         # reads it as a readable copy and Gear availability follows Boost.
-        (self.bridge / "bridge" / "__init__.py").write_text('VERSION = "9.9.9"\n', encoding="utf-8")
+        (self.bridge / "ora_agent_bridge" / "__init__.py").write_text('VERSION = "9.9.9"\n', encoding="utf-8")
         boost_patch = patch.object(conversation, "BOOST_HOME", self.root / "no-bundled-boost")
         boost_patch.start()
         self.addCleanup(boost_patch.stop)
@@ -1234,7 +1234,14 @@ class Conversation(ConversationCase):
             codex_again = next(facts for facts in second["peers"] if facts["peer"] == "codex")
             self.assertEqual(codex_again["work"], "supported")
             self.assertTrue(codex_again["gear"]["available"])
-            self.assertEqual(codex_again["gear"]["version"], "0.3.0")
+            # The bundled Boost's own VERSION, not a pinned release number
+            # that drifts on the next component import.
+            bundled_boost = (Path(conversation.__file__).resolve().parents[1]
+                             / "components" / "ora-ai-boost" / "ora_review" / "__init__.py")
+            self.assertEqual(
+                codex_again["gear"]["version"],
+                re.search(r'VERSION\s*=\s*"([^"]+)"', bundled_boost.read_text(encoding="utf-8")).group(1),
+            )
             host_again = next(host for host in second["hosts"] if host["id"] == "codex")
             self.assertTrue(host_again["conversation"])
             self.assertEqual(second["components"]["boost"]["status"], "ok")
@@ -1375,7 +1382,7 @@ class Conversation(ConversationCase):
             conversation.user_note_body("programming", "codex", "the interrupted question", []))
         note_ref = re.match(r"(\d{4})-", Path(note).name)[1]
         result = subprocess.run(
-            [sys.executable, "-m", "bridge", "run", "--session", str(session), "--timeout", "60",
+            [sys.executable, "-m", "ora_agent_bridge", "run", "--session", str(session), "--timeout", "60",
              "--events-jsonl", "--note-ref", note_ref, "--purpose", "work"],
             cwd=str(self.bridge), input="the dispatched request", capture_output=True,
             text=True, encoding="utf-8", shell=False,
@@ -2166,7 +2173,7 @@ class Reliability(ConversationCase):
                                        run_name or folder.name, "claude", False, 1))
         note_ref = re.match(r"(\d{4})-", Path(note).name)[1]
         result = subprocess.run(
-            [sys.executable, "-m", "bridge", "run", "--session", str(session), "--timeout", "60",
+            [sys.executable, "-m", "ora_agent_bridge", "run", "--session", str(session), "--timeout", "60",
              "--events-jsonl", "--note-ref", note_ref, "--purpose", purpose],
             cwd=str(self.bridge), input="pass request body", capture_output=True,
             text=True, encoding="utf-8", shell=False,
@@ -2241,9 +2248,9 @@ class Lifetime(ConversationCase):
     def test_bundled_bridge_long_turn_and_explicit_stop(self):
         # Only the connector is replaced: parsing, sessions, records, events,
         # no-timeout, and process cleanup come from the actual shipped bundle.
-        bundle = Path(conversation.__file__).resolve().parents[1] / "components" / "agent-bridge" / "bridge"
+        bundle = Path(conversation.__file__).resolve().parents[1] / "components" / "agent-bridge" / "ora_agent_bridge"
         shim = self.root / "bundled-fixture"
-        package = shim / "bridge"
+        package = shim / "ora_agent_bridge"
         package.mkdir(parents=True)
         (package / "__init__.py").write_text((bundle / "__init__.py").read_text()
                                             + f"\n__path__.append({str(bundle)!r})\n")
@@ -2254,8 +2261,12 @@ class Lifetime(ConversationCase):
                           "pathlib.Path(os.environ['VIBE_BUNDLE_STARTED']).write_text('started')\n"
                           "time.sleep(float(os.environ['VIBE_BUNDLE_DELAY']))\n"
                           f"print({reply!r})\n")
+        # The turn runs the bundled Bridge as `ora_agent_bridge`, the module
+        # name its 1.5.1 release ships; the assert fails under the pre-rename
+        # `bridge` invocation, which could not import this package at all.
         (package / "__main__.py").write_text(
-            "import os,sys\nfrom bridge import cli,codex,peer\nfrom bridge.connectors import PeerCommand\n"
+            "import os,sys\nassert __package__ == 'ora_agent_bridge'\n"
+            "from ora_agent_bridge import cli,codex,peer\nfrom ora_agent_bridge.connectors import PeerCommand\n"
             f"assert cli.__file__ == {str(bundle / 'cli.py')!r}\n"
             "cli.DEFAULT_TIMEOUT_SECONDS = 0.03\npeer.HEARTBEAT_SECONDS = 0.03\n"
             "def fake(deadline,cwd,**kwargs):\n"

@@ -107,7 +107,14 @@ def _executable(path: Path) -> bool:
 
 
 def snapshot_descriptor(path: Path) -> dict[str, object]:
-    """Hash all bytes, path types, links, and executable file modes."""
+    """Hash all bytes, path types, links, and executable file modes.
+
+    Generated Python caches follow the one shared rule the exact-file readers
+    use (loop_integrity.cache_artifact): `.pyc` files wherever they appear and
+    directories named `__pycache__` are skipped, so a destination that merely
+    ran still compares equal to its own reviewed content. Every other file —
+    including non-cache content inside `__pycache__` — is hashed, so it cannot
+    hide from backup and recovery fingerprints."""
     digest = hashlib.sha256()
     if path.is_file():
         data = path.read_bytes()
@@ -121,15 +128,20 @@ def snapshot_descriptor(path: Path) -> dict[str, object]:
     if path.is_symlink() or not path.is_dir():
         raise AssemblyError(f"Assembly output is not a file or directory: {path}")
     for item in sorted(path.rglob("*"), key=lambda value: value.relative_to(path).as_posix()):
-        relative = item.relative_to(path).as_posix().encode("utf-8")
+        relative_path = item.relative_to(path)
+        relative = relative_path.as_posix().encode("utf-8")
         if item.is_symlink():
             digest.update(b"link\0" + relative + b"\0" + os.fsencode(os.readlink(item)) + b"\0")
         elif item.is_file():
+            if loop_integrity.cache_artifact(relative_path, directory=False):
+                continue
             data = item.read_bytes()
             digest.update(b"file\0" + relative + b"\0")
             digest.update(b"1\0" if _executable(item) else b"0\0")
             digest.update(str(len(data)).encode("ascii") + b"\0" + data)
         elif item.is_dir():
+            if loop_integrity.cache_artifact(relative_path, directory=True):
+                continue
             digest.update(b"directory\0" + relative + b"\0")
         else:
             raise AssemblyError(f"Assembly output contains a special file: {item}")
@@ -539,8 +551,11 @@ def assemble_locked(loop_source: Path | None, revision: str | None,
     _, manifest_outputs, manifest_originals = vibe_manifest_outputs()
     identity = {
         **authority,
-        "component": "programming-loop",
-        "source": "programming-loop",
+        # The bundled Loop's own installer (1.2.1) accepts a vendored source
+        # only under its renamed component identity, which names the entry it
+        # writes (skills/ora-programming-loop).
+        "component": "ora-programming-loop",
+        "source": "ora-programming-loop",
         "version": version,
         "files": {
             name: hashlib.sha256(data).hexdigest()

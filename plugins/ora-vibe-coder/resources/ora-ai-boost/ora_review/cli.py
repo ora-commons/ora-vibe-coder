@@ -71,6 +71,41 @@ def _parser(tool: str) -> argparse.ArgumentParser:
             "(choices: fable, claude-fable-5)"
         ),
     )
+    parser.add_argument(
+        "--codex-model",
+        metavar="MODEL",
+        help=(
+            "name the Codex model for every Codex call, passed to codex exec "
+            "as -m; requires --native codex or --peer codex"
+        ),
+    )
+    parser.add_argument(
+        "--codex-effort",
+        metavar="EFFORT",
+        help=(
+            "name the Codex reasoning effort for every Codex call, passed to "
+            "codex exec as model_reasoning_effort; requires --native codex "
+            "or --peer codex"
+        ),
+    )
+    parser.add_argument(
+        "--repository", metavar="PATH",
+        help="absolute path of the target repository or task worktree; its "
+             "complete AGENTS.md (imports expanded) follows the core in "
+             "every packet",
+    )
+    parser.add_argument(
+        "--assigned-path", action="append", default=[], metavar="PATH",
+        help="path inside the target repository this assignment works on, "
+             "relative to the repository root or absolute; repeatable. The "
+             "narrower AGENTS.md rules for these paths join the repository "
+             "rules in every packet. Requires --repository",
+    )
+    parser.add_argument(
+        "--turn-instructions-file", metavar="FILE",
+        help="read this turn's original user message verbatim from FILE and "
+             "forward it to every packet after the core",
+    )
     parser.add_argument("--consensus", action="store_true")
     if tool == "gear3":
         parser.add_argument(
@@ -165,7 +200,57 @@ def _configuration_line(tool: str, args: argparse.Namespace) -> str:
         line = f"{name}; {ending}; native engine `{args.native}`."
     if args.model:
         line += f" Requested native model selector `{args.model}`."
+    if args.codex_model or args.codex_effort:
+        named = " and ".join(
+            part
+            for part in (
+                f"model `{args.codex_model}`" if args.codex_model else None,
+                f"reasoning effort `{args.codex_effort}`"
+                if args.codex_effort
+                else None,
+            )
+            if part
+        )
+        line += f" Requested Codex {named}."
     return line
+
+
+def _engine_disclosure(args: argparse.Namespace) -> str:
+    if args.native == "claude":
+        if args.model:
+            return (
+                f"The requested native model selector is `{args.model}`; every "
+                "successful native call must return one matching exact model "
+                "attribution, which is recorded. "
+            )
+        return (
+            "No native model selector was supplied; every successful native "
+            "call must return one unambiguous exact model attribution, which "
+            "is recorded. "
+        )
+    if args.native == "codex":
+        if args.codex_model or args.codex_effort:
+            named = " and ".join(
+                part
+                for part in (
+                    f"model `{args.codex_model}`" if args.codex_model else None,
+                    f"reasoning effort `{args.codex_effort}`"
+                    if args.codex_effort
+                    else None,
+                )
+                if part
+            )
+            return (
+                f"Requested Codex {named}; each reaches every native "
+                "`codex exec` call, and the model and reasoning effort Codex "
+                "reports using are recorded. "
+            )
+        return (
+            "No Codex model or reasoning effort was requested; Codex's own "
+            "default applies, and the model and reasoning effort Codex "
+            "reports using are recorded. "
+        )
+    return "Effective model and effort are not selected or reported. "
 
 
 def _run(tool: str, argv: Sequence[str] | None = None) -> int:
@@ -176,6 +261,13 @@ def _run(tool: str, argv: Sequence[str] | None = None) -> int:
     try:
         if args.model and args.native != "claude":
             raise OraReviewError("--model requires --native claude.")
+        if (
+            args.codex_model is not None or args.codex_effort is not None
+        ) and args.native != "codex" and args.peer != "codex":
+            raise OraReviewError(
+                "--codex-model and --codex-effort require --native codex or "
+                "--peer codex."
+            )
         commitment = None
         if tool == "gear4":
             if args.breadth == "committed" and not args.commitment:
@@ -191,6 +283,16 @@ def _run(tool: str, argv: Sequence[str] | None = None) -> int:
                 commitment = _read_file(args.commitment, "commitment file")
                 if not commitment.strip():
                     raise OraReviewError("The commitment file contains no user words.")
+
+        current_turn_instructions = None
+        if args.turn_instructions_file:
+            current_turn_instructions = _read_file(
+                args.turn_instructions_file, "turn-instructions file"
+            )
+            if not current_turn_instructions.strip():
+                raise OraReviewError(
+                    "The turn-instructions file contains no user words."
+                )
 
         material = UserMaterial(
             original=_read_request(args.request),
@@ -212,7 +314,12 @@ def _run(tool: str, argv: Sequence[str] | None = None) -> int:
         print(_configuration_line(tool, args), file=sys.stderr)
         initiator = "ora-gear-3" if tool == "gear3" else "ora-gear-4"
         if args.native == "codex":
-            native = CodexAdapter()
+            if args.codex_model or args.codex_effort:
+                native = CodexAdapter(
+                    model=args.codex_model, effort=args.codex_effort
+                )
+            else:
+                native = CodexAdapter()
         elif args.native == "claude":
             native = ClaudeAdapter(model=args.model) if args.model else ClaudeAdapter()
         else:
@@ -239,9 +346,13 @@ def _run(tool: str, argv: Sequence[str] | None = None) -> int:
         peer_adapter = None
         notices: tuple[str, ...] = ()
         if args.peer:
+            prepare_arguments = {"peer": args.peer, "initiator": initiator}
+            if args.peer == "codex" and (args.codex_model or args.codex_effort):
+                prepare_arguments["model"] = args.codex_model
+                prepare_arguments["effort"] = args.codex_effort
             try:
                 peer_adapter, readiness = BridgeAdapter.prepare(
-                    peer=args.peer, initiator=initiator
+                    **prepare_arguments
                 )
                 print(readiness, file=sys.stderr)
                 print(
@@ -249,18 +360,14 @@ def _run(tool: str, argv: Sequence[str] | None = None) -> int:
                     f"{native_route} selected by `--native {args.native}`. "
                     "Fresh context is guaranteed; provider or model "
                     "diversity is promised only when separately established. "
+                    + _engine_disclosure(args)
                     + (
-                        (
-                            f"The requested native model selector is `{args.model}`; every "
-                            "successful native call must return one matching exact model "
-                            "attribution, which is recorded. "
-                            if args.model
-                            else "No native model selector was supplied; every successful "
-                            "native call must return one unambiguous exact model "
-                            "attribution, which is recorded. "
-                        )
-                        if args.native == "claude"
-                        else "Effective model and effort are not selected or reported. "
+                        "The same named Codex choices are passed to every "
+                        "Bridge call for the `codex` peer, and the values its "
+                        "reply reports are recorded. "
+                        if args.peer == "codex"
+                        and (args.codex_model or args.codex_effort)
+                        else ""
                     )
                     + "The vendor CLI runs "
                     "as your operating-system account, and local or vendor tooling may "
@@ -283,19 +390,7 @@ def _run(tool: str, argv: Sequence[str] | None = None) -> int:
                 f"selected by `--native {args.native}`. "
                 "This promises context separation, not different evidence, training, "
                 "models, or blind spots. "
-                + (
-                    (
-                        f"The requested native model selector is `{args.model}`; every "
-                        "successful native call must return one matching exact model "
-                        "attribution, which is recorded."
-                        if args.model
-                        else "No native model selector was supplied; every successful "
-                        "native call must return one unambiguous exact model attribution, "
-                        "which is recorded."
-                    )
-                    if args.native == "claude"
-                    else "Effective model and effort are not selected or reported."
-                ),
+                + _engine_disclosure(args).rstrip(" "),
                 file=sys.stderr,
             )
 
@@ -306,9 +401,14 @@ def _run(tool: str, argv: Sequence[str] | None = None) -> int:
             consensus=args.consensus,
             breadth=args.breadth if tool == "gear4" else "analytical",
             initial_notices=notices,
+            repository_path=(
+                Path(args.repository).expanduser() if args.repository else None
+            ),
+            assigned_paths=tuple(args.assigned_path),
+            current_turn_instructions=current_turn_instructions,
         )
         result = runner.run_gear3(request) if tool == "gear3" else runner.run_gear4(request)
-    except (CallFailure, OraReviewError, OSError) as failure:
+    except (CallFailure, OraReviewError, OSError, UnicodeDecodeError) as failure:
         if isinstance(failure, CallFailure):
             detail = failure.display()
         elif isinstance(failure, OSError):

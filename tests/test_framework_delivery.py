@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import sys
 import tempfile
 import threading
 import unittest
@@ -34,6 +35,19 @@ PACKAGE_FILES = set(assembly.RESOURCE_PATHS)
 
 def markdown_links(text):
     return re.findall(r"\[[^\]]+\]\(([^)]+)\)", text)
+
+
+def worktree_scratch():
+    """Temporary directory inside this worktree, for assembly targets.
+
+    The assembler stages outputs beside its own repository root and installs
+    them with directory renames. Under a file-provider-managed home (such as
+    Desktop & Documents sync) a directory rename across the provider boundary
+    blocks indefinitely, so a fresh assembly target must live in the same tree
+    as the assembler's staging. Other scratch uses here keep the system
+    temporary directory."""
+    repository = Path(__file__).resolve().parents[1]
+    return tempfile.TemporaryDirectory(prefix="vibe-delivery-", dir=repository)
 
 
 class FrameworkDeliveryTests(unittest.TestCase):
@@ -134,7 +148,7 @@ class FrameworkDeliveryTests(unittest.TestCase):
         self.assertEqual(packaged_files, source_files)
         self.assertEqual(packaged_modes, source_modes)
         self.assertEqual(packaged_tree, source_tree)
-        with tempfile.TemporaryDirectory() as directory:
+        with worktree_scratch() as directory:
             temporary = Path(directory)
             conflicting = temporary / "conflicting"
             with self.assertRaisesRegex(assembly.AssemblyError, "conflicts"):
@@ -156,8 +170,10 @@ class FrameworkDeliveryTests(unittest.TestCase):
             {name: identity.get(name) for name in authority},
             authority,
         )
-        self.assertEqual(identity["component"], "programming-loop")
-        self.assertEqual(identity["source"], "programming-loop")
+        self.assertEqual(identity["component"], "ora-programming-loop")
+        self.assertEqual(identity["source"], "ora-programming-loop")
+        self.assertEqual(identity["version"], "1.2.1")
+        self.assertEqual(authority["source_revision"], "2cef0bc0aae82771940cb5615b2b8fc53e5fcc0a")
         self.assertEqual(identity["version"], (source / "VERSION").read_text().strip())
         self.assertEqual(set(identity["files"]), PACKAGE_FILES)
         self.assertTrue(LOOP_FILES < PACKAGE_FILES)
@@ -176,6 +192,28 @@ class FrameworkDeliveryTests(unittest.TestCase):
                 (PACKAGE / "VERSION").read_text().strip(),
             )
 
+        # The assembled copy is a valid vendored source for the bundled Loop
+        # installer exactly as shipped: its own provenance validation accepts
+        # the generated SOURCE.json, digests, and Git tree identity. The
+        # import must not write its bytecode cache: the cache would land in
+        # the very tree under validation, and 1.2.1's package reader refuses
+        # any resource outside its product paths, caches included.
+        previous_bytecode_setting = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
+        try:
+            loop_installer = importlib.util.spec_from_file_location(
+                "vibe_bundled_loop_installer", root / "scripts" / "install.py")
+            bundled_installer = importlib.util.module_from_spec(loop_installer)
+            loop_installer.loader.exec_module(bundled_installer)
+        finally:
+            sys.dont_write_bytecode = previous_bytecode_setting
+        provenance, verified = bundled_installer.package_provenance(root, "1.2.1")
+        self.assertEqual(provenance["source_kind"], "vendored-snapshot")
+        self.assertEqual(provenance["source_revision"], authority["source_revision"])
+        self.assertEqual(provenance["source_tree"], authority["source_tree"])
+        self.assertEqual(set(verified), set(bundled_installer.PRODUCT_PATHS))
+        self.assertEqual(bundled_installer.COMPONENT, "ora-programming-loop")
+
         # The vendored Bridge runtime is exactly its reviewed 19-file import,
         # and the same shared reader tolerates the caches a running runtime
         # generates while still failing unexpected non-cache content.
@@ -183,25 +221,27 @@ class FrameworkDeliveryTests(unittest.TestCase):
         bridge_authority = loop_integrity.bridge_authority_metadata()
         bridge_files, _bridge_modes, bridge_tree = loop_integrity.read_bridge_snapshot(bridge)
         self.assertEqual(bridge_tree, bridge_authority["source_tree"])
-        self.assertEqual(bridge_authority["source_revision"], "f7c5bdb839b7a875e1d70defdb0b7ab93c43ad87")
+        self.assertEqual(bridge_authority["source_revision"], "8d4449424341cc838262dd0aaf453187163ba7b3")
+        self.assertTrue(all(name.startswith("ora_agent_bridge/") or name in {"LICENSE", "NOTICE", "README.md"}
+                            for name in bridge_files))
         with tempfile.TemporaryDirectory() as directory:
             temporary = Path(directory)
             cached = temporary / "agent-bridge"
             shutil.copytree(bridge, cached)
-            (cached / "bridge" / "__pycache__").mkdir(exist_ok=True)
-            (cached / "bridge" / "__pycache__" / "cli.pyc").write_bytes(b"cache")
+            (cached / "ora_agent_bridge" / "__pycache__").mkdir(exist_ok=True)
+            (cached / "ora_agent_bridge" / "__pycache__" / "cli.pyc").write_bytes(b"cache")
             files, modes, tree = loop_integrity.read_bridge_snapshot(cached)
             self.assertEqual((files, modes, tree), (bridge_files, _bridge_modes, bridge_tree))
-            (cached / "bridge" / "unexpected.txt").write_bytes(b"unexpected")
+            (cached / "ora_agent_bridge" / "unexpected.txt").write_bytes(b"unexpected")
             with self.assertRaisesRegex(loop_integrity.LoopIntegrityError, "unexpected files"):
                 loop_integrity.read_bridge_snapshot(cached)
 
         # The vendored Boost runtime is exactly its reviewed 31-file import of
-        # released tag v0.3.0, and its generated counterpart carries the same
+        # released tag v0.5.0, and its generated counterpart carries the same
         # files under a complete five-field provenance record.
         boost = PACKAGE.parents[1] / "components" / "ora-ai-boost"
         boost_authority = loop_integrity.boost_authority_metadata()
-        self.assertEqual(boost_authority["source_revision"], "9a3237fbfd01f9072d1c77279574875a826b2a56")
+        self.assertEqual(boost_authority["source_revision"], "853d9e4b1bd30a1982c33f300c0fdac77df515ce")
         actual_boost = {
             str(path.relative_to(boost))
             for path in boost.rglob("*") if path.is_file() and "__pycache__" not in path.parts
@@ -222,7 +262,7 @@ class FrameworkDeliveryTests(unittest.TestCase):
             boost_authority,
         )
         self.assertEqual(boost_identity["component"], "ora-adversarial-review")
-        self.assertEqual(boost_identity["version"], "0.3.0")
+        self.assertEqual(boost_identity["version"], "0.5.0")
         self.assertEqual(
             {name: hashlib.sha256(data).hexdigest() for name, data in boost_files.items()},
             boost_identity["files"],
@@ -283,11 +323,11 @@ class FrameworkDeliveryTests(unittest.TestCase):
             from ora_vibe_coder import installer
             for name, mutate in (
                 ("divergent-bridge", lambda copied: (
-                    (copied / "bridge" / "peer.py").write_bytes(
-                        (copied / "bridge" / "peer.py").read_bytes() + b"\nmodified byte\n"),)),
+                    (copied / "ora_agent_bridge" / "peer.py").write_bytes(
+                        (copied / "ora_agent_bridge" / "peer.py").read_bytes() + b"\nmodified byte\n"),)),
                 ("cache-only-bridge", lambda copied: (
-                    (copied / "bridge" / "__pycache__").mkdir(exist_ok=True),
-                    (copied / "bridge" / "__pycache__" / "peer.pyc").write_bytes(b"cache"),)),
+                    (copied / "ora_agent_bridge" / "__pycache__").mkdir(exist_ok=True),
+                    (copied / "ora_agent_bridge" / "__pycache__" / "peer.pyc").write_bytes(b"cache"),)),
             ):
                 with self.subTest(bridge_snapshot=name):
                     copied = temporary / name / "components" / "agent-bridge"  # A release layout.
@@ -404,6 +444,43 @@ class FrameworkDeliveryTests(unittest.TestCase):
                         },
                         before,
                     )
+            # The same shared rule governs assembly fingerprints: a
+            # destination that merely ran (generated caches only) still
+            # compares equal to its own reviewed content, while non-cache
+            # content inside __pycache__ changes the fingerprint and cannot
+            # hide from backup and recovery checks.
+            clean = temporary / "descriptor-clean"
+            shutil.copytree(root, clean)
+            ran = temporary / "descriptor-ran"
+            shutil.copytree(root, ran)
+            (ran / "__pycache__").mkdir(exist_ok=True)
+            (ran / "__pycache__/cached.pyc").write_bytes(b"cache")
+            (ran / "stray.pyc").write_bytes(b"cache")
+            self.assertEqual(assembly.snapshot_descriptor(ran), assembly.snapshot_descriptor(clean))
+            planted = temporary / "descriptor-planted"
+            shutil.copytree(root, planted)
+            (planted / "__pycache__").mkdir(exist_ok=True)
+            (planted / "__pycache__/notes.txt").write_bytes(b"notes")
+            self.assertNotEqual(assembly.snapshot_descriptor(planted),
+                                assembly.snapshot_descriptor(clean))
+            # End to end against a destination inside this repository tree —
+            # assembly replaces by directory rename, and a rename across the
+            # Desktop & Documents sync boundary can block indefinitely, so
+            # the target lives where the transaction staging does: a target
+            # that merely ran stays equal to its own replacement, so assembly
+            # commits without displacing it; a planted non-cache file inside
+            # __pycache__ makes the destination differ, so the replacement
+            # runs and the planted file does not survive.
+            with worktree_scratch() as repository:
+                ran_target = Path(repository) / "existing-resources"
+                shutil.copytree(root, ran_target)
+                (ran_target / "__pycache__").mkdir(exist_ok=True)
+                (ran_target / "__pycache__/cached.pyc").write_bytes(b"cache")
+                assembly.assemble(source, target=ran_target)
+                self.assertTrue((ran_target / "__pycache__/cached.pyc").exists())
+                (ran_target / "__pycache__/notes.txt").write_bytes(b"notes")
+                assembly.assemble(source, target=ran_target)
+                self.assertFalse((ran_target / "__pycache__/notes.txt").exists())
             copied_resources = temporary / "handoff-resources"
             shutil.copytree(root, copied_resources)
             (copied_resources / "__pycache__").mkdir()
@@ -782,9 +859,15 @@ class FrameworkDeliveryTests(unittest.TestCase):
                 },
             )
             for host, host_home in SKILL_HOMES.items():
-                installed_loop = home / host_home / "skills/programming-loop"
+                installed_loop = home / host_home / "skills/ora-programming-loop"
+                # The bundled 1.2.1 installer writes the renamed entry and
+                # migrates the old name away; none may remain.
+                self.assertFalse((home / host_home / "skills/programming-loop").exists())
                 installed_identity = json.loads((installed_loop / "SOURCE.json").read_text())
-                self.assertEqual(installed_identity["source"], "programming-loop")
+                self.assertEqual(installed_identity["component"], "ora-programming-loop")
+                self.assertEqual(installed_identity["source"], "ora-programming-loop")
+                self.assertEqual(installed_identity["host"], host)
+                self.assertEqual(installed_identity["version"], "1.2.1")
                 self.assertEqual(installed_identity["source_kind"], "vendored-snapshot")
                 self.assertEqual(
                     installed_identity["public_release_repository"],
@@ -842,6 +925,17 @@ class FrameworkDeliveryTests(unittest.TestCase):
                 with self.assertRaisesRegex(ProjectError, "conflicting provenance"):
                     handoff.loop_resources("programming", "Codex")
 
+            # The renamed component identity the bundled installer requires is
+            # the one handoff accepts: the pre-rename name is refused.
+            shutil.rmtree(copied)
+            shutil.copytree(PACKAGE / "resources/programming-loop", copied)
+            identity = json.loads(identity_path.read_text())
+            identity["component"] = identity["source"] = "programming-loop"
+            identity_path.write_text(json.dumps(identity), encoding="utf-8")
+            with mock.patch.object(handoff, "LOOP", copied):
+                with self.assertRaisesRegex(ProjectError, "conflicting provenance"):
+                    handoff.loop_resources("programming", "Codex")
+
             shutil.rmtree(copied)
             shutil.copytree(PACKAGE / "resources/programming-loop", copied)
             framework = copied / "frameworks/programming-loop.md"
@@ -859,7 +953,7 @@ class FrameworkDeliveryTests(unittest.TestCase):
     def test_one_authority_pin_allows_a_coherent_offline_advance(self):
         source = PACKAGE.parents[1] / "components" / "programming-loop"
         current_authority = loop_integrity.authority_metadata()
-        with tempfile.TemporaryDirectory() as directory:
+        with worktree_scratch() as directory:
             temporary = Path(directory)
             advanced_source = temporary / "advanced-source"
             shutil.copytree(source, advanced_source)

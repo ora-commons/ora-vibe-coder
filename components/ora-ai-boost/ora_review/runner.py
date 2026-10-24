@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Generic, Sequence, TypeVar
@@ -14,7 +15,14 @@ from .models import (
     StageMaterial,
     UserMaterial,
 )
-from .packet import PacketBuilder, extract_answer, parse_verdict
+from .packet import (
+    PacketBuilder,
+    compose_instruction_prefix,
+    extract_answer,
+    load_repository_instructions,
+    parse_verdict,
+    resolve_global_instruction_master,
+)
 from .record import RunRecord
 
 
@@ -26,6 +34,15 @@ class RunRequest:
     breadth: str = "analytical"
     run_root: Path | None = None
     initial_notices: tuple[str, ...] = ()
+    #: Target repository / task-worktree path (launch metadata; ``None``
+    #: for non-repository work).
+    repository_path: Path | None = None
+    #: The assignment's applicable paths inside that repository, supplied
+    #: explicitly — never guessed from prompt text.
+    assigned_paths: tuple[Path | str, ...] = ()
+    #: The original current user message for this turn, forwarded verbatim
+    #: to every packet after the core; never recovered from history.
+    current_turn_instructions: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,15 +106,63 @@ class ReviewRunner:
         self.native = native
         self.native_engine = native.engine
         self.native_model_selector = getattr(native, "model", None)
+        self.native_effort_selector = getattr(native, "effort", None)
         self.peer = peer
         self.packet_builder = packet_builder or PacketBuilder()
         self._peer_active = peer is not None
         self._notices: list[str] = []
         self._transport_incomplete = False
+        self._launch_notices: tuple[str, ...] = ()
+        self._launch_prefix_provenance: str | None = None
         self.latest_user_deliverable_answer: str | None = None
         self.run_path: str | None = None
 
+    @contextmanager
+    def _launch_run_context(self, request: RunRequest):
+        """Load launch instructions once per run: the core from the resolved
+        global instruction master (when one is configured) and the target
+        repository's rules are resolved here and bound as the packet prefix,
+        so every packet this run builds — native, peer, reviser, recovery and
+        the Gear-3 fallback — prepends it. A launch with no configured master
+        proceeds without the core prefix and discloses that. Cleared in
+        ``finally``; a reused runner resolves afresh on its next run."""
+        resolution = resolve_global_instruction_master()
+        self._launch_notices = (resolution.notice,) if resolution.notice else ()
+        self._launch_prefix_provenance = (
+            str(resolution.path) if resolution.path is not None else "none"
+        )
+        repository_instructions = None
+        repository_root = None
+        if request.repository_path is None:
+            if request.assigned_paths:
+                raise OraReviewError(
+                    "Assigned paths require a repository target. Supply "
+                    "RunRequest.repository_path naming the target repository "
+                    "or task worktree, or remove the assigned paths."
+                )
+        else:
+            repository_instructions, root = load_repository_instructions(
+                request.repository_path, request.assigned_paths,
+            )
+            repository_root = str(root)
+        self.packet_builder.bind_instruction_prefix(compose_instruction_prefix(
+            resolution.core_text,
+            current_turn_instructions=request.current_turn_instructions or None,
+            repository_instructions=repository_instructions,
+            repository_root=repository_root,
+        ))
+        try:
+            yield
+        finally:
+            self.packet_builder.bind_instruction_prefix(None)
+            self._launch_notices = ()
+            self._launch_prefix_provenance = None
+
     def run_gear3(self, request: RunRequest) -> RunResult:
+        with self._launch_run_context(request):
+            return self._run_gear3(request)
+
+    def _run_gear3(self, request: RunRequest) -> RunResult:
         self._reset_route(request.initial_notices)
         self._validate_material(request.material)
         self.latest_user_deliverable_answer = request.existing_answer
@@ -109,8 +174,11 @@ class ReviewRunner:
             route="external" if self._peer_active else "internal",
             native_engine=self.native_engine,
             native_model_selector=self.native_model_selector,
+            native_effort_selector=self.native_effort_selector,
             material=request.material,
             instruction_snapshot=snapshot,
+            instruction_prefix=self.packet_builder.instruction_prefix,
+            instruction_prefix_provenance=self._launch_prefix_provenance,
             run_root=request.run_root,
         )
         self.run_path = str(record.path)
@@ -129,6 +197,10 @@ class ReviewRunner:
         )
 
     def run_gear4(self, request: RunRequest) -> RunResult:
+        with self._launch_run_context(request):
+            return self._run_gear4(request)
+
+    def _run_gear4(self, request: RunRequest) -> RunResult:
         self._reset_route(request.initial_notices)
         self._validate_material(request.material)
         self.latest_user_deliverable_answer = None
@@ -154,8 +226,11 @@ class ReviewRunner:
             route="external" if self._peer_active else "internal",
             native_engine=self.native_engine,
             native_model_selector=self.native_model_selector,
+            native_effort_selector=self.native_effort_selector,
             material=request.material,
             instruction_snapshot=snapshot,
+            instruction_prefix=self.packet_builder.instruction_prefix,
+            instruction_prefix_provenance=self._launch_prefix_provenance,
             run_root=request.run_root,
             breadth=request.breadth,
         )
@@ -592,6 +667,10 @@ class ReviewRunner:
                         self._record_native_model_attribution(
                             record, record_title, role
                         )
+                    else:
+                        self._record_peer_model_attribution(
+                            record, record_title, role
+                        )
                 finally:
                     disclosure = getattr(adapter, "last_call_notice", "")
                     if disclosure:
@@ -680,19 +759,53 @@ class ReviewRunner:
         role: str,
     ) -> None:
         effective_model = getattr(self.native, "effective_model", None)
-        if effective_model is None:
+        if effective_model is not None:
+            selector = self.native_model_selector or "not explicitly selected"
+            record.append(
+                f"{record_title} native model attribution",
+                f"Role: `{role}`\n\n"
+                f"Requested native model selector: `{selector}`\n\n"
+                f"Returned effective native model: `{effective_model}`",
+            )
             return
-        selector = self.native_model_selector or "not explicitly selected"
+        reported_model = getattr(self.native, "reported_model", None)
+        reported_effort = getattr(self.native, "reported_effort", None)
+        if reported_model is None and reported_effort is None:
+            return
         record.append(
             f"{record_title} native model attribution",
             f"Role: `{role}`\n\n"
-            f"Requested native model selector: `{selector}`\n\n"
-            f"Returned effective native model: `{effective_model}`",
+            f"Engine: `{self.native_engine}`\n\n"
+            f"Reported model: `{reported_model or 'not reported'}`\n\n"
+            f"Reported reasoning effort: `{reported_effort or 'not reported'}`",
         )
+
+    def _record_peer_model_attribution(
+        self,
+        record: RunRecord,
+        record_title: str,
+        role: str,
+    ) -> None:
+        choices = getattr(self.peer, "last_call_choices", None)
+        if choices is None:
+            return
+        body = (
+            f"Role: `{role}`\n\n"
+            f"Peer engine: `{self.peer.engine}`\n\n"
+        )
+        if choices.model is not None:
+            body += f"Reported model: `{choices.model}`\n\n"
+        if choices.effort is not None:
+            body += f"Reported reasoning effort: `{choices.effort}`\n\n"
+        if choices.requested_model is not None:
+            body += f"Requested model: `{choices.requested_model}`\n\n"
+        if choices.requested_effort is not None:
+            body += f"Requested reasoning effort: `{choices.requested_effort}`\n\n"
+        record.append(f"{record_title} peer model attribution", body.rstrip("\n"))
 
     def _reset_route(self, initial_notices: Sequence[str]) -> None:
         self._peer_active = self.peer is not None
-        self._notices = list(initial_notices)
+        self._notices = [*self._launch_notices, *initial_notices]
         self._transport_incomplete = False
 
     @staticmethod

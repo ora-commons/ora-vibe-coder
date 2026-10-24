@@ -7,6 +7,11 @@ request in an adversarial review pipeline, so the answer you keep has already be
 challenged and corrected: greater reliability and intelligence, with less sycophancy and
 flattery, less hallucination, and less drift away from what you actually asked.
 
+It is one of the Ora products — see Ora at https://ora-ai.app. The sibling products are
+Ora Agent Bridge (https://github.com/ora-commons/ora-agent-bridge), Ora Programming Loop
+(https://github.com/ora-commons/ora-programming-loop), and Ora Vibe Coder
+(https://github.com/ora-commons/ora-vibe-coder).
+
 It is a tool for getting better answers — not a benchmark, and not a promise to eliminate
 errors. Adversarial review catches defects; it does not guarantee correctness.
 
@@ -35,7 +40,7 @@ You need Python 3.10 or later and `git`. Clone the public repository at the rele
 and install into a virtual environment. In a POSIX shell:
 
 ```sh
-git clone --branch v0.3.0 https://github.com/ora-commons/ora-adversarial-review.git
+git clone --branch v0.5.0 https://github.com/ora-commons/ora-adversarial-review.git
 cd ora-adversarial-review
 python3 -m venv .venv
 . .venv/bin/activate
@@ -121,8 +126,12 @@ Gear 3 and Gear 4 name their native engine with `--native`; all six tools are
 selectable for the primary analytical role:
 
 - `codex` is the compatible default. Gear starts a fresh ephemeral read-only
-  `codex exec` call for every native role. This route does not select or report an
-  effective model or effort.
+  `codex exec` call for every native role. `--codex-model` and `--codex-effort`
+  name the model and reasoning effort for every Codex call, passed to
+  `codex exec` as `-m` and one `model_reasoning_effort=` override; with none
+  named, Codex's own default applies. Each run record states the model and
+  reasoning effort Codex reports using, read from the start-up lines of its
+  own output.
 - `claude` is selected with `--native claude`. Gear calls Claude Code directly through
   its ordinary subscription route; Agent Bridge is not involved in native roles. Each
   call is fresh, non-persistent, restricted to no model tools, and run in a temporary
@@ -149,10 +158,17 @@ selector:
 ora-gear-3 --request /absolute/path/request.md --native claude --model fable
 ```
 
-The same selected native adapter and model selector are retained for every native
-producer, reviewer, reviser, lane, consolidation, technical retry, peer-failure
-recovery, and the labelled Gear 4-to-Gear 3 fallback. Gear never changes engine or
-model silently.
+`--codex-model` and `--codex-effort` are valid wherever Codex serves — with
+`--native codex` or `--peer codex` — and reach every Codex call the run makes:
+
+```text
+ora-gear-3 --request /absolute/path/request.md --native codex --codex-model gpt-5.3 --codex-effort high
+```
+
+The same selected native adapter, model selector, and any named Codex model or
+effort are retained for every native producer, reviewer, reviser, lane,
+consolidation, technical retry, peer-failure recovery, and the labelled Gear
+4-to-Gear 3 fallback. Gear never changes engine or model silently.
 
 Every successful Claude call must return one unambiguous effective model in its JSON
 `modelUsage`; a selected Fable alias must match it. Gear records every exact model in
@@ -179,6 +195,27 @@ Gear 3 accepts `--current-answer FILE` for "review this answer." Gear 4 uses ana
 Breadth unless `--breadth committed --commitment FILE` is explicitly selected; the
 commitment file must contain the user's own nonempty words.
 
+### Global instruction master (optional)
+
+Every Gear 3 and Gear 4 packet leads with the universal core rules read from your
+global instruction master — an optional Markdown file you select with the
+`ORA_INSTRUCTION_MASTER` environment variable or provision at the default path
+`~/.config/ora/global-instructions.md`. The file must carry exactly one
+`<!-- ORA-CORE-BEGIN -->` and `<!-- ORA-CORE-END -->` marker pair around a nonempty
+core. A selected or provisioned master that is missing, unreadable, or malformed
+stops the run with an error naming the file. With no master configured at all, the
+run still works: every packet carries the role instructions only, and the notices
+and the run record disclose that. The validator is unchanged and carries no
+instruction prefix.
+
+Three further options carry instructions into every Gear packet.
+`--turn-instructions-file FILE` forwards this turn's original user message verbatim —
+use it when the current message carries instructions for this turn, and omit it when
+it does not. `--repository PATH` names the target repository or task worktree, whose
+complete AGENTS.md, imports expanded, joins every packet; repeatable
+`--assigned-path PATH` adds the narrower AGENTS.md rules covering those paths and
+requires `--repository`.
+
 The validator requires a file, explicit safe root IDs, and a peer. It neither reads
 standard input nor infers roots, and never accepts `--native` or `--model`.
 
@@ -203,10 +240,14 @@ naming that path, and never falls back to another installation such as
 `~/agent-bridge`. With no selection, the documented standalone default
 `~/agent-bridge` is used. Every run reports the Bridge copy actually used, by path
 and version, beside the readiness line. Gear invokes
-`-m bridge` through its own Python, omits `Project:`, and has no Format 1 path.
+`-m ora_agent_bridge` through its own Python, omits `Project:`, and has no Format 1
+path.
 
-Gear surfaces all Bridge readiness and limitation warnings outside the answer, and
-Bridge neither chooses nor reports Gear's native engine or model. Qwen alone may
+Gear surfaces all Bridge readiness and limitation warnings outside the answer.
+Bridge chooses neither engine, model, nor effort itself; when Codex serves as the
+outside reviewer through Bridge, Gear passes the same named Codex model and
+reasoning effort to Bridge's call, and the run record takes the requested and
+recorded values the reply reports. Qwen alone may
 preprocess `@` references or leading `/` commands before model input, so only Bridge's
 packet record is promised for that target.
 
@@ -216,7 +257,9 @@ For Gear 3 and Gear 4, standard output contains only the complete current answer
 bytes. Standard error carries configuration, the selected native engine and model
 selector where applicable, route and readiness, status, notices, the verified final
 Claude model attribution after success, and the run-record path; every successful
-Claude-native role also has its own exact attribution in the record.
+Claude-native role also has its own exact attribution in the record, and every
+successful Codex-native role states the model and reasoning effort Codex reported
+for that call.
 
 Validator failure leaves stdout empty; success contains its trusted wrapper and the
 exact peer decisions. Runs are recorded under
@@ -234,10 +277,12 @@ distinct from the engine named by `--native`.
 ## Tested scope
 
 Ora AI Boost was qualified on macOS (arm64) with Codex as the native engine and ZCode
-as the outside reviewer through Agent Bridge. For this release the outside-reviewer
-route was re-checked against Agent Bridge v1.1.0, the tagged release. The Claude Code
-route is implemented but not live-qualified. Other platforms, engines, and peers are
-not thereby qualified.
+as the outside reviewer through Agent Bridge. This release is checked against Ora
+Agent Bridge 1.5.0 and its `python3 -m ora_agent_bridge` command; the Codex
+model/effort selection and the Bridge reply reporting are exercised with fake
+executables and fake Bridge replies, and no live model call was made for them. The
+Claude Code route is implemented but not live-qualified. Other platforms, engines,
+and peers are not thereby qualified.
 
 ## Contract and licence
 

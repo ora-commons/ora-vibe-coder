@@ -4,10 +4,10 @@
   "files": {
     "LICENSE": "159f6ea1c9b1beb8d9912d937857b7f8b8032af1f71cdb4a07bbd96a201e43af",
     "NOTICE": "245ec460d48ab3060d6f3d727091e4d3c90a39e1072b2d494b59d43e6adecf9d",
-    "README.md": "00354e842536b7c98a08cee434bc99e46ebff00890431fd6ecdd57112589254d",
-    "ora_review/__init__.py": "833f3fb2492994b1e520bd41bc5fd7c112c33e41abcdfa07b191688e62d549cf",
-    "ora_review/adapters.py": "562bcf8f34e31825751c2994a4c2865c4ad9080853e5a73ac244a65e2817b528",
-    "ora_review/cli.py": "f4550438d6fb00267d6e8d368b76a8bf100c957e58f3742beadfd4331dc44b8a",
+    "README.md": "1f94876456aadd5b8066cf4d8766bbb855fb8fcef58f30790931bddcef38767a",
+    "ora_review/__init__.py": "71a5d7e7c86b35972e32b2eb3c39f7f6308e9c6ab27d4a76f2f862259c0045e2",
+    "ora_review/adapters.py": "36dfc2cd55027aa3d5d24b68a2d3755bcecccf621f08ece44006f7dcbe4b5c4e",
+    "ora_review/cli.py": "92340426568aaad90db496dc054e252fd9c57cd6fa0920a159bdeacb8d7d1103",
     "ora_review/errors.py": "ff6d3c3828943d5fbd6902f2538b43b594fba583a9d73cdacf5eb50a204fada5",
     "ora_review/instructions/breadth-analytical.md": "a7129f43601e68e96a77a467e130fcb9b8f9fbe5972106a927bd88773823ee66",
     "ora_review/instructions/breadth-committed.md": "b40df7bbac3a198f4417781c103513db5515f1517f6bb77fe183c6260bccb069",
@@ -29,15 +29,15 @@
     "ora_review/instructions/universal.md": "bac355e8e9989150f4636992ff14f7e2346e2be9fcd655836c0295ad95f9fad2",
     "ora_review/instructions/validator.md": "03700016e0274e13583b1a8850ef9ec3cb0ab4268d6afe994054e8295abab9ed",
     "ora_review/models.py": "0785fc67c86fc1a9a4c8f684450858435402e5d3f813efdef1b9d3f4be11d6aa",
-    "ora_review/packet.py": "49e35e1f546852c2d386a936519bc8875bb61a8e46d18c94201ab39101fb5470",
-    "ora_review/record.py": "740124c93fdf4afb14fbf369f962ce02e926d54a444c5263852626dfcde64777",
-    "ora_review/runner.py": "8f4a8224cc0c5ae78491902605d287259cfab0e4aeb2c6d5229a6727dc476b41",
+    "ora_review/packet.py": "353e19611198b784742bfaa22c7fa20ae715668b513fe63a0091e8f573e41f7e",
+    "ora_review/record.py": "a10ee1ea9be70396a902cc732cc1f9cc7a73677533f2c241427ffd71c0f6dda0",
+    "ora_review/runner.py": "f1bcdd556cdb8c6316880314145c1d39f6127b1b96c9c42b0436bf63d1a778ad",
     "ora_review/validator.py": "d8a04d89c900dbc5e46f05d7509c765d7e2e3e217e613ef430770fc89b4e3f30"
   },
   "public_release_repository": "ora-commons/ora-adversarial-review",
   "source": "ora-adversarial-review",
-  "source_revision": "9a3237fbfd01f9072d1c77279574875a826b2a56",
-  "source_tree": "71d0607944a72de979f4da36c1cdafe05513b9bd",
+  "source_revision": "853d9e4b1bd30a1982c33f300c0fdac77df515ce",
+  "source_tree": "b758f69f261eafc184d819152187aa889a2012f8",
   "vendored_snapshot": "components/ora-ai-boost",
-  "version": "0.3.0"
+  "version": "0.5.0"
 }

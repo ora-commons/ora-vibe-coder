@@ -616,9 +616,9 @@ class LocalBoundary(unittest.TestCase):
             )
         for host in hosts.HOSTS:
             files[f"plugins/ora-vibe-coder/resources/programming-loop/adapters/{host}.md"] = f"# Synthetic {host} operations\n"
-        files["plugins/ora-vibe-coder/resources/programming-loop/VERSION"] = "1.0.0\n"
+        files["plugins/ora-vibe-coder/resources/programming-loop/VERSION"] = "1.2.1\n"
         files["plugins/ora-vibe-coder/resources/programming-loop/scripts/install.py"] = '''
-import argparse, json, shutil
+import argparse, hashlib, json, shutil, sys
 from pathlib import Path
 
 HOSTS = {"codex": ".codex", "claude": ".claude", "zcode": ".zcode", "hermes": ".hermes", "qwen": ".qwen", "minimax": ".minimax"}
@@ -627,13 +627,33 @@ parser.add_argument("action", choices=("install", "remove", "install-check", "re
 parser.add_argument("--host", choices=HOSTS, required=True)
 parser.add_argument("--home", type=Path, required=True)
 args = parser.parse_args()
-skill = args.home / HOSTS[args.host] / "skills/programming-loop"
+skill = args.home / HOSTS[args.host] / "skills/ora-programming-loop"
+if args.action in ("install", "install-check"):
+    # The bundled installer's own guard: it never replaces a newer entry.
+    installed = None
+    if (skill / "SOURCE.json").is_file():
+        try:
+            installed = json.loads((skill / "SOURCE.json").read_text(encoding="utf-8")).get("version")
+        except ValueError:
+            installed = None
+    try:
+        newer = isinstance(installed, str) and tuple(int(part) for part in installed.split(".")) > (1, 2, 1)
+    except ValueError:
+        newer = False
+    if newer:
+        print("Ora Programming Loop: The installed Ora Programming Loop version "
+              + installed + " is newer than the supplied version 1.2.1; the newer "
+              "installation was kept and nothing was changed.", file=sys.stderr)
+        raise SystemExit(1)
 if args.action == "install-check" or args.action == "remove-check":
     raise SystemExit(0)
 if args.action == "install":
     skill.mkdir(parents=True, exist_ok=True)
     (skill / "SKILL.md").write_text("synthetic loop entry")
-    (skill / "SOURCE.json").write_text(json.dumps({"component": "programming-loop", "source": "programming-loop"}))
+    (skill / "SOURCE.json").write_text(json.dumps({
+        "component": "ora-programming-loop", "source": "ora-programming-loop",
+        "version": "1.2.1", "source_kind": "vendored-snapshot",
+        "files": {"SKILL.md": hashlib.sha256(b"synthetic loop entry").hexdigest()}}))
 elif skill.exists():
     shutil.rmtree(skill)
 '''
@@ -3212,7 +3232,7 @@ elif skill.exists():
             directory = ".minimax" if host == "minimax" else f".{host}"
             entry = user / directory / "skills" / "ora-programming"
             self.assertIn(f"adapters/{host}.md", (entry / "SKILL.md").read_text())
-            self.assertTrue((user / directory / "skills/programming-loop/SKILL.md").is_file())
+            self.assertTrue((user / directory / "skills/ora-programming-loop/SKILL.md").is_file())
         self.assertTrue((Path(result["launcher"]) / "Contents/MacOS/Ora Vibe Coder").stat().st_mode & 0o111)
         # The launcher is the common shared app with a sealed, signed interior
         # identity; it embeds no private paths and resolves the launching
@@ -3266,7 +3286,7 @@ elif skill.exists():
 
         old_app = (app / "ora_vibe_coder/server.py").read_bytes()
         old_loops = {
-            host: (user / (".minimax" if host == "minimax" else f".{host}") / "skills/programming-loop/SKILL.md").read_bytes()
+            host: (user / (".minimax" if host == "minimax" else f".{host}") / "skills/ora-programming-loop/SKILL.md").read_bytes()
             for host in selected
         }
         (release / "ora_vibe_coder/server.py").write_text("BOUNDARY = 'replacement application'\n")
@@ -3291,7 +3311,7 @@ elif skill.exists():
         self.assertEqual((app / "ora_vibe_coder/server.py").read_bytes(), old_app)
         for host, expected in old_loops.items():
             directory = ".minimax" if host == "minimax" else f".{host}"
-            self.assertEqual((user / directory / "skills/programming-loop/SKILL.md").read_bytes(), expected)
+            self.assertEqual((user / directory / "skills/ora-programming-loop/SKILL.md").read_bytes(), expected)
 
         install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
 
@@ -3301,7 +3321,7 @@ elif skill.exists():
         selected_roots = (
             app,
             user / ".codex/skills/ora-programming",
-            user / ".codex/skills/programming-loop",
+            user / ".codex/skills/ora-programming-loop",
             user / "Applications/Ora Vibe Coder.app",
         )
         damaged_snapshot = {
@@ -3325,7 +3345,7 @@ elif skill.exists():
         for host in selected:
             directory = ".minimax" if host == "minimax" else f".{host}"
             self.assertTrue((user / directory / "skills/ora-programming/SKILL.md").is_file())
-            self.assertTrue((user / directory / "skills/programming-loop/SKILL.md").is_file())
+            self.assertTrue((user / directory / "skills/ora-programming-loop/SKILL.md").is_file())
         owned.write_bytes(installed_bytes)
 
         loop_removals = 0
@@ -3345,13 +3365,13 @@ elif skill.exists():
         for host in selected:
             directory = ".minimax" if host == "minimax" else f".{host}"
             self.assertTrue((user / directory / "skills/ora-programming/SKILL.md").is_file())
-            self.assertTrue((user / directory / "skills/programming-loop/SKILL.md").is_file())
+            self.assertTrue((user / directory / "skills/ora-programming-loop/SKILL.md").is_file())
 
         removed = remove(source=release, home=user, hosts=selected, platform="darwin", applications=shared)
         self.assertIn(str(unknown), removed["retained"])
         for host in selected:
             directory = ".minimax" if host == "minimax" else f".{host}"
-            self.assertFalse((user / directory / "skills/programming-loop").exists())
+            self.assertFalse((user / directory / "skills/ora-programming-loop").exists())
             self.assertFalse((user / directory / "skills/ora-programming").exists())
         self.assertEqual(unknown.read_text(), "keep me")
         self.assertEqual((project / "Handoff.md").read_text(), "previous recoverable handoff")
@@ -3468,21 +3488,31 @@ elif skill.exists():
         self.assertFalse(list(user.rglob(".ora-vibe-install-*")))
 
         identity.write_text(json.dumps(original, indent=2) + "\n", encoding="utf-8")
-        loop_source = user / ".codex" / "skills" / "programming-loop" / "SOURCE.json"
+
+        # A newer installed bundle-owned Programming Loop entry is never
+        # replaced by this bundle: the bundled Loop installer owns the
+        # never-newer rule now, refuses the replacement itself with its own
+        # message, and setup changes nothing (every installed item is kept
+        # byte-for-byte).
+        loop_source = user / ".codex" / "skills" / "ora-programming-loop" / "SOURCE.json"
         marker = json.loads(loop_source.read_text(encoding="utf-8"))
+        original_marker = dict(marker)
         marker["version"] = "9.9.9"
         loop_source.write_text(json.dumps(marker), encoding="utf-8")
+        loop_guard_before = {str(path): path.read_bytes() for path in user.rglob("*") if path.is_file()}
         with self.assertRaisesRegex(ValueError,
-                                    r"Programming Loop for codex at .*skills/programming-loop records version 9\.9\.9.*Removing Ora Vibe Coder first"):
+                                    r"Programming Loop install-check did not finish for codex"
+                                    r".*version 9\.9\.9 is newer than the supplied version 1\.2\.1"
+                                    r".*newer installation was kept and nothing was changed"):
             install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
-        self.assertEqual(json.loads(identity.read_text(encoding="utf-8")), original)
-        self.assertEqual((app / "ora_vibe_coder/server.py").read_bytes(),
-                         before[str(app / "ora_vibe_coder/server.py")])
+        loop_guard_after = {str(path): path.read_bytes() for path in user.rglob("*") if path.is_file()}
+        self.assertEqual(loop_guard_after, loop_guard_before)
         self.assertFalse(list(user.rglob(".ora-vibe-install-*")))
+        loop_source.write_text(json.dumps(original_marker), encoding="utf-8")
 
-        # Equal versions install normally: the guard blocks only newer copies.
-        marker.pop("version")
-        loop_source.write_text(json.dumps(marker), encoding="utf-8")
+        # Equal versions install normally: the bundled installer's guard
+        # blocks only newer copies, so a same-version reinstall refreshes
+        # the entry.
         install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
 
         # A newer shared Mac launcher alone is refused with truthful guidance:
@@ -3503,45 +3533,157 @@ elif skill.exists():
         self.assertFalse(list(user.rglob(".ora-vibe-install-*")))
         launcher_record.write_text(launcher_original, encoding="utf-8")
 
-        # A renamed shared entry alone (ora-programming-loop, as newer
-        # Programming Loop releases install it; no old-name entry) is
-        # recognized, reported under its own name, and preserved: setup
-        # changes nothing and does not recreate the older pre-rename entry.
+        # A standalone renamed entry naming the public Loop release, at the
+        # bundle's version (1.2.1) and again at a newer version, is preserved
+        # exactly: setup succeeds, leaves that entry byte-identical with its
+        # provenance, creates no old-named entry beside it, and says so; the
+        # Loop installer never runs for that host. Removal afterwards removes
+        # the bundle's own entries and still leaves the standalone entry.
         from ora_vibe_coder import handoff
-        renamed_user = self.home / "renamed loop user"
-        renamed = renamed_user / ".codex" / "skills" / "ora-programming-loop"
-        renamed.mkdir(parents=True)
-        (renamed / "SOURCE.json").write_text(json.dumps(
-            {"component": "programming-loop", "source": "programming-loop", "version": "1.2.1"}),
-            encoding="utf-8")
-        self.assertEqual(handoff.loop_component_facts(renamed_user)["installed"]["codex"],
-                         {"ora-programming-loop": "1.2.1"})
-        with self.assertRaisesRegex(ValueError,
-                                    r"Programming Loop for codex at .*ora-programming-loop records version 1\.2\.1"
-                                    r".*That entry belongs to a newer installation this setup preserves; "
-                                    r"install the Ora Vibe Coder release that bundles that newer Programming Loop\."):
-            install(source=release, home=renamed_user, hosts=("codex",), platform="darwin",
-                    applications=renamed_user / "Applications")
-        self.assertEqual(json.loads((renamed / "SOURCE.json").read_text(encoding="utf-8"))["version"], "1.2.1")
-        self.assertFalse((renamed_user / ".codex/skills/programming-loop").exists())
-        self.assertFalse((renamed_user / ".codex/skills/ora-programming").exists())
-        self.assertFalse(installer.install_location(renamed_user, "darwin").exists())
-        self.assertFalse(list(renamed_user.rglob(".ora-vibe-install-*")))
-        # An equal renamed copy is preserved the same way: installing this
-        # bundle's same-version entry under the older name would duplicate it.
-        (renamed / "SOURCE.json").write_text(json.dumps(
-            {"component": "programming-loop", "source": "programming-loop", "version": "1.0.0"}),
-            encoding="utf-8")
-        self.assertEqual(handoff.loop_component_facts(renamed_user)["installed"]["codex"],
-                         {"ora-programming-loop": "1.0.0"})
-        with self.assertRaisesRegex(ValueError,
-                                    r"ora-programming-loop records version 1\.0\.0"
-                                    r".*That entry belongs to a newer installation this setup preserves; "
-                                    r"install the Ora Vibe Coder release that bundles that newer Programming Loop\."):
-            install(source=release, home=renamed_user, hosts=("codex",), platform="darwin",
-                    applications=renamed_user / "Applications")
-        self.assertFalse((renamed_user / ".codex/skills/programming-loop").exists())
-        self.assertFalse(list(renamed_user.rglob(".ora-vibe-install-*")))
+        standalone_user = self.home / "standalone loop user"
+        standalone = standalone_user / ".codex" / "skills" / "ora-programming-loop"
+        for version in ("1.2.1", "9.9.9"):
+            standalone.mkdir(parents=True, exist_ok=True)
+            (standalone / "SKILL.md").write_text(f"standalone {version} skill body\n")
+            (standalone / "SOURCE.json").write_text(json.dumps({
+                "component": "ora-programming-loop", "source": "ora-programming-loop",
+                "version": version, "source_kind": "public-release",
+                "public_release_repository": "https://github.com/ora-commons/ora-programming-loop",
+                "files": {"SKILL.md": "0" * 64}}), encoding="utf-8")
+            before_standalone = {p.name: p.read_bytes() for p in standalone.rglob("*") if p.is_file()}
+            self.assertEqual(handoff.loop_component_facts(standalone_user)["installed"]["codex"],
+                             {"ora-programming-loop": version})
+            result = install(source=release, home=standalone_user, hosts=("codex",), platform="darwin",
+                             applications=standalone_user / "Applications")
+            self.assertEqual({p.name: p.read_bytes() for p in standalone.rglob("*") if p.is_file()},
+                             before_standalone, version)
+            self.assertFalse((standalone_user / ".codex/skills/programming-loop").exists())
+            self.assertTrue((standalone_user / ".codex/skills/ora-programming/SKILL.md").is_file())
+            self.assertTrue(installer.install_location(standalone_user, "darwin").is_dir())
+            self.assertIn("standalone Ora Programming Loop entry", result["note"])
+            remove(source=release, home=standalone_user, hosts=("codex",), platform="darwin",
+                   applications=standalone_user / "Applications")
+            self.assertEqual({p.name: p.read_bytes() for p in standalone.rglob("*") if p.is_file()},
+                             before_standalone, version)
+            self.assertFalse((standalone_user / ".codex/skills/ora-programming").exists())
+            self.assertFalse(installer.install_location(standalone_user, "darwin").exists())
+            self.assertFalse(list(standalone_user.rglob(".ora-vibe-install-*")))
+
+        # A marker with the right version but the wrong component, source, or
+        # public repository is not a preserved standalone copy: each fails the
+        # provenance requirement, so setup never skips the bundled Loop
+        # installer for that host on its word alone.
+        plugin = release / "plugins" / "ora-vibe-coder"
+        correct_marker = {
+            "component": "ora-programming-loop", "source": "ora-programming-loop",
+            "version": "1.2.1", "source_kind": "public-release",
+            "public_release_repository": "https://github.com/ora-commons/ora-programming-loop",
+            "files": {"SKILL.md": "0" * 64}}
+        for field, wrong in (("component", "programming-loop"),
+                             ("source", "programming-loop"),
+                             ("public_release_repository", "https://github.com/example/other-loop")):
+            with self.subTest(wrong_provenance=field):
+                (standalone / "SOURCE.json").write_text(
+                    json.dumps(dict(correct_marker, **{field: wrong})), encoding="utf-8")
+                self.assertFalse(installer.standalone_loop_preserved(standalone_user, "codex", plugin))
+        # End to end, the wrong-provenance entry is not preserved-and-skipped:
+        # the bundled Loop installer runs for the host and installs through
+        # it, and the setup note claims no preservation.
+        result = install(source=release, home=standalone_user, hosts=("codex",), platform="darwin",
+                         applications=standalone_user / "Applications")
+        self.assertNotIn("standalone Ora Programming Loop entry", result["note"])
+        self.assertEqual((standalone / "SKILL.md").read_text(encoding="utf-8"), "synthetic loop entry")
+        self.assertEqual(json.loads((standalone / "SOURCE.json").read_text(encoding="utf-8"))["source_kind"],
+                         "vendored-snapshot")
+        remove(source=release, home=standalone_user, hosts=("codex",), platform="darwin",
+               applications=standalone_user / "Applications")
+        self.assertFalse((standalone_user / ".codex/skills/ora-programming").exists())
+        self.assertFalse(installer.install_location(standalone_user, "darwin").exists())
+        self.assertFalse(list(standalone_user.rglob(".ora-vibe-install-*")))
+
+    def test_legacy_loop_entry_removal_refuses_symbolic_link_paths(self):
+        # The bundled Loop installer refuses symbolic-link installation paths
+        # for its own removals; Vibe's removal of a pre-rename bundle-installed
+        # entry holds the same rule for the entry folder, its parents, the
+        # removed tree, and the shared reviewer profile, so deletion can never
+        # follow a link to files outside the owned entry.
+        import hashlib
+        from ora_vibe_coder import installer
+        release = self.synthetic_release()
+        profile_body = b"legacy reviewer profile\n"
+
+        def legacy_entry(folder):
+            folder.mkdir(parents=True)
+            (folder / "SKILL.md").write_bytes(b"legacy loop entry\n")
+            (folder / "VERSION").write_bytes(b"1.0.0\n")
+            (folder / "SOURCE.json").write_text(json.dumps({
+                "component": "programming-loop", "source": "programming-loop",
+                "source_kind": "vendored-snapshot", "version": "1.0.0",
+                "files": {"SKILL.md": hashlib.sha256(b"legacy loop entry\n").hexdigest(),
+                          "VERSION": hashlib.sha256(b"1.0.0\n").hexdigest()},
+                "reviewer_sha256": hashlib.sha256(profile_body).hexdigest(),
+            }), encoding="utf-8")
+
+        def reviewer_profile(agents_folder):
+            agents_folder.mkdir(parents=True)
+            (agents_folder / installer.LOOP_PROFILE).write_bytes(profile_body)
+
+        # A linked entry folder: the real entry lives elsewhere and the old
+        # entry path is a link to it.
+        linked_folder_user = self.home / "linked legacy folder user"
+        real_entry = linked_folder_user / "entry storage"
+        legacy_entry(real_entry)
+        reviewer_profile(linked_folder_user / ".codex" / "agents")
+        skills = linked_folder_user / ".codex" / "skills"
+        skills.mkdir(parents=True)
+        os.symlink(real_entry, skills / "programming-loop")
+        with self.assertRaisesRegex(ValueError, "symbolic link"):
+            remove(source=release, home=linked_folder_user, hosts=("codex",),
+                   platform="darwin", applications=linked_folder_user / "Applications")
+        self.assertEqual((real_entry / "SKILL.md").read_bytes(), b"legacy loop entry\n")
+        self.assertTrue((skills / "programming-loop").is_symlink())
+
+        # A linked parent folder above the entry.
+        linked_parent_user = self.home / "linked legacy parent user"
+        skills_storage = linked_parent_user / "skills storage"
+        legacy_entry(skills_storage / "programming-loop")
+        reviewer_profile(linked_parent_user / ".codex" / "agents")
+        (linked_parent_user / ".codex").mkdir(parents=True, exist_ok=True)
+        os.symlink(skills_storage, linked_parent_user / ".codex" / "skills")
+        with self.assertRaisesRegex(ValueError, "symbolic link"):
+            remove(source=release, home=linked_parent_user, hosts=("codex",),
+                   platform="darwin", applications=linked_parent_user / "Applications")
+        self.assertTrue((skills_storage / "programming-loop" / "SOURCE.json").is_file())
+
+        # A symlink inside the removed tree, added beside the owned files.
+        outside = self.home / "outside the linked tree"
+        outside.mkdir()
+        (outside / "personal.txt").write_text("outside content")
+        linked_inside_user = self.home / "linked legacy inside user"
+        legacy_entry(linked_inside_user / ".codex" / "skills" / "programming-loop")
+        reviewer_profile(linked_inside_user / ".codex" / "agents")
+        os.symlink(outside / "personal.txt",
+                   linked_inside_user / ".codex" / "skills" / "programming-loop" / "added link.md")
+        with self.assertRaisesRegex(ValueError, "symbolic link"):
+            remove(source=release, home=linked_inside_user, hosts=("codex",),
+                   platform="darwin", applications=linked_inside_user / "Applications")
+        self.assertTrue(
+            (linked_inside_user / ".codex" / "skills" / "programming-loop" / "SKILL.md").is_file())
+        self.assertEqual((outside / "personal.txt").read_text(), "outside content")
+
+        # The reviewer-profile path behind a linked agents folder: the entry
+        # itself is plain, but the profile deletion would traverse a link.
+        linked_profile_user = self.home / "linked legacy profile user"
+        legacy_entry(linked_profile_user / ".codex" / "skills" / "programming-loop")
+        agents_storage = linked_profile_user / "agents storage"
+        reviewer_profile(agents_storage)
+        os.symlink(agents_storage, linked_profile_user / ".codex" / "agents")
+        with self.assertRaisesRegex(ValueError, "symbolic link"):
+            remove(source=release, home=linked_profile_user, hosts=("codex",),
+                   platform="darwin", applications=linked_profile_user / "Applications")
+        self.assertTrue((linked_profile_user / ".codex" / "skills" / "programming-loop"
+                         / "SOURCE.json").is_file())
+        self.assertEqual((agents_storage / installer.LOOP_PROFILE).read_bytes(), profile_body)
 
     def test_common_launcher_and_desktop_link_are_maintained_and_removal_reports_shared_items(self):
         from ora_vibe_coder import installer
@@ -3636,7 +3778,7 @@ elif skill.exists():
         boost = Path(result["boost"])
         # The installed entries bind to the Bridge bundled beside them, and
         # that bundled Bridge copy is exactly where they point.
-        self.assertTrue((boost.parent / "agent-bridge" / "bridge" / "__main__.py").is_file())
+        self.assertTrue((boost.parent / "agent-bridge" / "ora_agent_bridge" / "__main__.py").is_file())
         for name in installer.BOOST_ENTRIES:
             wrapper = boost / name
             self.assertTrue(wrapper.stat().st_mode & 0o111, name)
@@ -3653,7 +3795,7 @@ elif skill.exists():
         self.assertEqual(completed.returncode, 0, completed.stderr)
         facts = json.loads(completed.stdout)
         self.assertEqual(facts["component"], "ora-adversarial-review")
-        self.assertEqual(facts["version"], "0.3.0")
+        self.assertEqual(facts["version"], "0.5.0")
         self.assertEqual(sorted(facts["analytical_roles"]), ["peer", "primary"])
         # An installed entry answers its own command surface offline; no
         # network, pip, or model call is involved in running --help.
@@ -3661,6 +3803,21 @@ elif skill.exists():
                                 capture_output=True, text=True, timeout=120)
         self.assertEqual(helped.returncode, 0, helped.stderr)
         self.assertIn("ora-gear-3", helped.stdout)
+        # The bundled Gear accepts this turn's exact user words: the option is
+        # part of the bundled command surface. A blank turn-instructions file
+        # proves acceptance offline and safely — the bundled engine recognizes
+        # the option, reads its file, and refuses before any engine is built,
+        # while a bundle regressed to an engine without the option fails to
+        # parse instead ("unrecognized arguments", exit code 2).
+        self.assertIn("--turn-instructions-file", helped.stdout)
+        blank = self.home / "blank turn instructions.md"
+        blank.write_text("   \n", encoding="utf-8")
+        refused = subprocess.run(
+            [sys.executable, str(boost / "ora-gear-3"),
+             "--turn-instructions-file", str(blank)],
+            capture_output=True, text=True, timeout=120)
+        self.assertEqual(refused.returncode, 1, refused.stderr)
+        self.assertIn("The turn-instructions file contains no user words.", refused.stderr)
 
     def test_fixed_vector_continuations_preserve_exact_saved_markdown(self):
         projects = self.home / "projects"

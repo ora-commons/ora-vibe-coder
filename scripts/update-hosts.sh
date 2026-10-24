@@ -2,7 +2,11 @@
 # Update every installed Ora host from this repository's current state.
 #   Vibe bodies : every host through the shared installer; claude via its own
 #                 plugin CLI
-#   Loop        : managed loop installer per installed host
+#   Loop        : managed loop installer per installed host, except a tool
+#                 whose standalone ora-programming-loop entry (public-release
+#                 provenance naming the public Loop repository) is already at
+#                 the bundled version or newer — that entry is preserved
+#                 untouched
 # Usage: scripts/update-hosts.sh [installer-hosts...]   (default: codex zcode minimax hermes qwen)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -17,18 +21,54 @@ PY
 echo "== Claude plugin (Claude Code updates only through its own CLI) =="
 claude plugin update ora-vibe-coder
 
-LOOP=plugins/ora-vibe-coder/resources/programming-loop/scripts/install.py
 echo "== Programming Loop -> installed hosts =="
-for h in zcode codex claude minimax hermes qwen; do
-  python3 "$LOOP" install --host "$h"
-done
+python3 - <<'PY'
+import subprocess, sys
+from pathlib import Path
+from ora_vibe_coder.installer import (bundled_loop_version, release_version,
+                                      standalone_loop_release)
+plugin = Path("plugins/ora-vibe-coder")
+loop = plugin / "resources/programming-loop"
+bundled = bundled_loop_version(plugin)
+for host in ("zcode", "codex", "claude", "minimax", "hermes", "qwen"):
+    marker = standalone_loop_release(Path.home(), host)
+    found = release_version(marker.get("version")) if marker else None
+    if marker and found and bundled and found >= bundled:
+        print(f"keep standalone loop @ {host} ({marker.get('version')})")
+        continue
+    subprocess.run([sys.executable, str(loop / "scripts" / "install.py"), "install", "--host", host],
+                   check=True)
+PY
 
 echo "== Verify loop installations =="
-for h in zcode codex claude minimax hermes qwen; do
-  if python3 "$LOOP" status --host "$h" 2>/dev/null | grep -q '"mismatches": \[\]'; then
-    echo "OK   loop @ $h"
-  else
-    echo "CHECK loop @ $h"
-  fi
-done
+# The install step's standalone-preservation predicate decides here too: a
+# qualifying standalone entry counts as current and preserved even when its
+# recorded digests differ (personal edits are the point of preservation).
+# Everything else — bundle-installed entries included — keeps the digest
+# integrity check.
+python3 - <<'PY'
+import json, subprocess, sys
+from pathlib import Path
+from ora_vibe_coder.installer import (bundled_loop_version, release_version,
+                                      standalone_loop_release)
+plugin = Path("plugins/ora-vibe-coder")
+status = plugin / "resources/programming-loop/scripts/install.py"
+bundled = bundled_loop_version(plugin)
+for host in ("zcode", "codex", "claude", "minimax", "hermes", "qwen"):
+    marker = standalone_loop_release(Path.home(), host)
+    found = release_version(marker.get("version")) if marker else None
+    if marker and found and bundled and found >= bundled:
+        print(f"OK   loop @ {host} (preserved standalone {marker.get('version')})")
+        continue
+    result = subprocess.run([sys.executable, str(status), "status", "--host", host],
+                            capture_output=True, text=True)
+    try:
+        current = json.loads(result.stdout)
+    except ValueError:
+        current = None
+    if isinstance(current, dict) and current.get("mismatches") == []:
+        print(f"OK   loop @ {host}")
+    else:
+        print(f"CHECK loop @ {host}")
+PY
 echo "Done. Restart each host (and Claude Code) to load refreshed skills."

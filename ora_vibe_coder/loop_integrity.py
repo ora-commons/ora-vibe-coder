@@ -11,8 +11,8 @@ import re
 AUTHORITY = {
     "authoritative_repository": "Golfplan18/ora-programming-loop",
     "public_release_repository": "ora-commons/ora-programming-loop",
-    "source_revision": "3989d8d448e8eb03de486f4caf325cc3b62692a3",
-    "source_tree": "87645dc13e8cc929ba4350957e81246c1f9de2b1",
+    "source_revision": "2cef0bc0aae82771940cb5615b2b8fc53e5fcc0a",
+    "source_tree": "533370ef3d65d56db308ac9de0898ce067f406fa",
     "vendored_snapshot": "components/programming-loop",
 }
 
@@ -38,8 +38,8 @@ VENDORED_PATHS = (
 BRIDGE_AUTHORITY = {
     "authoritative_repository": "ora-commons/agent-bridge",
     "public_release_repository": "ora-commons/agent-bridge",
-    "source_revision": "f7c5bdb839b7a875e1d70defdb0b7ab93c43ad87",
-    "source_tree": "41a4252747ab39f5bef797a2ebe6271475f2738a",
+    "source_revision": "8d4449424341cc838262dd0aaf453187163ba7b3",
+    "source_tree": "0510c28e12eb029693150b64c2bae1dd32be1e40",
     "vendored_snapshot": "components/agent-bridge",
 }
 
@@ -47,22 +47,22 @@ BRIDGE_PATHS = (
     "LICENSE",
     "NOTICE",
     "README.md",
-    "bridge/__init__.py",
-    "bridge/__main__.py",
-    "bridge/claude.py",
-    "bridge/cli.py",
-    "bridge/codex.py",
-    "bridge/connectors.py",
-    "bridge/errors.py",
-    "bridge/hermes.py",
-    "bridge/locking.py",
-    "bridge/minimax.py",
-    "bridge/peer.py",
-    "bridge/qwen.py",
-    "bridge/record.py",
-    "bridge/runner.py",
-    "bridge/session.py",
-    "bridge/zcode.py",
+    "ora_agent_bridge/__init__.py",
+    "ora_agent_bridge/__main__.py",
+    "ora_agent_bridge/claude.py",
+    "ora_agent_bridge/cli.py",
+    "ora_agent_bridge/codex.py",
+    "ora_agent_bridge/connectors.py",
+    "ora_agent_bridge/errors.py",
+    "ora_agent_bridge/hermes.py",
+    "ora_agent_bridge/locking.py",
+    "ora_agent_bridge/minimax.py",
+    "ora_agent_bridge/peer.py",
+    "ora_agent_bridge/qwen.py",
+    "ora_agent_bridge/record.py",
+    "ora_agent_bridge/runner.py",
+    "ora_agent_bridge/session.py",
+    "ora_agent_bridge/zcode.py",
 )
 
 # This is the single maintainer update point for a reviewed Boost runtime
@@ -70,8 +70,8 @@ BRIDGE_PATHS = (
 BOOST_AUTHORITY = {
     "authoritative_repository": "ora-commons/ora-adversarial-review",
     "public_release_repository": "ora-commons/ora-adversarial-review",
-    "source_revision": "9a3237fbfd01f9072d1c77279574875a826b2a56",
-    "source_tree": "71d0607944a72de979f4da36c1cdafe05513b9bd",
+    "source_revision": "853d9e4b1bd30a1982c33f300c0fdac77df515ce",
+    "source_tree": "b758f69f261eafc184d819152187aa889a2012f8",
     "vendored_snapshot": "components/ora-ai-boost",
 }
 
@@ -171,6 +171,20 @@ def _tree_id(files: dict[str, bytes], modes: dict[str, str]) -> str:
     return hash_tree(root).hex()
 
 
+def cache_artifact(relative: PurePosixPath, *, directory: bool) -> bool:
+    """The one shared generated-cache rule for readers and fingerprints.
+
+    `.pyc` files wherever they appear, and directories named `__pycache__` at
+    any depth, are generated caches a vendored runtime creates the moment it
+    runs: exact-file readers skip them, and assembly fingerprints skip them,
+    so a tree that merely ran still compares equal to its own reviewed
+    content. Anything else — including any non-`.pyc` file inside
+    `__pycache__` — is real content: readers reject it and fingerprints hash
+    it, so nothing can hide inside a cache directory.
+    """
+    return relative.name == "__pycache__" if directory else relative.suffix == ".pyc"
+
+
 def read_snapshot(root: Path, *, allowed_extra: set[str] | None = None
                   ) -> tuple[dict[str, bytes], dict[str, str], str]:
     """Read the exact 17 Loop files: their bytes, Git modes, and tree ID."""
@@ -212,15 +226,16 @@ def _read_exact_snapshot(root: Path, vendored_paths: tuple[str, ...],
             raise LoopIntegrityError(f"{component} snapshot contains a symbolic link: {relative}")
         # Generated Python caches are not shipped source: a vendored runtime
         # creates __pycache__ directories (and .pyc files) the moment it runs,
-        # so both are excluded from the exact-file check. Anything else inside
-        # a cache directory is unexpected content and still fails.
+        # so both are excluded from the exact-file check by the shared rule in
+        # cache_artifact. Anything else inside a cache directory is unexpected
+        # content and still fails.
         if item.is_dir():
-            if item.name != "__pycache__":
+            if not cache_artifact(relative, directory=True):
                 actual_directories.add(relative.as_posix())
             continue
         if not item.is_file():
             raise LoopIntegrityError(f"{component} snapshot contains a special file: {relative}")
-        if item.suffix == ".pyc":
+        if cache_artifact(relative, directory=False):
             continue
         if "__pycache__" in relative.parts:
             raise LoopIntegrityError(

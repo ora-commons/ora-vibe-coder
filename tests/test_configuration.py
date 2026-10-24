@@ -121,9 +121,9 @@ for line in sys.stdin:
                 # choices belong to the app's conditional instruction section.
                 from tests.test_conversation import FAKE_BRIDGE, no_change_block
                 bridge = root / "bridge-home"
-                (bridge / "bridge").mkdir(parents=True)
-                (bridge / "bridge" / "__init__.py").write_text("")
-                (bridge / "bridge" / "__main__.py").write_text(FAKE_BRIDGE.replace(
+                (bridge / "ora_agent_bridge").mkdir(parents=True)
+                (bridge / "ora_agent_bridge" / "__init__.py").write_text("")
+                (bridge / "ora_agent_bridge" / "__main__.py").write_text(FAKE_BRIDGE.replace(
                     "body = sys.stdin.read()", "body = sys.stdin.buffer.read().decode('utf-8')"))
                 reply = root / "reply.md"
                 reply.write_text("The function explains the sample.\n" + no_change_block())

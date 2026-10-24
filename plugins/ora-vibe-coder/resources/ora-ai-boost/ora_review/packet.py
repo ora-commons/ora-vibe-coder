@@ -3,17 +3,295 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import subprocess
 import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from importlib.resources import files
+from pathlib import Path
 
 from .errors import MalformedResponse, OraReviewError
 from .models import AnswerBoundary, StageMaterial, UserMaterial
 
 
 TokenFactory = Callable[[], str]
+
+#: Environment variable that names the global instruction master explicitly.
+ORA_INSTRUCTION_MASTER_ENV = "ORA_INSTRUCTION_MASTER"
+#: The default master location, relative to the user's home directory.
+DEFAULT_MASTER_PATH = Path(".config") / "ora" / "global-instructions.md"
+#: The notice a run emits when no global instruction master is configured.
+NO_MASTER_NOTICE = (
+    "No global instruction master configured (set ORA_INSTRUCTION_MASTER or "
+    "provision ~/.config/ora/global-instructions.md); packets carry role "
+    "instructions only."
+)
+CORE_BEGIN_MARKER = "<!-- ORA-CORE-BEGIN -->"
+CORE_END_MARKER = "<!-- ORA-CORE-END -->"
+CORE_RULES_HEADING = "## CORE RULES — UNIVERSAL"
+CURRENT_TURN_HEADING = "## CURRENT USER INSTRUCTIONS — THIS TURN (VERBATIM)"
+CURRENT_TURN_END_HEADING = "## END CURRENT USER INSTRUCTIONS"
+REPOSITORY_HEADING = "## REPOSITORY INSTRUCTIONS"
+
+
+def read_core_from_global_master(path: Path | str) -> str:
+    """Return the marked core from a global instruction master, read per
+    launch.
+
+    Raises ``OraReviewError`` when it is missing, unreadable, invalid
+    UTF-8, or has no exactly-once complete marker pair, so a launch meant
+    to carry the core refuses to run without it.
+    """
+    master = Path(path).expanduser()
+    try:
+        text = master.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise OraReviewError(
+            f"Cannot read the global instructions master at `{master}`: {exc}. "
+            "See the README's `Global instruction master (optional)` section "
+            "for the accepted file shape and how to select one."
+        ) from exc
+    begins, ends = text.count(CORE_BEGIN_MARKER), text.count(CORE_END_MARKER)
+    core = (
+        text[text.index(CORE_BEGIN_MARKER) + len(CORE_BEGIN_MARKER):
+             text.index(CORE_END_MARKER)]
+        if begins == 1 and ends == 1 else ""
+    ).strip("\n")
+    if not core.strip():
+        raise OraReviewError(
+            f"The global instructions master at `{master}` has no exactly-once "
+            f"nonempty core marker pair ({begins} begin / {ends} end). See the "
+            "README's `Global instruction master (optional)` section for the "
+            "accepted file shape."
+        )
+    return core
+
+
+@dataclass(frozen=True)
+class GlobalMasterResolution:
+    """One launch's global instruction master resolution.
+
+    ``path`` and ``core_text`` are ``None`` when no master is configured;
+    ``notice`` is the disclosure for that case and ``None`` otherwise.
+    """
+
+    path: Path | None
+    core_text: str | None
+    notice: str | None
+
+
+def resolve_global_instruction_master() -> GlobalMasterResolution:
+    """Resolve the global instruction master for this launch.
+
+    The chain: (1) ``ORA_INSTRUCTION_MASTER`` names the master file
+    explicitly (``expanduser`` applied) — a selected master that is missing,
+    unreadable, invalid UTF-8, or lacks the exactly-once nonempty core
+    marker pair is a hard ``OraReviewError`` naming the path; (2) otherwise
+    any directory entry at ``~/.config/ora/global-instructions.md`` counts
+    as provisioned — a regular file there gets the same validation and the
+    same hard error, while a non-regular entry (a directory or a dangling
+    symlink) is a hard ``OraReviewError`` naming the path, and so is a
+    lookup that cannot be performed (a parent directory that cannot be
+    searched), because a failed probe must not masquerade as absence; (3)
+    only a genuinely absent path — including a parent that is a regular
+    file, so nothing can be provisioned there — means no master is
+    configured: the launch proceeds without the core and discloses that
+    through ``notice``. Fail-open applies only to the unconfigured case; a
+    selected or provisioned master that is broken fails closed.
+    """
+    selected = os.environ.get(ORA_INSTRUCTION_MASTER_ENV, "").strip()
+    if selected:
+        master = Path(selected).expanduser()
+        return GlobalMasterResolution(
+            master, read_core_from_global_master(master), None
+        )
+    default = Path.home() / DEFAULT_MASTER_PATH
+    try:
+        default.lstat()
+    except (FileNotFoundError, NotADirectoryError):
+        # Genuine absence: no entry — or no possible entry, when a parent
+        # is a regular file — means the unconfigured fail-open case.
+        return GlobalMasterResolution(None, None, NO_MASTER_NOTICE)
+    except OSError as exc:
+        # The lookup itself failed (a parent directory cannot be searched,
+        # for example). That is inaccessibility, not absence: an explicit
+        # probe keeps it from being mistaken for no configuration.
+        raise OraReviewError(
+            f"Cannot determine whether the global instructions master at "
+            f"`{default}` is provisioned: {exc}. See the README's "
+            "`Global instruction master (optional)` section for the "
+            "accepted file shape and how to select one."
+        ) from exc
+    if not default.is_file():
+        raise OraReviewError(
+            f"The global instructions master at `{default}` exists but "
+            "is not a regular file, so it cannot provide the core. See "
+            "the README's `Global instruction master (optional)` "
+            "section for the accepted file shape and how to select one."
+        )
+    return GlobalMasterResolution(
+        default, read_core_from_global_master(default), None
+    )
+
+
+def _expand_instruction_imports(
+    text: str, base: Path, seen: frozenset[Path] = frozenset()
+) -> str:
+    """Expand ``@path`` import lines (relative to the file's directory);
+    an import chain that revisits a file on its own chain refuses."""
+
+    lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not (stripped.startswith("@") and len(stripped) > 1):
+            lines.append(line)
+            continue
+        target = (base / stripped[1:]).resolve()
+        if target in seen:
+            raise OraReviewError(
+                f"Instruction imports under `{base}` form a cycle at "
+                f"`{stripped[1:]}`."
+            )
+        try:
+            imported = target.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise OraReviewError(
+                f"Cannot read instruction import `{stripped[1:]}` under "
+                f"`{base}`: {exc}"
+            ) from exc
+        lines.append(f"[IMPORTED INSTRUCTIONS — {stripped[1:]}]")
+        lines.append(
+            _expand_instruction_imports(imported, target.parent, seen | {target})
+        )
+    return "\n".join(lines)
+
+
+def resolve_assigned_paths(
+    given: Sequence[Path | str], repository_root: Path
+) -> tuple[Path, ...]:
+    """The single pre-launch validation, reached from the loader: relative
+    values resolve against the repository root, absolute values are kept,
+    and a blank, missing, unreadable, or outside-the-repository path
+    refuses the launch before any model call."""
+    resolved: list[Path] = []
+    for value in given:
+        if not str(value).strip():
+            raise OraReviewError("An assigned-path value is empty.")
+        supplied = Path(value).expanduser()
+        target = supplied if supplied.is_absolute() else repository_root / supplied
+        target = target.resolve()
+        if not target.exists() or not os.access(target, os.R_OK):
+            raise OraReviewError(
+                f"The assigned path `{value}` at `{target}` is missing or "
+                "not readable."
+            )
+        if target == repository_root or repository_root not in target.parents:
+            raise OraReviewError(
+                f"The assigned path `{value}` at `{target}` does not lie "
+                f"inside the repository target `{repository_root}`."
+            )
+        resolved.append(target)
+    return tuple(resolved)
+
+
+def _read_instructions_file(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise OraReviewError(
+            f"Cannot read the repository instructions at `{path}`: {exc}"
+        ) from exc
+
+
+def load_repository_instructions(
+    repository: str | Path,
+    assigned_paths: Sequence[Path | str] = (),
+) -> tuple[str | None, Path]:
+    """Resolve the target repository/worktree (Git worktree-aware) and read
+    its complete ``AGENTS.md`` with imports expanded; assigned paths add
+    their narrower rule files. A missing, unreadable, or untraversable root
+    refuses. Returns ``(instructions_or_None, root)``."""
+    given = Path(repository).expanduser()
+    if not given.is_dir():
+        raise OraReviewError(
+            f"The repository target `{given}` is missing or unreadable."
+        )
+    root = given.resolve()
+    try:
+        top = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=30, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        top = ""
+    if top:
+        root = Path(top).resolve()
+    if not (os.access(root, os.R_OK) and os.access(root, os.X_OK)):
+        raise OraReviewError(
+            f"The repository target `{root}` is not readable or traversable."
+        )
+    assigned = resolve_assigned_paths(assigned_paths, root)
+    parts: list[str] = []
+    agents = root / "AGENTS.md"
+    if agents.is_file():
+        parts.append(_expand_instruction_imports(
+            _read_instructions_file(agents), root).strip("\n"))
+    for nested in sorted(_assigned_path_rule_files(root, assigned)):
+        scope = nested.parent.relative_to(root).as_posix()
+        parts.append(
+            f"### NARROWER RULES — {nested.relative_to(root).as_posix()}\n\n"
+            f"Applies to work beneath `{scope}`.\n\n"
+            + _expand_instruction_imports(
+                _read_instructions_file(nested), nested.parent).strip("\n")
+        )
+    if not parts:
+        return None, root
+    return "\n\n".join(parts), root
+
+
+def _assigned_path_rule_files(root: Path, assigned: Sequence[Path]) -> list[Path]:
+    """Narrower ``AGENTS.md`` files on each assigned path's ancestor chain,
+    deduplicated and sorted so packet text is stable; the paths arrive
+    already resolved and validated inside ``root``."""
+
+    found: set[Path] = set()
+    for target in assigned:
+        directory = target if target.is_dir() else target.parent
+        while directory != root and root in directory.parents:
+            candidate = directory / "AGENTS.md"
+            if candidate.is_file():
+                found.add(candidate)
+            directory = directory.parent
+    return sorted(found)
+
+
+def compose_instruction_prefix(
+    core_text: str | None = None,
+    *,
+    current_turn_instructions: str | None = None,
+    repository_instructions: str | None = None,
+    repository_root: str | None = None,
+) -> str:
+    """Compose the per-run packet prefix: the core first when a global
+    instruction master resolved one, then this turn's current user
+    instructions (verbatim), then the repository's rules. With no master and
+    neither option supplied the result is empty and binds as ``None``."""
+    blocks = []
+    if core_text and core_text.strip():
+        blocks.append(CORE_RULES_HEADING + "\n\n" + core_text.rstrip("\n"))
+    if current_turn_instructions and current_turn_instructions.strip():
+        # The turn body is forwarded verbatim — no stripping or
+        # normalization of the value.
+        blocks.append("\n\n".join((
+            CURRENT_TURN_HEADING, current_turn_instructions,
+            CURRENT_TURN_END_HEADING)))
+    if repository_instructions and repository_instructions.strip():
+        root_label = f" — {repository_root}" if repository_root else ""
+        blocks.append(f"{REPOSITORY_HEADING}{root_label}\n\n"
+                      + repository_instructions.strip("\n"))
+    return "\n\n".join(blocks)
 
 
 def sha256_text(body: str) -> str:
@@ -63,6 +341,16 @@ class PacketBuilder:
         self.instructions = instructions or InstructionStore()
         self._token_factory = token_factory or (lambda: uuid.uuid4().hex)
         self._instruction_snapshot: dict[str, str] | None = None
+        self.instruction_prefix: str | None = None
+
+    def bind_instruction_prefix(self, prefix: str | None) -> None:
+        """Bind the resolved instruction prefix for one run.
+
+        The run context resolves the prefix once — core first, this turn's
+        current user instructions second, repository rules next — and every
+        packet this run builds prepends it; ``None`` clears it.
+        """
+        self.instruction_prefix = prefix.strip() if prefix and prefix.strip() else None
 
     def snapshot_instructions(self, names: Iterable[str]) -> tuple[StageMaterial, ...]:
         """Refresh once per run; packets and RUN.md use the same exact text."""
@@ -148,6 +436,8 @@ class PacketBuilder:
         ]
         if material.commitment is not None:
             bodies.append(material.commitment)
+        if self.instruction_prefix:
+            bodies.append(self.instruction_prefix)
 
         user_blocks: list[str] = []
         user_blocks.append(
@@ -199,8 +489,13 @@ class PacketBuilder:
             stage_blocks = "No stage material is supplied for this call."
 
         rendered_user_blocks = "\n\n".join(user_blocks)
+        # The bound per-run prefix leads the controlling instructions when
+        # one is bound; packets built outside a run context keep today's
+        # shape exactly.
+        prefix = f"{self.instruction_prefix}\n\n" if self.instruction_prefix else ""
         return (
             "# CONTROLLING ORA INSTRUCTIONS\n\n"
+            f"{prefix}"
             "## UNIVERSAL LAWS\n\n"
             f"{universal}\n\n"
             "## ROLE FOR THIS CALL\n\n"

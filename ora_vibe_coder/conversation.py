@@ -148,8 +148,8 @@ def bridge_root():
     else:
         application = Path(__file__).resolve().parents[1]
         root = next((candidate for candidate in _bridge_candidates(application)
-                     if (candidate / "bridge" / "__main__.py").is_file()), None)
-    if root is None or not (root / "bridge" / "__main__.py").is_file():
+                     if (candidate / "ora_agent_bridge" / "__main__.py").is_file()), None)
+    if root is None or not (root / "ora_agent_bridge" / "__main__.py").is_file():
         raise ProjectError("The Agent Bridge runtime was not found. Reinstall Vibe from a complete release; no conversation turn was started.")
     return root
 
@@ -228,7 +228,7 @@ def bridge_component_facts():
                 "remedy": "Reinstall Ora Vibe Coder from a complete release, then Recheck."}
     version = None
     try:
-        match = re.search(r'^VERSION\s*=\s*"([^"]+)"', (root / "bridge" / "__init__.py").read_text(encoding="utf-8"), re.M)
+        match = re.search(r'^VERSION\s*=\s*"([^"]+)"', (root / "ora_agent_bridge" / "__init__.py").read_text(encoding="utf-8"), re.M)
         version = match[1] if match else None
     except (OSError, UnicodeDecodeError):
         pass
@@ -361,7 +361,7 @@ def bridge_call(arguments, body, handle=None, interruptible=True):
     """One local record command; explicit Stop can cancel owned preparation."""
     if handle is not None and interruptible and handle.is_cancelled():
         raise TurnInterrupted(INTERRUPTED_REASON)
-    process = subprocess.Popen([sys.executable, "-m", "bridge", *arguments], cwd=str(bridge_root()),
+    process = subprocess.Popen([sys.executable, "-m", "ora_agent_bridge", *arguments], cwd=str(bridge_root()),
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                text=True, encoding="utf-8", shell=False, start_new_session=os.name != "nt")
     if handle is not None:
@@ -391,7 +391,7 @@ def bridge_check(tool, stop_requested=None, work_permission=None):
         raise ProjectError("Select one of the six supported coding tools.")
     if stop_requested is not None and stop_requested():
         return {"peer": tool, "ready": False, "warnings": [], "reason": "Vibe is stopping.", "next_action": ""}
-    argv = [sys.executable, "-m", "bridge", "check", "--peer", tool, "--mode", "work", "--json"]
+    argv = [sys.executable, "-m", "ora_agent_bridge", "check", "--peer", tool, "--mode", "work", "--json"]
     if work_permission is not None:
         argv += ["--work-permission", work_permission]
     try:
@@ -1809,7 +1809,7 @@ def _bridge_run(handle, session, arguments, body, model=None, effort=None):
     handle.reset_identity()
     if handle.is_cancelled():
         raise TurnInterrupted(INTERRUPTED_REASON)
-    argv = [sys.executable, "-m", "bridge", "run", "--session", str(session),
+    argv = [sys.executable, "-m", "ora_agent_bridge", "run", "--session", str(session),
             "--no-timeout", "--events-jsonl", *arguments]
     # Direct work, Run to Completion build/correction, and the prepared
     # implement-plan route all enter through the programming stage. Review,

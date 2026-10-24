@@ -148,8 +148,8 @@ def loop_resources(stage, destination, *, portable=False):
         authority = loop_integrity.authority_metadata()
         identity = json.loads((LOOP / "SOURCE.json").read_text(encoding="utf-8"))
         if (not isinstance(identity, dict)
-                or identity.get("component") != "programming-loop"
-                or identity.get("source") != "programming-loop"
+                or identity.get("component") != "ora-programming-loop"
+                or identity.get("source") != "ora-programming-loop"
                 or any(identity.get(name) != expected
                        for name, expected in authority.items())
                 or not isinstance(identity.get("files"), dict)

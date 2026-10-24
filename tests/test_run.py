@@ -170,9 +170,9 @@ class RunCase(unittest.TestCase):
         self.home.mkdir()
         self.store = ProjectStore(self.home)
         self.bridge = self.root / "bridge-home"
-        (self.bridge / "bridge").mkdir(parents=True)
-        (self.bridge / "bridge" / "__init__.py").write_text("", encoding="utf-8")
-        (self.bridge / "bridge" / "__main__.py").write_text(FAKE_BRIDGE, encoding="utf-8")
+        (self.bridge / "ora_agent_bridge").mkdir(parents=True)
+        (self.bridge / "ora_agent_bridge" / "__init__.py").write_text("", encoding="utf-8")
+        (self.bridge / "ora_agent_bridge" / "__main__.py").write_text(FAKE_BRIDGE, encoding="utf-8")
         self.scenario = self.root / "scenario"
         self.scenario.mkdir()
         self.argv_log = self.root / "argv.jsonl"

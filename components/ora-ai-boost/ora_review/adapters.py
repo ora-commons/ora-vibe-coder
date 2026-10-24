@@ -56,6 +56,23 @@ class BridgeProvenance:
 
 
 @dataclass(frozen=True)
+class BridgeChoices:
+    """The model and effort one Bridge reply says the tool used.
+
+    Each half is the exact single-line string the reply's header carries:
+    ``Model:`` and ``Effort:`` hold the values the tool recorded — the words
+    ``not reported`` when it could not be read — and ``Requested-Model:`` /
+    ``Requested-Effort:`` appear only when the caller named a choice. A half
+    the reply does not carry stays ``None``; nothing is inferred.
+    """
+
+    model: str | None = None
+    effort: str | None = None
+    requested_model: str | None = None
+    requested_effort: str | None = None
+
+
+@dataclass(frozen=True)
 class BridgeResponse:
     body: str
     provenance: BridgeProvenance
@@ -159,15 +176,34 @@ def _stop_process(process: subprocess.Popen[bytes]) -> tuple[bytes, bytes]:
         return process.communicate()
 
 
+#: The start-up lines `codex exec` prints about itself before any work. The
+#: Gear call is ephemeral, so there is no session file: these lines are the
+#: only place Codex itself states the model and reasoning effort it is using.
+_CODEX_REPORTED_MODEL = re.compile(r"(?m)^model:(.*)$")
+_CODEX_REPORTED_EFFORT = re.compile(r"(?m)^reasoning effort:(.*)$")
+
+
 class CodexAdapter:
     """Start one isolated, ephemeral, read-only Codex process per role."""
 
     engine = "codex"
 
-    def __init__(self, executable: str | None = None) -> None:
+    def __init__(
+        self,
+        executable: str | None = None,
+        *,
+        model: str | None = None,
+        effort: str | None = None,
+    ) -> None:
         self.executable = executable or shutil.which("codex") or "codex"
+        self.model = model
+        self.effort = effort
+        self.reported_model: str | None = None
+        self.reported_effort: str | None = None
 
     def call(self, packet: str, *, role: str) -> str:
+        self.reported_model = None
+        self.reported_effort = None
         with tempfile.TemporaryDirectory(prefix="ora-review-codex-") as directory:
             root = Path(directory)
             response_path = root / "final-response.md"
@@ -175,6 +211,12 @@ class CodexAdapter:
                 self.executable,
                 "exec",
                 "--ephemeral",
+                *(("-m", self.model) if self.model is not None else ()),
+                *(
+                    ("-c", f"model_reasoning_effort={self.effort}")
+                    if self.effort is not None
+                    else ()
+                ),
                 "--ignore-user-config",
                 "--ignore-rules",
                 "--sandbox",
@@ -197,6 +239,7 @@ class CodexAdapter:
             if result.returncode != 0:
                 detail = _display_bytes(result.stderr) or f"exit {result.returncode}"
                 raise CallFailure(f"Fresh Codex role `{role}` failed: {detail}")
+            self._read_reported_choices(result.stderr)
             try:
                 response = response_path.read_bytes()
             except OSError as failure:
@@ -209,6 +252,23 @@ class CodexAdapter:
                 raise CallFailure(
                     f"Fresh Codex role `{role}` returned text that was not valid UTF-8."
                 ) from failure
+
+    def _read_reported_choices(self, stderr: bytes) -> None:
+        """Read the model and effort Codex says it is using for this call.
+
+        Codex prints both at the start of its error output. A half Codex did
+        not state stays unset; nothing is inferred from the request.
+        """
+
+        text = stderr.decode("utf-8", errors="replace")
+        model = _CODEX_REPORTED_MODEL.search(text)
+        effort = _CODEX_REPORTED_EFFORT.search(text)
+        self.reported_model = model.group(1).strip() if model else None
+        self.reported_effort = effort.group(1).strip() if effort else None
+        if self.reported_model == "":
+            self.reported_model = None
+        if self.reported_effort == "":
+            self.reported_effort = None
 
 
 class ClaudeAdapter:
@@ -347,22 +407,22 @@ class _BridgeCommand:
     def _at(cls, candidate: Path) -> Optional["_BridgeCommand"]:
         root = candidate.expanduser().resolve()
         if not (
-            (root / "bridge" / "__main__.py").is_file()
-            and (root / "bridge" / "cli.py").is_file()
+            (root / "ora_agent_bridge" / "__main__.py").is_file()
+            and (root / "ora_agent_bridge" / "cli.py").is_file()
         ):
             return None
         version = None
         try:
             found = re.search(
                 r'^VERSION\s*=\s*"([^"\n]+)"',
-                (root / "bridge" / "__init__.py").read_text(encoding="utf-8"),
+                (root / "ora_agent_bridge" / "__init__.py").read_text(encoding="utf-8"),
                 re.MULTILINE,
             )
         except OSError:
             found = None
         if found is not None:
             version = found.group(1)
-        return cls(root, (sys.executable, "-m", "bridge"), version)
+        return cls(root, (sys.executable, "-m", "ora_agent_bridge"), version)
 
     @classmethod
     def locate(cls) -> "_BridgeCommand":
@@ -379,9 +439,9 @@ class _BridgeCommand:
             if selected is None:
                 raise CallFailure(
                     f"The selected Agent Bridge path `{configured}` is not a "
-                    "usable Bridge checkout: it has no `bridge/__main__.py` and "
-                    "`bridge/cli.py`. No fallback to another installation was "
-                    "attempted."
+                    "usable Bridge checkout: it has no "
+                    "`ora_agent_bridge/__main__.py` and `ora_agent_bridge/cli.py`. "
+                    "No fallback to another installation was attempted."
                 )
             return selected
         default = cls._at(Path.home() / "agent-bridge")
@@ -435,6 +495,8 @@ class BridgeAdapter:
         initiator: str,
         session_dir: Path,
         session_verified: bool = False,
+        model: str | None = None,
+        effort: str | None = None,
     ) -> None:
         self.command = command
         self.peer = peer
@@ -442,11 +504,21 @@ class BridgeAdapter:
         self.initiator = initiator
         self.session_dir = session_dir
         self.session_verified = session_verified
+        self.model = model
+        self.effort = effort
         self.last_call_notice = ""
         self.last_call_provenance: BridgeProvenance | None = None
+        self.last_call_choices: BridgeChoices | None = None
 
     @classmethod
-    def prepare(cls, *, peer: str, initiator: str) -> tuple["BridgeAdapter", str]:
+    def prepare(
+        cls,
+        *,
+        peer: str,
+        initiator: str,
+        model: str | None = None,
+        effort: str | None = None,
+    ) -> tuple["BridgeAdapter", str]:
         command = _BridgeCommand.locate()
         checked = command.run(("check", "--peer", peer))
         if checked.returncode != 0:
@@ -496,6 +568,8 @@ class BridgeAdapter:
             initiator=initiator,
             session_dir=session_dir,
             session_verified=True,
+            model=model,
+            effort=effort,
         ), readiness
 
     def call(self, packet: str, *, role: str) -> str:
@@ -506,17 +580,15 @@ class BridgeAdapter:
         """
         self.last_call_notice = ""
         self.last_call_provenance = None
+        self.last_call_choices = None
         before = self._response_paths()
+        arguments = ("run", "--session", str(self.session_dir))
+        if self.model is not None:
+            arguments += ("--model", self.model)
+        if self.effort is not None:
+            arguments += ("--effort", self.effort)
         try:
-            result = self.command.run(
-                (
-                    "run",
-                    "--session",
-                    str(self.session_dir),
-                ),
-                body=packet,
-                timeout=None,
-            )
+            result = self.command.run(arguments, body=packet, timeout=None)
         except CallFailure as failure:
             detail = published_detail = failure.display()
         else:
@@ -599,16 +671,21 @@ class BridgeAdapter:
                 f"Agent Bridge response `{resolved}` has an invalid response identity."
             )
         sequence_text = name_match.group("sequence")
+        lines = header.splitlines()
         expected_header = [
             f"# Message {sequence_text}",
             f"From: {self.peer}",
             f"To: {self.initiator}",
         ]
-        if header.splitlines() != expected_header:
+        if (
+            len(lines) < len(expected_header)
+            or lines[: len(expected_header)] != expected_header
+        ):
             raise MalformedResponse(
                 f"Agent Bridge response `{resolved}` has an ambiguous or incorrect "
                 "Format 2 identity and direction."
             )
+        self.last_call_choices = self._read_choices(lines[len(expected_header):])
         self.last_call_provenance = BridgeProvenance(
             peer=self.peer,
             initiator=self.initiator,
@@ -622,6 +699,54 @@ class BridgeAdapter:
             session_verified=self.session_verified,
         )
         return body
+
+    _CHOICE_KEYS = (
+        ("Model", "model"),
+        ("Effort", "effort"),
+        ("Requested-Model", "requested_model"),
+        ("Requested-Effort", "requested_effort"),
+    )
+
+    @classmethod
+    def _read_choices(cls, lines: Sequence[str]) -> BridgeChoices | None:
+        """Accept the model-and-effort lines a reply may carry after `To:`.
+
+        Bridge writes them in one fixed order, each at most once: the values
+        the tool recorded as `Model:` and `Effort:`, then the caller's named
+        choices as `Requested-Model:` and `Requested-Effort:`. Any other
+        header line stays ambiguous and is refused, exactly as before.
+        """
+
+        values: dict[str, str] = {}
+        index = 0
+        for label, field in cls._CHOICE_KEYS:
+            if index >= len(lines):
+                break
+            line = lines[index]
+            prefix = f"{label}: "
+            if not line.startswith(prefix):
+                continue
+            value = line[len(prefix):].strip()
+            if not value:
+                raise MalformedResponse(
+                    "Agent Bridge response carried an empty "
+                    f"`{label}:` value."
+                )
+            values[field] = value
+            index += 1
+        if index != len(lines):
+            raise MalformedResponse(
+                "Agent Bridge response carries an unrecognized header line "
+                f"`{lines[index]}` beside its identity."
+            )
+        if not values:
+            return None
+        return BridgeChoices(
+            model=values.get("model"),
+            effort=values.get("effort"),
+            requested_model=values.get("requested_model"),
+            requested_effort=values.get("requested_effort"),
+        )
 
     @staticmethod
     def _verify_session_record(

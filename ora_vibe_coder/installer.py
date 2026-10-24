@@ -28,6 +28,10 @@ LOOP_PROFILE = "programming-loop-reviewer.md"
 # its renamed form (carried by newer Programming Loop releases).
 LOOP_SKILL_NAME = "programming-loop"
 RENAMED_LOOP_SKILL_NAME = "ora-programming-loop"
+# A standalone renamed entry is another installation's qualified copy only
+# when its marker names the public Loop release repository exactly as the
+# bundled Loop installer records it for a public release.
+LOOP_PUBLIC_RELEASE_REPOSITORY = "https://github.com/" + loop_integrity.AUTHORITY["public_release_repository"]
 EXECUTABLE_NAME = "Ora Vibe Coder"
 BRIDGE_HOME_NAME = "agent-bridge"
 BOOST_HOME_NAME = "ora-ai-boost"
@@ -290,11 +294,16 @@ def shared_loop_entries(home, host):
     return entries
 
 
-def refuse_to_replace_newer(home, platform, destination, hosts, skill_names, plugin, version, applications=None):
-    """Setup never rolls back: a newer installed copy is named, not replaced."""
+def refuse_to_replace_newer(home, platform, destination, hosts, skill_names, version, applications=None):
+    """Setup never rolls back: a newer installed copy is named, not replaced.
+
+    The shared Programming Loop is deliberately absent here: a standalone
+    entry of the bundle's version or newer is preserved by
+    standalone_loop_preserved, and every other installed Loop entry is left to
+    the bundled Loop installer's own never-replace-newer rule.
+    """
     installed = release_version(version)
     newer = []
-    renamed_loop_finding = False
     shared_launcher_finding = False
     for label, folder, identity_name in (
         ("the Vibe application", destination, IDENTITY),
@@ -316,42 +325,15 @@ def refuse_to_replace_newer(home, platform, destination, hosts, skill_names, plu
             # removing Vibe; other platforms' launchers are removed with it.
             shared_launcher_finding = shared_launcher_finding or (
                 label == "the Vibe launcher" and platform == "darwin")
-    bundled_loop = release_version(
-        (plugin / "resources/programming-loop/VERSION").read_text(encoding="utf-8"))
-    for host in hosts:
-        skills = home / SKILL_HOMES[host] / "skills"
-        for name, recorded in shared_loop_entries(home, host).items():
-            found = release_version(recorded)
-            # A newer shared entry under either name is never downgraded. An
-            # equal renamed entry also stops setup: it is another
-            # installation's qualified copy, and installing this bundle would
-            # recreate a second, older-named entry beside it.
-            if bundled_loop and found and (
-                    found > bundled_loop
-                    or (name == RENAMED_LOOP_SKILL_NAME and found == bundled_loop)):
-                newer.append(f"the Programming Loop for {host} at {skills / name} records version {recorded}")
-                # Only the renamed entry is never cleared by removing Vibe: it
-                # is another installation's copy, and in the renamed-only case
-                # there is no Vibe installation to remove at all.
-                renamed_loop_finding = renamed_loop_finding or name == RENAMED_LOOP_SKILL_NAME
     if newer:
-        # Removing Vibe clears every item named above except two: the shared
-        # Mac launcher (removal preserves it for other accounts) and a
-        # renamed shared Loop entry (another installation's copy), so the
-        # way onward named in the closing has to match the findings.
-        guidance = []
-        if shared_launcher_finding:
-            guidance.append(
-                " That launcher is shared with other accounts on this Mac, and removing "
-                "Ora Vibe Coder preserves it; install the Ora Vibe Coder release matching "
-                "that newer launcher."
-            )
-        if renamed_loop_finding:
-            guidance.append(
-                " That entry belongs to a newer installation this setup preserves; "
-                "install the Ora Vibe Coder release that bundles that newer Programming Loop."
-            )
-        closing = "".join(guidance) if guidance else (
+        # Removing Vibe clears every item named above except the shared Mac
+        # launcher (removal preserves it for other accounts), so the way
+        # onward named in the closing has to match the findings.
+        closing = (
+            " That launcher is shared with other accounts on this Mac, and removing "
+            "Ora Vibe Coder preserves it; install the Ora Vibe Coder release matching "
+            "that newer launcher."
+        ) if shared_launcher_finding else (
             " Removing Ora Vibe Coder first allows installing an older version."
         )
         raise ValueError(
@@ -361,11 +343,62 @@ def refuse_to_replace_newer(home, platform, destination, hosts, skill_names, plu
         )
 
 
+def bundled_loop_version(plugin):
+    """The Loop release this bundle carries, or None when unreadable."""
+    return release_version(
+        (Path(plugin) / "resources/programming-loop/VERSION").read_text(encoding="utf-8"))
+
+
+def standalone_loop_release(home, host):
+    """The installed standalone Loop marker when it names the public Loop release.
+
+    Preservation requires the entry's own provenance: component and source
+    are the renamed shared entry, the kind is a public release, and the
+    public repository is exactly the one the bundled Loop installer records.
+    Anything else — a different component, source, repository, or kind — is
+    not another installation's qualified copy and returns None.
+    """
+    try:
+        data = json.loads((Path(home) / SKILL_HOMES[host] / "skills"
+                           / RENAMED_LOOP_SKILL_NAME / "SOURCE.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if (not isinstance(data, dict)
+            or data.get("component") != RENAMED_LOOP_SKILL_NAME
+            or data.get("source") != RENAMED_LOOP_SKILL_NAME
+            or data.get("source_kind") != "public-release"
+            or data.get("public_release_repository") != LOOP_PUBLIC_RELEASE_REPOSITORY):
+        return None
+    return data
+
+
+def standalone_loop_preserved(home, host, plugin):
+    """True when a standalone renamed Loop entry names the public Loop release
+    at the bundle's version or newer.
+
+    Such an entry is another installation's qualified copy: setup leaves it
+    exactly as it is — contents and provenance included — and does not run the
+    bundled Loop installer for that host. Anything else (an older standalone
+    entry, a bundle-installed entry, or none) installs through the bundled
+    Loop installer, which itself never replaces a newer copy.
+    """
+    data = standalone_loop_release(home, host)
+    if data is None:
+        return False
+    found, bundled = release_version(data.get("version")), bundled_loop_version(plugin)
+    return bool(found and bundled and found >= bundled)
+
+
 def programming_loop_targets(home, hosts):
+    """What setup and removal own per host: the shared entry under both of its
+    names (the bundled installer migrates the old name away and restores it on
+    a failed setup) plus the shared reviewer profile."""
     targets = []
     for host in hosts:
         root = home / SKILL_HOMES[host]
-        targets.extend((root / "skills/programming-loop", root / "agents" / LOOP_PROFILE))
+        targets.extend((root / "skills/programming-loop",
+                        root / "skills/ora-programming-loop",
+                        root / "agents" / LOOP_PROFILE))
     return targets
 
 
@@ -790,10 +823,13 @@ def install_files(source, home, platform, destination, hosts, plugin, version, f
         if platform == "darwin":
             preflight_shared_folder(shortcut.parent)
         # Setup never rolls back: this runs before the first staging directory
-        # is created, so a newer installed app, launcher, Bridge, Boost, Vibe
-        # entry, or installed Programming Loop changes nothing.
+        # is created, so a newer installed app, launcher, Bridge, Boost, or
+        # Vibe entry changes nothing. A standalone Programming Loop entry of
+        # this bundle's version or newer is preserved below instead: the
+        # bundled Loop installer never runs for that host.
         refuse_to_replace_newer(home, platform, destination, hosts,
-                                [skill.name for skill in skills], plugin, version, applications)
+                                [skill.name for skill in skills], version, applications)
+        preserved = {host for host in hosts if standalone_loop_preserved(home, host, plugin)}
         replacements.append((destination, prepare_replacement(
             destination, files, version, metadata={"python": sys.executable})))
         replacements.append((bridge_home(destination), prepare_replacement(bridge_home(destination), bridge, version)))
@@ -817,8 +853,9 @@ def install_files(source, home, platform, destination, hosts, plugin, version, f
             replacements.append((shortcut, prepare_replacement(
                 shortcut, launcher_files(destination, platform, version=version), version)))
         for host in hosts:
-            run_loop_installer(loop_installer, "install-check", host, home)
-        extra_targets = list(programming_loop_targets(home, hosts))
+            if host not in preserved:
+                run_loop_installer(loop_installer, "install-check", host, home)
+        extra_targets = list(programming_loop_targets(home, [h for h in hosts if h not in preserved]))
         if platform == "darwin":
             extra_targets.append(desktop_link(home))
 
@@ -826,7 +863,8 @@ def install_files(source, home, platform, destination, hosts, plugin, version, f
             apply_replacements(replacements)
             installed_loop = destination / "plugins" / "ora-vibe-coder" / "resources" / "programming-loop" / "scripts" / "install.py"
             for host in hosts:
-                run_loop_installer(installed_loop, "install", host, home)
+                if host not in preserved:
+                    run_loop_installer(installed_loop, "install", host, home)
             desktop = None
             if platform == "darwin":
                 # Signature first, link second: signing failures and link
@@ -855,6 +893,10 @@ def install_files(source, home, platform, destination, hosts, plugin, version, f
         if hosts else
         "The Vibe application was installed without coding-tool entries."
     )
+    if preserved:
+        configured += (" A standalone Ora Programming Loop entry of this bundle's version or newer was"
+                       " already installed for " + ", ".join(sorted(preserved))
+                       + "; setup left it exactly as it is.")
     result = {"app": str(destination), "bridge": str(bridge_home(destination)),
               "boost": str(boost_home(destination)),
               "launcher": str(shortcut), "hosts": list(hosts), "version": version,
@@ -864,12 +906,105 @@ def install_files(source, home, platform, destination, hosts, plugin, version, f
     return result
 
 
+def bundle_owned_loop_entry(home, host, name):
+    """One shared Loop entry's marker when its provenance shows Vibe's bundle.
+
+    The bundled Loop installer records `vendored-snapshot` provenance with its
+    complete file map; a standalone install records the public release, and an
+    unreadable or hand-made entry owns nothing. Removal acts only on the first
+    kind, under either of the entry's two names.
+    """
+    path = Path(home) / SKILL_HOMES[host] / "skills" / name / "SOURCE.json"
+    if path.is_symlink():
+        raise ValueError(f"Programming Loop identity is a symbolic link: {path}")
+    try:
+        marker = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if (not isinstance(marker, dict)
+            or marker.get("component") != name or marker.get("source") != name
+            or marker.get("source_kind") != "vendored-snapshot"
+            or not isinstance(marker.get("files"), dict) or not marker["files"]):
+        return None
+    return marker
+
+
+def refuse_linked_removal(path):
+    """Reject a symbolic link at, above, or inside a path removal will touch.
+
+    The bundled Loop installer refuses these paths for its own removals
+    (ensure_plain_tree); Vibe's removals hold the same rule, so deletion can
+    never follow a link to files outside the owned entry, and a rollback
+    restores real files, never a link in place of what it deleted through one.
+    """
+    path = Path(path)
+    if any(p.is_symlink() for p in (path, *path.parents)) or (
+            path.exists() and any(p.is_symlink() for p in path.rglob("*"))):
+        raise ValueError("Installation contains a symbolic link; preserve it before removal.")
+
+
+def preflight_remove_legacy_loop(home, host, marker):
+    """Verify one old-name bundle-installed Loop entry before anything is removed.
+
+    The bundled Loop installer removes only its renamed entry, so Vibe itself
+    removes the pre-rename entry an earlier bundle installed, by the installer's
+    own rule: every recorded file must still match its recorded digest, or
+    removal stops with the entry preserved for repair.
+    """
+    skill = Path(home) / SKILL_HOMES[host] / "skills" / LOOP_SKILL_NAME
+    refuse_linked_removal(skill)
+    if isinstance(marker.get("reviewer_sha256"), str):
+        # The shared reviewer profile is a removal target of this entry; its
+        # path is held to the same no-links rule as the entry itself.
+        refuse_linked_removal(Path(home) / SKILL_HOMES[host] / "agents" / LOOP_PROFILE)
+    changed = []
+    for name, expected in marker["files"].items():
+        if not isinstance(name, str) or Path(name).is_absolute() or ".." in Path(name).parts \
+                or not isinstance(expected, str):
+            raise ValueError(f"The installed Programming Loop identity at {skill} is invalid; no files were removed.")
+        path = skill / name
+        if path.is_symlink() or not path.is_file() or digest(path.read_bytes()) != expected:
+            changed.append(str(path))
+    if changed:
+        raise ValueError(
+            "Installed Programming Loop files were changed or are missing. Preserve or repair them before removal: "
+            + ", ".join(changed))
+    return skill
+
+
+def remove_legacy_loop_entry(home, host, marker, keep_profile):
+    """Delete exactly the recorded files of one old-name bundle-installed entry.
+
+    User additions under the entry folder are kept and reported. The shared
+    reviewer profile is removed only when no renamed entry still uses it and it
+    still matches this entry's recorded profile digest.
+    """
+    skill = preflight_remove_legacy_loop(home, host, marker)
+    retained = []
+    for name in marker["files"]:
+        (skill / name).unlink()
+    (skill / "SOURCE.json").unlink()
+    for directory in sorted((p for p in skill.rglob("*") if p.is_dir() and not p.is_symlink()),
+                            key=lambda p: len(p.parts), reverse=True):
+        if not any(directory.iterdir()):
+            directory.rmdir()
+    if not any(skill.iterdir()):
+        skill.rmdir()
+    else:
+        retained = [str(path) for path in skill.rglob("*") if path.is_file()]
+    profile = Path(home) / SKILL_HOMES[host] / "agents" / LOOP_PROFILE
+    expected = marker.get("reviewer_sha256")
+    if (not keep_profile and isinstance(expected, str) and profile.is_file()
+            and not profile.is_symlink() and digest(profile.read_bytes()) == expected):
+        profile.unlink()
+    return retained
+
+
 def preflight_remove_directory(folder):
     folder = Path(folder)
     if not folder.exists():
         return
-    if any(p.is_symlink() for p in (folder, *folder.parents)) or any(p.is_symlink() for p in folder.rglob("*")):
-        raise ValueError("Installation contains a symbolic link; preserve it before removal.")
+    refuse_linked_removal(folder)
     data = identity(folder)
     changed = []
     for name, expected in data["files"].items():
@@ -927,21 +1062,22 @@ def remove(source=ROOT, *, home=None, destination=None, hosts=(), platform=None,
             bridge_home(destination),
             destination,
         ]
+        # Removal owns a shared Loop entry under either of its two names only
+        # when the entry's provenance shows this bundle; a standalone entry is
+        # left in place untouched.
         loop_hosts = []
+        legacy_loop_removals = []
         for host in hosts:
-            loop_identity = home / SKILL_HOMES[host] / "skills/programming-loop/SOURCE.json"
-            if loop_identity.is_symlink():
-                raise ValueError(f"Programming Loop identity is a symbolic link: {loop_identity}")
-            if loop_identity.is_file():
-                try:
-                    marker = json.loads(loop_identity.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
-                    marker = {}
-                if marker.get("component") == "programming-loop" and marker.get("source") == "programming-loop":
-                    if not loop_installer.is_file():
-                        raise ValueError("The bundled Programming Loop removal tool is missing; no Vibe files were removed.")
-                    run_loop_installer(loop_installer, "remove-check", host, home)
-                    loop_hosts.append(host)
+            if bundle_owned_loop_entry(home, host, RENAMED_LOOP_SKILL_NAME) is not None:
+                if not loop_installer.is_file():
+                    raise ValueError("The bundled Programming Loop removal tool is missing; no Vibe files were removed.")
+                run_loop_installer(loop_installer, "remove-check", host, home)
+                loop_hosts.append(host)
+            legacy_marker = bundle_owned_loop_entry(home, host, LOOP_SKILL_NAME)
+            if legacy_marker is not None:
+                preflight_remove_legacy_loop(home, host, legacy_marker)
+                legacy_loop_removals.append((host, legacy_marker,
+                                             (home / SKILL_HOMES[host] / "skills" / RENAMED_LOOP_SKILL_NAME).exists()))
         for target in vibe_targets:
             preflight_remove_directory(target)
         desktop_shortcut = home / "Desktop" / f"{EXECUTABLE_NAME}.lnk"
@@ -953,6 +1089,8 @@ def remove(source=ROOT, *, home=None, destination=None, hosts=(), platform=None,
                 note = run_loop_installer(loop_installer, "remove", host, home)
                 if note:
                     notes.append(note)
+            for host, marker, keep_profile in legacy_loop_removals:
+                retained.extend(remove_legacy_loop_entry(home, host, marker, keep_profile))
             for target in vibe_targets:
                 retained.extend(remove_directory(target))
             if platform == "darwin":
@@ -960,7 +1098,8 @@ def remove(source=ROOT, *, home=None, destination=None, hosts=(), platform=None,
             if platform == "win32" and os.name == "nt" and desktop_shortcut.is_file():
                 desktop_shortcut.unlink()
 
-        removal_targets = programming_loop_targets(home, loop_hosts) + vibe_targets
+        removal_targets = (programming_loop_targets(home, loop_hosts + [h for h, _m, _k in legacy_loop_removals])
+                           + vibe_targets)
         if platform == "darwin":
             removal_targets.append(link)
         if platform == "win32" and os.name == "nt":
