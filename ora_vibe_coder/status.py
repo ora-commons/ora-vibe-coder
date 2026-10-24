@@ -487,7 +487,7 @@ def _field_values(fields, *names):
 CONCLUSION_FIELDS = {
     "programming": {"status", "state", "verdict", "programming", "programming result",
                     "implementation", "implementation result", "result", "final status", "current status"},
-    "verification": {"status", "state", "verdict", "final verdict", "verification verdict",
+    "verification": {"status", "state", "verdict", "final verdict", "verification verdict", "ora verification verdict",
                      "verification result", "verification", "result", "final status", "current status"},
 }
 CURRENT_HEADINGS = {"current review", "current assessment", "result", "current result", "conclusion",

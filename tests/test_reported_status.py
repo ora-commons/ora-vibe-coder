@@ -267,6 +267,23 @@ class ReportedStatus(unittest.TestCase):
                                             "result.md", field="Status")["kind"], "positive")
 
     def test_shared_current_conclusion_wording_and_conflicts(self):
+        for verdict in ("PASSED", "NOT PASSED", "INCOMPLETE"):
+            report = f"# Verification Report\n\nOra Verification verdict: {verdict}\n"
+            self.assertEqual(read_conclusion("verification", report)["label"], verdict)
+            self.assertEqual(reported_verdict(report), verdict)
+        current_report = "# Verification Report\n\nOra Verification verdict: PASSED\n"
+        self.assertEqual(reported_verdict(current_report + "\n## Earlier review\nOra Verification verdict: NOT PASSED\n"), "PASSED")
+        for conflicting in (
+                "Ora Verification verdict: PASSED\nOra Verification verdict: PASSED\n",
+                "Ora Verification verdict: PASSED\nVerdict: NOT PASSED\n",
+                "Ora Verification verdict: PASSED — but required checks failed.\n",
+                "Ora Verification verdict: PASSED only for unit checks.\n",
+                "Ora Verification verdict: PASSED\n\nI retract this verdict.\n",
+                "## Historical review\nOra Verification verdict: PASSED\n",
+                "```markdown\nOra Verification verdict: PASSED\n```\n"):
+            with self.subTest(report=conflicting):
+                self.assertEqual(read_conclusion("verification", conflicting)["label"], "")
+        self.assertEqual(read_conclusion("programming", "Status: IMPLEMENTED AND VERIFIED — finishing actions remain.\n")["label"], "")
         for stage, word in (("programming", "COMPLETE"), ("verification", "PASSED")):
             for label in ("Status", "State", "Verdict"):
                 text = f"---\nnexus:\n  - ora\n---\n\n# Current result\n\n**{label}: {word.lower()}.** All current work is recorded.\n"
