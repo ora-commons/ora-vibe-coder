@@ -285,6 +285,16 @@ class ReportedStatus(unittest.TestCase):
             self.assertEqual(read_conclusion(stage, canonical)["label"], "PASSED")
             for text in (f"**Status: {word}.** But two checks failed.",
                          f"Status: {word}\n\nBut the export is unfinished.",
+                         f"Status: {word}\n\nNOT PASSED after rerun: two checks fail.",
+                         f"Status: {word}\n\nIN PROGRESS because required checks are running.",
+                         f"Status: {word}\n\nHowever, I retract this verdict.",
+                         f"Status: {word}\n\nThis verdict is withdrawn.",
+                         f"Status: {word}\n\nI retract this verdict.",
+                         f"Status: {word}\n\n{word} was premature.",
+                         f"Status: {word}\n\n{word} isn't justified yet.",
+                         f"Status: {word}\n\n{word} cannot be confirmed yet.",
+                         f"Status: {word}\n\n{word} proved illusory.",
+                         f"Status: {word} — it can’t be confirmed yet.",
                          f"Status: {word}\n\n## Current result\nStatus: INCOMPLETE",
                          f"# Report\n\n## Historical round\n{word}",
                          f"# Report\n\n## Earlier review\n### Result\nStatus: {word}",
@@ -318,6 +328,93 @@ class ReportedStatus(unittest.TestCase):
                 canonical = "---\nstatus: APPROVED\nreview: PASSED\n---\n# Document\n\n## Current review\n" + body
                 facts = assessment_facts(stage, canonical)
                 self.assertTrue(facts["issues"], body)
+        for stage in ("specification", "planning"):
+            for explanation in (
+                "Complete reviewer evidence and source authority have concrete implementation routes.",
+                "Complete source evidence supports the implementation route.",
+                "Complete rollback evidence exists for the planned migration route.",
+                "PASSED means the available Plan is sufficient to guide the intended work.",
+                "PASSED means the reviewed Plan is sufficient for the next step.",
+                "Complete reviewer evidence and source authority have concrete implementation routes. "
+                "Reviewer material is supplied at the existing input points while retaining each review procedure. "
+                "Supplementary data keeps its attribution. If that route cannot preserve protected instructions, "
+                "the conflict returns to the owner before the dependent change proceeds. "
+                "Changes to active rejection rules remain reserved for the owner's decision.",
+                "Complete recovery evidence supports the planned route. The existing backup preserves each file. "
+                "If a restore cannot retain the original meaning, the owner decides before work proceeds.",
+                "PASSED means the available Plan is sufficient to guide the intended work. "
+                "It does not verify implementation, independently establish complete Specification coverage, "
+                "grant approval or block any stage.",
+                "PASSED means the reviewed Plan can guide the next stage. "
+                "This explanation does not certify working software or grant permission to start.",
+                "Earlier I retracted the prior verdict. The present review is separate.",
+                'The reviewer quoted "I retract this verdict." as a historical example.',
+                "If new evidence appears, retract this verdict before proceeding.",
+                "I will withdraw this verdict if later evidence conflicts with it.",
+                "This is planning-only evidence; it does not certify unbuilt software."):
+                text = "## Current review\nVerdict: PASSED\n\n" + explanation
+                self.assertEqual(read_conclusion(stage, text, review=True)["label"], "PASSED", text)
+            for definition in ("means", "establishes", "denotes", "indicates"):
+                text = ("## Current review\nVerdict: PASSED\n\nNo required deficiencies found. "
+                        "This assessment uses the supplied Plan and Registry, independently of their recorded reviews. "
+                        "I did not inspect the underlying code, separate Specification or production state, or run checks. "
+                        f"PASSED {definition} planning sufficiency; it does not verify implementation or grant approval.")
+                self.assertEqual(read_conclusion(stage, text, review=True)["label"], "PASSED", text)
+                self.assertEqual(read_conclusion(stage, text + " I retract this verdict.", review=True)["label"], "", text)
+                limited = f"## Current review\nVerdict: PASSED\n\nPASSED {definition} only partial planning sufficiency."
+                self.assertEqual(read_conclusion(stage, limited, review=True)["label"], "", limited)
+            for conclusion in ("PASSED but required work remains.", "COMPLETE with pending required checks.",
+                               "Verdict: PASSED\nVerdict: PASSED", "Verdict: PASSED\n\nThe review failed.",
+                               "Verdict: PASSED\n\nINCOMPLETE because the Plan lacks a rollback step.",
+                               "Verdict: PASSED\n\nNOT PASSED because required migration checks remain unverified.",
+                               "Verdict: PASSED\n\nHowever, I retract this verdict.",
+                               "Verdict: PASSED\n\nThis verdict is withdrawn.",
+                               "Verdict: PASSED\n\nI retract this verdict.",
+                               "Verdict: PASSED\n\nWe hereby revoke the current conclusion.",
+                               "Verdict: PASSED\n\nI have rescinded my assessment.",
+                               "Verdict: PASSED\n\nHowever, the Plan still lacks a rollback step."):
+                self.assertEqual(read_conclusion(stage, "## Current review\n" + conclusion, review=True)["label"], "", conclusion)
+            for qualification in (
+                "PASSED only for unit checks; required deployment checks failed.",
+                "PASSED has been withdrawn because the current candidate failed.",
+                "Passed 3 of 5 checks.",
+                "Complete not counting the migration step.",
+                "Passed only for the Specification sections.",
+                "PASSED is limited to the unit checks.",
+                "PASSED applies solely to the Specification sections.",
+                "COMPLETE is restricted to the document changes.",
+                "PASSED has been retracted.",
+                "PASSED is revoked.",
+                "COMPLETE has been rescinded.",
+                "PASSED no longer holds.",
+                "PASSED was premature; the Plan lacks a rollback step.",
+                "PASSED isn't justified until the migration is checked.",
+                "COMPLETE cannot be confirmed yet.",
+                "PASSED can't be confirmed yet.",
+                "PASSED wasn’t justified by the evidence.",
+                "PASSED proved illusory after the migration review.",
+                "PASSED should be disregarded.",
+                "COMPLETE source evidence supports the implementation route.",
+                "PASSED means the reviewed Plan is sufficient for the next step; PASSED proved illusory.",
+                "Complete source evidence supports the implementation route. However, this verdict is withdrawn.",
+                "Complete source evidence supports the implementation route. The procedure preserves the inputs. "
+                "I retract this verdict.",
+                "PASSED means the available Plan can guide the next stage. The intended route is recorded. "
+                "This verdict is withdrawn.",
+                "Complete reviewer evidence and source authority have concrete implementation routes. But required work remains.",
+                "PASSED means the available Plan is sufficient to guide the intended work. PASSED was premature.",
+                "PASSED means the available Plan is sufficient to guide the intended work.\nPASSED proved illusory.",
+                "Complete reviewer evidence and source authority have concrete implementation routes.\nVerdict: NOT PASSED"):
+                text = "## Current review\nVerdict: PASSED\n\n" + qualification
+                self.assertEqual(read_conclusion(stage, text, review=True)["label"], "", text)
+            for qualification in ("that verdict was premature.", "it isn't justified yet.",
+                                  "it can’t be confirmed yet.", "it cannot be confirmed yet."):
+                for conclusion in ("Verdict: PASSED — ", "The review passed; "):
+                    text = "## Current review\n" + conclusion + qualification
+                    self.assertEqual(read_conclusion(stage, text, review=True)["label"], "", text)
+        advisory = "Verdict: 🟢 PASSED — advisory review of this implementation Plan, not verification of code or live publication."
+        self.assertEqual(read_conclusion("planning", advisory, review=True)["label"], "PASSED")
+        self.assertEqual(read_conclusion("planning", advisory + " But required checks failed.", review=True)["label"], "")
         old_report = "Verdict: PASSED\n\n## Readiness\nThis is the current independent verdict for revision `38a5ceb5980868d14c48a2c11b4b0855edb5ce73`."
         self.assertIn("38a5ceb", reported_status("verification", old_report, "report", field="Verdict")["basis_note"])
 

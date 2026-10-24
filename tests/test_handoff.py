@@ -152,6 +152,13 @@ class Handoff(unittest.TestCase):
                         uses_loop,
                     )
                     self.assertEqual(text.count("UNIQUE_CONTENT_Request"), int("Request" in STAGE_ROLES[stage]))
+                    portable = prepare_request(self.project, stage, "Use Claude if I ask.\r\nKeep café spacing  \n", destination, portable=True)
+                    self.assertTrue(portable.startswith("# User request\n\nUse Claude if I ask.\r\nKeep café spacing  \n"))
+                    self.assertEqual(portable.count(common), int(uses_loop))
+                    self.assertNotIn("Selected receiving harness", portable)
+                    self.assertNotIn("Requested harness choices", portable)
+                    for adapter in adapters.values():
+                        self.assertNotIn(adapter, portable)
                     for other, adapter in adapters.items():
                         if other != host:
                             self.assertNotIn(adapter, text)

@@ -382,9 +382,15 @@ class RunCase(unittest.TestCase):
         # check for one, so the run pauses when its entry step cannot start.
         blocker = server.conversation.admit(root, "codex", "programming", frozenset({str(root)}))
         self.addCleanup(blocker.finish, "finished")
+        brief_file = self.root / "selected brief.txt"
+        brief_text = "Exact selected brief: preserve the blue route.\n"
+        brief_file.write_text(brief_text, encoding="utf-8")
+        detail_file = self.root / "selected details.md"
+        detail_text = "# Selected details\n\n```text\nNested material stays intact.\n```\n"
+        detail_file.write_text(detail_text, encoding="utf-8")
         _code, started = post("/api/run-start", {"id": created["id"], "entry": "specification",
                                                  "text": "Build the small tool from this brief.",
-                                                 "images": [], "files": [], "tool": "codex"})
+                                                 "images": [], "files": [str(brief_file), str(detail_file)], "tool": "codex"})
         self.wait_for(lambda: post("/api/turn-state", {"id": created["id"]})[1]
                       ["run"]["active"]["state"] == "paused-failure",
                       message="the entry step never paused on the refused start")
@@ -393,9 +399,25 @@ class RunCase(unittest.TestCase):
         # stage assignment still governing the step.
         _code, copied = post("/api/run-copy", {"id": created["id"]})
         self.assertIn("Build the small tool from this brief.", copied["text"])
+        self.assertNotIn("Requested harness choices", copied["text"])
+        self.assertNotIn("Selected receiving harness", copied["text"])
         self.assertIn("do not start the Plan or implementation", copied["text"])
+        for selected, original in ((brief_file, brief_text), (detail_file, detail_text)):
+            self.assertIn(f"## Selected material: {selected}\n", copied["text"])
+            self.assertIn(original, copied["text"])
+            self.assertEqual(selected.read_text(encoding="utf-8"), original)
         self.assertTrue(Path(copied["path"]).is_file())
+        self.assertEqual(Path(copied["path"]).read_text(encoding="utf-8"), copied["text"])
         blocker.finish("finished")
+        self.directive(0, reply=reply_with_questions("Which route should the Specification use?"))
+        _code, resumed = post("/api/run-resume", {"id": created["id"]})
+        self.wait_for(lambda: post("/api/turn-state", {"id": created["id"]})[1]
+                      ["run"]["active"]["state"] == "paused-question",
+                      message="the dispatched entry step never paused for its answer")
+        _code, later_copy = post("/api/run-copy", {"id": created["id"]})
+        for consumed in ("Build the small tool from this brief.", str(brief_file), str(detail_file),
+                         "Exact selected brief: preserve the blue route.", "Nested material stays intact."):
+            self.assertNotIn(consumed, later_copy["text"])
         _code, stopped = post("/api/run-stop", {"id": created["id"]})
         self.assertEqual(stopped["run"]["last"]["state"], "unfinished")
 
@@ -530,6 +552,8 @@ class RunCase(unittest.TestCase):
         # were left out.
         self.assertIn("# User request\n\n", copied["text"])
         self.assertIn("Build the small tool from this brief.", copied["text"])
+        self.assertNotIn("Requested harness choices", copied["text"])
+        self.assertNotIn("Selected receiving harness", copied["text"])
         self.assertIn("Brief pictures not included: sketch.png.", copied["text"])
         self.assertNotIn(picture["data"], copied["text"])
         self.assertEqual(copied["pictures"], ["sketch.png"])

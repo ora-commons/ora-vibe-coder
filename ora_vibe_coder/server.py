@@ -458,11 +458,19 @@ class Handler(BaseHTTPRequestHandler):
         work = {facts.get("peer"): facts.get("work") for facts in peers} if peers is not None else None
         return discover(work)
 
-    def role_choice(self, role, tool=""):
-        """A deliberate stage picker overrides the harness, retaining matching defaults."""
+    def role_defaults(self, project=None):
         preferences = self.server.preferences()
-        defaults = preferences.get("role_defaults") or {}
-        choice = defaults.get(role) or {}
+        defaults = dict(preferences.get("role_defaults") or {})
+        if project is not None:
+            saved = (preferences.get("project_defaults") or {}).get(str(project.root), {})
+            defaults.update(saved.get("roles") or {})
+        return defaults
+
+    def role_choice(self, role, tool="", *, project=None, roles=None):
+        """One-time choices, project defaults, global defaults, then native defaults."""
+        choices = self.role_defaults(project)
+        choices.update(validated_roles(roles or {}))
+        choice = choices.get(role) or {}
         selected = tool or choice.get("tool") or ""
         if selected == choice.get("tool"):
             return selected, choice.get("model", ""), choice.get("effort", "")
@@ -680,7 +688,7 @@ class Handler(BaseHTTPRequestHandler):
         allowed = {"/api/project", "/api/save", "/api/read", "/api/read-file", "/api/approve-reference", "/api/prepare", "/api/preview", "/api/handoff", "/api/copy", "/api/continue",
                    "/api/converse", "/api/turn-state", "/api/conversation", "/api/review",
                    "/api/judgment", "/api/sort-findings", "/api/approve-plan", "/api/approve-document", "/api/materiality", "/api/repair", "/api/deliver",
-                   "/api/run-start", "/api/run-stop", "/api/run-answer", "/api/run-resume", "/api/run-configure", "/api/run-copy"}
+                   "/api/project-settings", "/api/run-start", "/api/run-stop", "/api/run-answer", "/api/run-resume", "/api/run-configure", "/api/run-copy"}
         if path not in allowed:
             raise ProjectError("No such operation; arbitrary file access is not supported.")
         if not isinstance(data, dict) or not isinstance(data.get("id"), str):
@@ -688,7 +696,25 @@ class Handler(BaseHTTPRequestHandler):
         project = self.server.store.projects[data["id"]]
         if path == "/api/project":
             shape(data, ["id"])
-            return project.snapshot()
+            saved = (self.server.preferences().get("project_defaults") or {}).get(str(project.root), {})
+            return {**project.snapshot(), "configuration": saved}
+        if path == "/api/project-settings":
+            shape(data, ["id"], ["roles", "best_guess", "hide_advisory", "clear"])
+            if self.server.settings is None:
+                raise ProjectError("This workspace has no settings file.")
+            saved = dict(self.server.preferences().get("project_defaults") or {})
+            if data.get("clear"):
+                saved.pop(str(project.root), None)
+            else:
+                config = {"roles": validated_roles(data.get("roles", {}))}
+                for key in ("best_guess", "hide_advisory"):
+                    if key in data:
+                        if not isinstance(data[key], bool):
+                            raise ProjectError("Expected a checkbox selection.")
+                        config[key] = data[key]
+                saved[str(project.root)] = config
+            self.server.settings.update(project_defaults=saved)
+            return {"configuration": saved.get(str(project.root), {})}
         if path == "/api/save":
             shape(data, ["id", "expected", "name", "description", "goals", "paths"], ["parent", "state"])
             strings(data, ["name", "description", "goals"])
@@ -740,7 +766,7 @@ class Handler(BaseHTTPRequestHandler):
             return continue_in(project, data["displayed"], data["destination"],
                                purpose=data.get("purpose"), route=data.get("route", "terminal"))
         if path == "/api/converse":
-            shape(data, ["id", "tool", "stage", "text", "images"], ["files"])
+            shape(data, ["id", "tool", "stage", "text", "images"], ["files", "roles"])
             strings(data, ["tool", "stage", "text"])
             if not isinstance(data["images"], list):
                 raise ProjectError("Invalid image attachments.")
@@ -752,11 +778,11 @@ class Handler(BaseHTTPRequestHandler):
                 raise ProjectError("A Run to Completion is active in this project, so the composer cannot start a separate turn. Answer the run's pause, or stop the run first.")
             # The submission is validated and saved durably before the bounded
             # worker starts; this handler returns as soon as dispatch begins.
-            tool, model, effort = self.role_choice(run_module.STAGE_ROLE.get(data["stage"], "implementation"), data["tool"])
+            tool, model, effort = self.role_choice(run_module.STAGE_ROLE.get(data["stage"], "implementation"), data["tool"], project=project, roles=data.get("roles"))
             application_instructions = ""
             if data["stage"] == "programming":
-                reviewer, r_model, r_effort = self.role_choice("review", tool if not self.server.preferences().get("role_defaults", {}).get("review", {}).get("tool") else "")
-                application_instructions = run_module.implementation_direction(tool, model, effort, reviewer, r_model, r_effort, conditional=True)
+                reviewer, r_model, r_effort = self.role_choice("review", project=project, roles=data.get("roles"))
+                application_instructions = run_module.implementation_direction(tool, model, effort, reviewer or tool, r_model, r_effort, conditional=True)
             handle = conversation.start_turn(self.server.conversation, project, tool, data["stage"],
                                              data["text"], data["images"], data.get("files", []), model=model, effort=effort,
                                              application_instructions=application_instructions)
@@ -775,7 +801,7 @@ class Handler(BaseHTTPRequestHandler):
             return {"turns": conversation.read_conversation(project),
                     "runs": conversation.read_reliability_runs(project)}
         if path == "/api/review":
-            shape(data, ["id", "tool", "reviewer", "stage", "iterate"])
+            shape(data, ["id", "tool", "reviewer", "stage", "iterate"], ["roles"])
             strings(data, ["tool", "reviewer", "stage"])
             if not isinstance(data["iterate"], bool):
                 raise ProjectError("Expected the iterate selection.")
@@ -783,8 +809,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ProjectError("Vibe is closing after Stop; no new review run was started.")
             # The author's note is recorded durably before the bounded pipeline
             # starts; this handler returns as soon as dispatch begins.
-            tool, model, effort = self.role_choice(data["stage"] + "_review", data["tool"])
-            reviewer, r_model, r_effort = self.role_choice(data["stage"] + "_second_opinion", data["reviewer"]) if data["reviewer"] else ("", "", "")
+            tool, model, effort = self.role_choice(data["stage"] + "_review", data["tool"], project=project, roles=data.get("roles"))
+            reviewer, r_model, r_effort = self.role_choice(data["stage"] + "_second_opinion", data["reviewer"], project=project, roles=data.get("roles")) if data["reviewer"] else ("", "", "")
             handle = conversation.start_assessment(self.server.conversation, project, tool,
                                                    data["stage"], reviewer, data["iterate"], model=model, effort=effort,
                                                    reviewer_model=r_model, reviewer_effort=r_effort)
@@ -878,7 +904,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/repair":
             # Request repairs: the remembered AI-can-fix findings go to the
             # step-3 tool as one ordinary work turn on the same stage.
-            shape(data, ["id", "stage", "tool"])
+            shape(data, ["id", "stage", "tool"], ["roles"])
             strings(data, ["stage", "tool"])
             if data["stage"] not in conversation.REVIEW_STAGES:
                 raise ProjectError("Repairs run in the Specification and Plan workspaces.")
@@ -902,7 +928,7 @@ class Handler(BaseHTTPRequestHandler):
                            "everything else unchanged. Findings that need the user's input are shown "
                            "separately and are not yours to decide.\n\n" +
                            "\n".join(f"- {finding}" for finding in findings))
-            tool, model, effort = self.role_choice(run_module.STAGE_ROLE[data["stage"]], data["tool"])
+            tool, model, effort = self.role_choice(run_module.STAGE_ROLE[data["stage"]], data["tool"], project=project, roles=data.get("roles"))
             handle = conversation.start_turn(self.server.conversation, project, tool, data["stage"],
                                              instruction, [], [], model=model, effort=effort)
             return {"turn": handle.turn, "operation": handle.snapshot(), "images": []}
@@ -911,7 +937,7 @@ class Handler(BaseHTTPRequestHandler):
             # request through the existing builders, then starts the next
             # stage's in-app turn; Copy prepares, saves and returns the text;
             # Terminal opens the saved request in the tool's own window.
-            shape(data, ["id", "step", "action", "tool", "text"], ["files", "images", "verifier", "upstream"])
+            shape(data, ["id", "step", "action", "tool", "text"], ["files", "images", "verifier", "upstream", "roles"])
             strings(data, ["step", "action", "tool", "text"])
             if data["step"] not in {"create-plan", "implement-plan", "result", "verification", "correction"}:
                 raise ProjectError("Unknown handoff step.")
@@ -919,8 +945,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ProjectError("Unknown delivery action.")
             role = {"create-plan": "planning", "implement-plan": "implementation", "result": "implementation",
                     "verification": "verification", "correction": "correction"}[data["step"]]
-            saved_choice = (self.server.preferences().get("role_defaults") or {}).get(role) or {}
-            tool, model, effort = self.role_choice(role, saved_choice.get("tool") or data["tool"])
+            tool, model, effort = self.role_choice(role, data["tool"], project=project, roles=data.get("roles"))
             data = {**data, "tool": tool}
             if data["action"] == "send" and data["tool"] not in run_module.CONVERSATION_PEERS:
                 raise ProjectError(f"{TOOL_LABELS.get(data['tool'], (data['tool'],))[0]} cannot exchange turns in-app; use Open in Terminal or Copy request.")
@@ -944,8 +969,8 @@ class Handler(BaseHTTPRequestHandler):
             purpose = "implement-plan" if data["step"] == "implement-plan" else None
             destination = TOOL_LABELS[data["tool"]][0] if data["tool"] in TOOL_LABELS else data["tool"] or "External AI chat"
             extra = []
-            if data["step"] in {"implement-plan", "correction"}:
-                reviewer, r_model, r_effort = self.role_choice("review")
+            if data["action"] != "copy" and data["step"] in {"implement-plan", "correction"}:
+                reviewer, r_model, r_effort = self.role_choice("review", project=project, roles=data.get("roles"))
                 extra.append(run_module.implementation_direction(tool, model, effort, reviewer or tool, r_model, r_effort))
             if data["step"] == "correction":
                 report = project.material("Verification Report")
@@ -969,7 +994,7 @@ class Handler(BaseHTTPRequestHandler):
             supplied_documents = project.approve_transition(data["step"], data.get("upstream"))
             packet = run_module.step_request(project, data["step"], data["text"], destination, files,
                                              data.get("verifier", ""), extra, supplied_documents=supplied_documents,
-                                             model=model, effort=effort)
+                                             model=model, effort=effort, portable=data["action"] == "copy")
             # A new one-click delivery deliberately replaces the prior saved
             # request of the same kind; a change between reading and writing
             # still preserves the prior file and reports the conflict.
@@ -1004,13 +1029,14 @@ class Handler(BaseHTTPRequestHandler):
             if self.server.stopping:
                 raise ProjectError("Vibe is closing after Stop; the run did not start. Your brief is retained in this page.")
             preferences = self.server.preferences()
-            defaults = preferences.get("role_defaults") if isinstance(preferences.get("role_defaults"), dict) else {}
+            defaults = self.role_defaults(project)
             step3_tool = data.get("tool") if isinstance(data.get("tool"), str) else ""
             if not step3_tool or step3_tool not in conversation.PEERS:
                 raise ProjectError("Choose the step-3 coding tool for the active stage before starting a run.")
+            project_config = (preferences.get("project_defaults") or {}).get(str(project.root), {})
             run_config = {"roles": validated_roles(config.get("roles", {})),
-                          "best_guess": bool(config.get("best_guess", preferences.get("best_guess", False))),
-                          "hide_advisory": bool(config.get("hide_advisory", preferences.get("hide_advisory", False) or preferences.get("warn_skip_review") is False))}
+                          "best_guess": bool(config.get("best_guess", project_config.get("best_guess", preferences.get("best_guess", False)))),
+                          "hide_advisory": bool(config.get("hide_advisory", project_config.get("hide_advisory", preferences.get("hide_advisory", False) or preferences.get("warn_skip_review") is False)))}
             # Refuse for content reasons only when there is literally nothing
             # to build: no brief, no filled-in documents, no conversation.
             brief = data["text"].strip()
@@ -1082,18 +1108,16 @@ class Handler(BaseHTTPRequestHandler):
             pictures = driver.pending_pictures()
             extra = ([f"Brief pictures not included: {', '.join(pictures)}. A copy cannot carry pictures; "
                       "supply them through a route that can, if the work needs them."] if pictures else [])
-            if driver.step in {"build", "correction"}:
-                reviewer, r_model, r_effort, _origin = driver.assignment("review")
-                extra.append(run_module.implementation_direction(tool, model, effort, reviewer, r_model, r_effort))
             supplied_documents = project.approve_transition(driver.step)
-            packet = run_module.step_request(project, driver.step, driver.pending_brief(), destination, extra=extra,
-                                             supplied_documents=supplied_documents, model=model, effort=effort)
+            packet = run_module.step_request(project, driver.step, driver.pending_brief(), destination,
+                                             driver.pending_files(), extra=extra,
+                                             supplied_documents=supplied_documents, portable=True)
             purpose = "implement-plan" if driver.step == "build" else None
             project.save_packet(packet, purpose, expected=project.handoff_text(purpose))
             return {"text": packet, "path": str(project.packet_path("implement-plan" if driver.step == "build" else None)),
                     "pictures": pictures}
         fields = ["id", "stage", "input", "destination", "context"]
-        shape(data, fields, ["expected", "upstream"])
+        shape(data, fields, ["expected", "upstream", "roles"])
         strings(data, ["stage", "input", "destination"])
         if data["stage"] not in STAGES:
             raise ProjectError("Select one of the supported stages.")
@@ -1107,20 +1131,21 @@ class Handler(BaseHTTPRequestHandler):
                 or any(not isinstance(item, str) or not item for item in material)):
             raise ProjectError("Invalid selected material.")
         supplied_documents = project.approve_transition(data["stage"], data.get("upstream")) if path == "/api/prepare" and data["stage"] in {"create-plan", "implement-plan"} else {}
+        portable = path != "/api/prepare"
         role = {"create-plan": "planning", "implement-plan": "implementation",
                 "review-specification": "specification_review", "review-plan": "planning_review"}.get(
                     data["stage"], run_module.STAGE_ROLE.get(data["stage"]))
         selected = next((key for key, (label, _) in TOOL_LABELS.items() if data["destination"] in {key, label}), "")
-        _tool, model, effort = self.role_choice(role, selected) if role and selected else ("", "", "")
+        tool, model, effort = self.role_choice(role, selected, project=project, roles=data.get("roles")) if role and selected and not portable else ("", "", "")
         application_instructions = ""
-        if data["stage"] == "programming":
-            reviewer, r_model, r_effort = self.role_choice("review")
+        if not portable and data["stage"] == "programming":
+            reviewer, r_model, r_effort = self.role_choice("review", project=project, roles=data.get("roles"))
             application_instructions = run_module.implementation_direction(
-                _tool or data["destination"], model, effort, reviewer or _tool or data["destination"],
+                tool or data["destination"], model, effort, reviewer or tool or data["destination"],
                 r_model, r_effort, conditional=True)
         payload = prepare_request(project, data["stage"], data["input"], data["destination"], material,
                                   supplied_documents=supplied_documents, model=model, effort=effort,
-                                  application_instructions=application_instructions)
+                                  application_instructions=application_instructions, portable=portable)
         if path == "/api/prepare":
             project.save_packet(payload, data["stage"], expected=data.get("expected"))
             return {"text": payload, "path": str(project.packet_path(data["stage"])), "file_state": conversation.document_fingerprint(project)}
