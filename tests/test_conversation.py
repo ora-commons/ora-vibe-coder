@@ -65,6 +65,8 @@ def main():
     run.add_argument("--note-ref")
     run.add_argument("--purpose")
     run.add_argument("--work-permission")
+    run.add_argument("--model")
+    run.add_argument("--effort")
     check = sub.add_parser("check")
     check.add_argument("--peer", required=True)
     check.add_argument("--mode")
@@ -1613,7 +1615,7 @@ class Reliability(ConversationCase):
                        evaluate=("partial",), changelog="Named the import format.", fail_evaluate=False,
                        stage="specification", provider_author="", provider_reviewer="",
                        model_author="", author_output=None, evaluator_output=None,
-                       revision_output=None, clarification_output=None):
+                       revision_output=None, clarification_output=None, **choices):
         environment = {
             "VIBE_FAKE_REPLY_PURPOSE_AUTHOR": self.pass_reply(
                 "author", author_output or "Stage: Specification\nVerdict: INCOMPLETE\nBasis: "
@@ -1642,7 +1644,7 @@ class Reliability(ConversationCase):
         if clarification_output is not None:
             environment["VIBE_FAKE_REPLY_PURPOSE_CLARIFY"] = self.pass_reply("clarify", clarification_output)
         with patch.dict(os.environ, environment):
-            handle = conversation.start_assessment(self.registry, project, tool, stage, reviewer, iterate)
+            handle = conversation.start_assessment(self.registry, project, tool, stage, reviewer, iterate, **choices)
             self.assertTrue(handle.done.wait(timeout=30), "the reliability worker did not finish")
         return handle
 
@@ -2082,7 +2084,15 @@ class Reliability(ConversationCase):
         project = self.project()
         (project.root / "Plan.md").write_text(
             "# Plan\n\n## Approach\n\nOne executable approach.\n", encoding="utf-8")
-        self.second_opinion(project, tool="codex", reviewer="claude", stage="planning")
+        observed = []
+        original_run = conversation._bridge_run
+        def capture(handle, session, arguments, body, **choices):
+            observed.append(((handle.model if choices.get("model") is None else choices["model"]), (handle.effort if choices.get("effort") is None else choices["effort"])))
+            return original_run(handle, session, arguments, body, **choices)
+        with patch.object(conversation, "_bridge_run", side_effect=capture):
+            self.second_opinion(project, tool="codex", reviewer="claude", stage="planning",
+                                model="primary-choice", effort="high", reviewer_model="peer-choice", reviewer_effort="low")
+        self.assertEqual(observed, [("primary-choice", "high"), ("peer-choice", "low"), ("primary-choice", "high")])
         folders = conversation.turn_folders(project)
         self.assertEqual(len(folders), 3)  # The Plan workspace runs end to end.
         author = conversation.parse_message(

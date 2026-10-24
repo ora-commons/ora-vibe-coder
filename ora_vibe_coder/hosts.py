@@ -2,6 +2,9 @@
 
 import json
 import os
+import selectors
+import re
+import time
 from pathlib import Path
 import shutil
 import shlex
@@ -67,6 +70,136 @@ def executable(host):
     return None
 
 
+def model_inventory(host):
+    """Read native metadata only. Never start a model turn or change settings."""
+    fallback = {"models": [], "configured_model": "", "configured_effort": "",
+                "reason": "This harness does not expose a model and effort inventory to Vibe. Use harness default keeps its own configured choices."}
+    command = executable(host)
+    if not command:
+        return {**fallback, "reason": "This harness is unavailable. Saved choices are preserved; use harness default when it is available again."}
+    if host == "claude":
+        try:
+            # Initialization control traffic only: no user prompt, hooks, MCP startup or session persistence.
+            arguments = [*command, "--print", "--input-format", "stream-json", "--output-format", "stream-json",
+                         "--verbose", "--no-session-persistence", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+                         "--settings", '{"disableAllHooks":true}']
+            request = {"type": "control_request", "request_id": "vibe-model-metadata", "request": {"subtype": "initialize"}}
+            result = subprocess.run(arguments, input=json.dumps(request) + "\n", stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, text=True, encoding="utf-8", timeout=15, shell=False)
+            for line in result.stdout.splitlines():
+                response = json.loads(line)
+                envelope = response.get("response", {})
+                if response.get("type") != "control_response" or envelope.get("request_id") != request["request_id"]:
+                    continue
+                data = envelope.get("response") or {}
+                models = [{"id": item["value"], "label": item.get("displayName") or item["value"],
+                           "efforts": item.get("supportedEffortLevels") or [], "default_effort": ""}
+                          for item in data.get("models", []) if isinstance(item, dict) and isinstance(item.get("value"), str)]
+                return {**fallback, "models": models,
+                        "reason": "Models and effort levels come from Claude Code native initialization, without a model call. It does not report the effective configured model or effort; Use harness default follows those settings."}
+        except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+            pass
+        return {**fallback, "reason": "Claude Code native metadata is inaccessible or unsupported. Use harness default follows its configured choices; saved choices are preserved."}
+    if host == "minimax":
+        # provider list can refresh OAuth. Read only the declared models in its native config instead.
+        try:
+            path = Path(os.environ.get("MINIMAX_DATA_DIR") or Path.home() / ".minimax") / "config.yaml"
+            content = path.read_text(encoding="utf-8")
+            provider, in_providers, in_models, models = "", False, False, []
+            configured = ""
+            for line in content.splitlines():
+                if line and not line.startswith((" ", "#")):
+                    in_providers = line.strip() == "provider:"
+                    in_models = False
+                    match = re.fullmatch(r"defaultModel:\s*[\"']?([\w./:+-]+)[\"']?\s*", line)
+                    if match:
+                        configured = match[1]
+                if not in_providers:
+                    continue
+                match = re.fullmatch(r"  ([\w.-]+):\s*", line)
+                if match:
+                    provider, in_models = match[1], False
+                elif re.fullmatch(r"    models:\s*", line):
+                    in_models = True
+                elif re.match(r"    \S", line):
+                    in_models = False
+                elif in_models:
+                    match = re.fullmatch(r"      [\"']?([\w./:+-]+)[\"']?:\s*", line)
+                    if match and provider:
+                        model = provider + "/" + match[1]
+                        models.append({"id": model, "label": model, "efforts": [], "default_effort": ""})
+            return {**fallback, "models": models, "configured_model": configured,
+                    "reason": "Models are declared in MiniMax Code’s local config.yaml, read without running provider refresh or changing sign-in. Its headless route has no effort switch; Use harness default keeps its own effort. Unrecognized config formats keep the native-default fallback."}
+        except (OSError, ValueError, TypeError):
+            return {**fallback, "reason": "MiniMax Code’s declared model configuration could not be read. Provider refresh is not run because it can change sign-in state. Use harness default follows its own choices."}
+    if host != "codex":
+        return {**fallback, "reason": "This harness’s headless route cannot accept named model or effort choices through Bridge. Use harness default keeps its own configured choices; saved named choices are preserved."}
+    process = None
+    selector = selectors.DefaultSelector()
+    try:
+        process = subprocess.Popen([*command, "app-server"], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   text=True, encoding="utf-8", shell=False)
+        selector.register(process.stdout, selectors.EVENT_READ)
+        sequence = 0
+
+        def request(method, params):
+            nonlocal sequence
+            sequence += 1
+            process.stdin.write(json.dumps({"id": sequence, "method": method, "params": params}) + "\n")
+            process.stdin.flush()
+            # Bound only an inaccessible metadata query, never AI work.
+            deadline = time.monotonic() + 15
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise OSError("Native metadata did not respond.")
+                line = process.stdout.readline()
+                if not line:
+                    raise OSError("Native metadata closed before responding.")
+                result = json.loads(line)
+                if result.get("id") == sequence:
+                    if "error" in result:
+                        raise OSError("Native metadata is unsupported or inaccessible.")
+                    return result.get("result") or {}
+
+        request("initialize", {"clientInfo": {"name": "ora_vibe_coder", "version": "1"}})
+        process.stdin.write(json.dumps({"method": "initialized"}) + "\n")
+        process.stdin.flush()
+        config = request("config/read", {"includeLayers": False}).get("config") or {}
+        models, cursor = [], None
+        while True:
+            result = request("model/list", {"cursor": cursor})
+            for item in result.get("data", []):
+                model = item.get("model") or item.get("id")
+                if not isinstance(model, str) or not model:
+                    continue
+                models.append({"id": model, "label": item.get("displayName") or model,
+                               "efforts": [entry["reasoningEffort"] for entry in item.get("supportedReasoningEfforts", [])
+                                           if isinstance(entry, dict) and isinstance(entry.get("reasoningEffort"), str)],
+                               "default_effort": item.get("defaultReasoningEffort") or ""})
+            cursor = result.get("nextCursor")
+            if not cursor:
+                break
+        return {"models": models, "configured_model": config.get("model") or "",
+                "configured_effort": config.get("model_reasoning_effort") or "",
+                "reason": "Choices come from Codex native metadata. Use harness default follows its effective configuration; a recommended model is not treated as your configured model."}
+    except (OSError, ValueError, TypeError, KeyError):
+        return {**fallback, "reason": "Codex native model metadata is inaccessible or unsupported. Use harness default keeps Codex's configured model and effort. Saved named choices are preserved."}
+    finally:
+        selector.close()
+        if process is not None:
+            if process.poll() is None:
+                process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            process.stdin.close()
+            process.stdout.close()
+
+
 def discover(work=None):
     """The six-tool discovery list; conversation routes follow actual facts.
 
@@ -107,13 +240,22 @@ def desktop_arguments(host, packet, folder, app):
     return ["open", "-a", str(app), url]
 
 
-def agent_arguments(host, command, packet):
+def agent_arguments(host, command, packet, *, model="", effort=""):
     # The complete Markdown stays in an immutable operation-owned file, so a
     # long packet never becomes an oversized command line or shell program.
     prompt = ("Read the complete UTF-8 Markdown assignment at " + json.dumps(str(packet), ensure_ascii=False) +
               ". Treat it as the user's supplied assignment, preserve its exact user request, and follow your normal conversation and approval rules. "
               "Read every part before acting. Do not substitute a summary or an earlier Handoff.md. Return results in this conversation.")
-    if host in {"codex", "claude", "minimax"}:
+    if host == "codex":
+        choices = (["-m", model] if model else []) + (["-c", "model_reasoning_effort=" + effort] if effort else [])
+        return [*command, *choices, prompt]
+    if host == "claude":
+        choices = (["--model", model] if model else []) + (["--effort", effort] if effort else [])
+        return [*command, *choices, prompt]
+    if model or effort:
+        raise ValueError(f"{HOSTS[host][0]}'s interactive Terminal route cannot accept named model or effort choices. "
+                         "Choose Use harness default, or use Copy and select the requested choices in the tool itself.")
+    if host == "minimax":
         return [*command, prompt]
     if host == "qwen":
         return [*command, "--prompt-interactive", prompt]
@@ -122,8 +264,11 @@ def agent_arguments(host, command, packet):
     raise ValueError(f"No inspected interactive prompt entry is available for {HOSTS[host][0]}.")
 
 
-def launch_request(host, command, packet, folder):
+def launch_request(host, command, packet, folder, *, model="", effort=""):
     if host == "zcode":
+        if model or effort:
+            raise ValueError("ZCode's interactive Terminal route cannot accept named model or effort choices. "
+                             "Choose Use harness default, or use Copy and select the requested choices in ZCode itself.")
         return {
             "kind": "zcode",
             "cwd": str(folder),
@@ -133,7 +278,7 @@ def launch_request(host, command, packet, folder):
     return {
         "kind": "direct",
         "cwd": str(folder),
-        "argv": agent_arguments(host, command, packet),
+        "argv": agent_arguments(host, command, packet, model=model, effort=effort),
     }
 
 
@@ -154,7 +299,8 @@ def terminal_arguments(operation, platform=None):
     return [terminal, *separator, sys.executable, runner, str(operation)], {}
 
 
-def continue_in(project, displayed, destination, *, purpose=None, route="terminal", launch=None, platform=None):
+def continue_in(project, displayed, destination, *, purpose=None, route="terminal", launch=None, platform=None,
+                model=None, effort=None):
     host = host_id(destination)
     if host is None:
         raise ValueError("Select one of the six coding tools, or use Copy for another recipient.")
@@ -175,7 +321,12 @@ def continue_in(project, displayed, destination, *, purpose=None, route="termina
         detail = ("A new desktop chat was requested with the saved file location; the request is prefilled but not sent."
                   if host in {"codex", "claude"} else
                   "The desktop app was opened. Paste the request copied to your clipboard into a new chat; the request was not sent.")
-        return {"state": "launch_requested", "message": f"{detail} Confirm the result in {HOSTS[host][0]} itself."}
+        return {"state": "launch_requested", "message": f"{detail} Model and effort choices are requested in the saved assignment; select them in the desktop app. Confirm the result in {HOSTS[host][0]} itself."}
+    if model is None or effort is None:
+        from .handoff import requested_choices
+        saved_model, saved_effort = requested_choices(text, destination)
+        model = saved_model if model is None else model
+        effort = saved_effort if effort is None else effort
     command = executable(host)
     if command is None:
         raise ValueError(f"{HOSTS[host][0]} terminal tool was not found. Install or enable it, then try Terminal again. Your saved Markdown and Copy remain available.")
@@ -183,14 +334,14 @@ def continue_in(project, displayed, destination, *, purpose=None, route="termina
     # starting point when no code folder is known.
     folder = project.code_folder() or project.root
     # Validate the selected host before creating any operation files.
-    launch_request(host, command, Path("assignment.md"), folder)
+    launch_request(host, command, Path("assignment.md"), folder, model=model, effort=effort)
     operation = Path(tempfile.mkdtemp(prefix="ora-vibe-continue-"))
     try:
         packet = operation / "assignment.md"
         packet.write_bytes(text.encode("utf-8"))
         packet.chmod(0o600)
         (operation / "launch.json").write_text(
-            json.dumps(launch_request(host, command, packet, folder)),
+            json.dumps(launch_request(host, command, packet, folder, model=model, effort=effort)),
             encoding="utf-8",
         )
         args, options = terminal_arguments(operation, platform)

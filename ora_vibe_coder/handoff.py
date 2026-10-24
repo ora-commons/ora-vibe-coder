@@ -124,6 +124,22 @@ def stated_code_location(text):
     return match.group(1).strip()
 
 
+def requested_choices(text, destination):
+    """Read only the generated trailing choice snapshot, never quoted inputs."""
+    marker = "\n\nRequested harness choices (not verified): "
+    _body, found, raw = (text or "").rpartition(marker)
+    if not found:
+        return "", ""
+    try:
+        choice = json.loads(raw)
+    except ValueError as error:
+        raise ProjectError("The saved request's harness choices are unreadable. Prepare Again before Terminal delivery.") from error
+    if (not isinstance(choice, dict) or choice.get("harness") != destination
+            or any(not isinstance(choice.get(key), str) for key in ("model", "effort"))):
+        raise ProjectError("The saved request's harness choices do not match this recipient. Prepare Again before Terminal delivery.")
+    return choice["model"], choice["effort"]
+
+
 def loop_resources(stage, destination):
     """Return exact generated Loop context for one selected host."""
     if stage not in {"programming", "guided", "implement-plan"}:
@@ -226,7 +242,8 @@ def revision_destination(project, stage_role, discovery):
             "Do not overwrite an unrelated file; ask the user if that name is already taken by other content.")
 
 
-def prepare_request(project, stage, user_input, destination, material=None, supplied_documents=None):
+def prepare_request(project, stage, user_input, destination, material=None, supplied_documents=None, model="", effort="",
+                    application_instructions=""):
     if stage not in STAGES or not destination.strip():
         raise ProjectError("Select a stage and name the receiving harness.")
     material = list(material or [])
@@ -239,6 +256,8 @@ def prepare_request(project, stage, user_input, destination, material=None, supp
              f"Selected stage: {STAGES[stage]}\n\nCanonical source: Ora Vibe Coder {version}, packaged frameworks and shared contract.\n\n"
              f"Prepared purpose: {PURPOSES[stage]}\n\n"
              + framework_text(stage, destination)]
+    if application_instructions:
+        parts.append("## Selected implementation choices\n\n" + application_instructions)
     if stage == "guided":
         parts.append("All four stage frameworks above are available in full. Apply only the selected next stage's method when the user chooses it; every stage remains available to the user at any time.")
     code_folder = project.code_folder(brief)
@@ -382,4 +401,12 @@ def prepare_request(project, stage, user_input, destination, material=None, supp
                  "delivery and cleanup state, and any genuinely required user decision. A completed draft or review assignment does not establish larger-project completion.\n\n" +
                  "Work from this disclosed basis, identify consequential gaps, and save permitted results into real project artifacts. Prior labels and reports are not proof. "
                  "This is a prepared snapshot: later source changes require Prepare Again. No model has been called and no text has been delivered by the application.")
+    # Keep the exact choices in the existing portable snapshot. The trailing
+    # position distinguishes this metadata from arbitrary quoted project text.
+    # Empty names deliberately retain the native defaults; these are requests,
+    # never evidence about the model that eventually answers.
+    parts.append("An empty requested model or effort means Use harness default. For Desktop or manual Copy, "
+                 "select any named choices in the receiving tool; this packet cannot confirm what model answers.")
+    parts.append("Requested harness choices (not verified): " + json.dumps(
+        {"harness": destination, "model": model, "effort": effort}, ensure_ascii=False))
     return "\n\n".join(parts) + "\n"

@@ -16,6 +16,7 @@ import urllib.request
 from . import conversation
 from . import run as run_module
 from .handoff import PLUGIN, STAGES, prepare_request, stated_code_location
+from .hosts import model_inventory
 from .hosts import HOSTS as TOOL_LABELS, continue_in, discover
 from .launcher import Settings, documents_location
 from .project import Conflict, ProjectError, ProjectStore, ROLES, atomic_write, not_started, read_text
@@ -102,7 +103,7 @@ def strings(data, keys):
 def validated_roles(values):
     """Role defaults: each role a tool plus optional model and effort strings."""
     if not isinstance(values, dict) or set(values) - set(run_module.ROLE_NAMES):
-        raise ProjectError("Role defaults name the six run roles.")
+        raise ProjectError("Role defaults name the configuration roles.")
     roles = {}
     for role, choice in values.items():
         if choice is None:
@@ -111,6 +112,8 @@ def validated_roles(values):
         if not isinstance(choice, dict) or set(choice) - {"tool", "model", "effort"}:
             raise ProjectError(f"Invalid defaults for the {run_module.ROLE_NAMES[role]} role.")
         tool = choice.get("tool", "")
+        if not isinstance(tool, str):
+            raise ProjectError("Expected a harness choice.")
         if tool and tool not in conversation.PEERS:
             raise ProjectError(f"Unknown coding tool for the {run_module.ROLE_NAMES[role]} role.")
         for key in ("model", "effort"):
@@ -455,6 +458,25 @@ class Handler(BaseHTTPRequestHandler):
         work = {facts.get("peer"): facts.get("work") for facts in peers} if peers is not None else None
         return discover(work)
 
+    def role_choice(self, role, tool=""):
+        """A deliberate stage picker overrides the harness, retaining matching defaults."""
+        preferences = self.server.preferences()
+        defaults = preferences.get("role_defaults") or {}
+        choice = defaults.get(role) or {}
+        selected = tool or choice.get("tool") or ""
+        if selected == choice.get("tool"):
+            return selected, choice.get("model", ""), choice.get("effort", "")
+        return selected, "", ""
+
+    def app_settings(self):
+        preferences = self.server.preferences()
+        roles = preferences.get("role_defaults") if isinstance(preferences.get("role_defaults"), dict) else {}
+        return {"warn_skip_review": preferences.get("warn_skip_review", True),
+                "best_guess": preferences.get("best_guess", False),
+                "hide_advisory": preferences.get("hide_advisory", False),
+                "role_defaults": {role: roles.get(role, {}) for role in run_module.ROLE_NAMES},
+                "settings_path": str(self.server.settings.path) if self.server.settings else ""}
+
     def action(self, data):
         path = self.path
         if path == "/api/setup":
@@ -472,9 +494,7 @@ class Handler(BaseHTTPRequestHandler):
                     "last_workspace": preferences.get("last_workspace", ""),
                     "split_orientation": preferences.get("split_orientation", "split"),
                     "split_fraction": preferences.get("split_fraction", 0.42),
-                    "app_settings": {"warn_skip_review": preferences.get("warn_skip_review", True),
-                                     "spending": preferences.get("spending", ""),
-                                     "role_defaults": {role: roles.get(role, {}) for role in run_module.ROLE_NAMES}},
+                    "app_settings": self.app_settings(),
                     "version": (PLUGIN / "VERSION").read_text(encoding="utf-8").strip(),
                     "hosts": self.host_discovery(), "installation": self.server.install_home is not None}
         if path == "/api/install":
@@ -599,31 +619,29 @@ class Handler(BaseHTTPRequestHandler):
             preferences = self.server.preferences()
             return {"split_orientation": preferences.get("split_orientation", "split"),
                     "split_fraction": preferences.get("split_fraction", 0.42)}
+        if path == "/api/harness-models":
+            shape(data, ["tool"])
+            strings(data, ["tool"])
+            if data["tool"] not in TOOL_LABELS:
+                raise ProjectError("Select a supported harness.")
+            return model_inventory(data["tool"])
         if path == "/api/settings":
-            # Settings holds the skip-review warning switch, the role defaults
-            # and the spending preference, persisted in the existing
-            # settings.json through Settings; nothing else is stored.
-            shape(data, [], ["warn_skip_review", "spending", "role_defaults"])
+            shape(data, [], ["warn_skip_review", "best_guess", "hide_advisory", "role_defaults"])
             updates = {}
-            if "warn_skip_review" in data:
-                if not isinstance(data["warn_skip_review"], bool):
-                    raise ProjectError("Expected the warning switch state.")
-                updates["warn_skip_review"] = data["warn_skip_review"]
-            if "spending" in data:
-                if not isinstance(data["spending"], str):
-                    raise ProjectError("Expected the spending preference.")
-                updates["spending"] = data["spending"]
+            for key in ("warn_skip_review", "best_guess", "hide_advisory"):
+                if key in data:
+                    if not isinstance(data[key], bool):
+                        raise ProjectError("Expected a checkbox selection.")
+                    updates[key] = data[key]
             if "role_defaults" in data:
                 updates["role_defaults"] = validated_roles(data["role_defaults"])
             if self.server.settings is None:
-                raise ProjectError("Settings are stored by the installed application; this installer does not save them.")
-            if updates:
+                if updates:
+                    raise ProjectError("This workspace has no settings file.")
+            elif updates:
                 self.server.settings.update(**updates)
-            preferences = self.server.preferences()
-            roles = preferences.get("role_defaults") if isinstance(preferences.get("role_defaults"), dict) else {}
-            return {"warn_skip_review": preferences.get("warn_skip_review", True),
-                    "spending": preferences.get("spending", ""),
-                    "role_defaults": {role: roles.get(role, {}) for role in run_module.ROLE_NAMES}}
+            return self.app_settings()
+
         if path == "/api/stop":
             shape(data, [])
             # A deliberate Stop interrupts owned AI work. Files already changed
@@ -734,8 +752,14 @@ class Handler(BaseHTTPRequestHandler):
                 raise ProjectError("A Run to Completion is active in this project, so the composer cannot start a separate turn. Answer the run's pause, or stop the run first.")
             # The submission is validated and saved durably before the bounded
             # worker starts; this handler returns as soon as dispatch begins.
-            handle = conversation.start_turn(self.server.conversation, project, data["tool"], data["stage"],
-                                             data["text"], data["images"], data.get("files", []))
+            tool, model, effort = self.role_choice(run_module.STAGE_ROLE.get(data["stage"], "implementation"), data["tool"])
+            application_instructions = ""
+            if data["stage"] == "programming":
+                reviewer, r_model, r_effort = self.role_choice("review", tool if not self.server.preferences().get("role_defaults", {}).get("review", {}).get("tool") else "")
+                application_instructions = run_module.implementation_direction(tool, model, effort, reviewer, r_model, r_effort, conditional=True)
+            handle = conversation.start_turn(self.server.conversation, project, tool, data["stage"],
+                                             data["text"], data["images"], data.get("files", []), model=model, effort=effort,
+                                             application_instructions=application_instructions)
             # The acknowledgement identifies the originating turn and the
             # retained attachment names, so the browser keys the restorable
             # draft to this project and can redeliver originals same-origin.
@@ -759,8 +783,11 @@ class Handler(BaseHTTPRequestHandler):
                 raise ProjectError("Vibe is closing after Stop; no new review run was started.")
             # The author's note is recorded durably before the bounded pipeline
             # starts; this handler returns as soon as dispatch begins.
-            handle = conversation.start_assessment(self.server.conversation, project, data["tool"],
-                                                   data["stage"], data["reviewer"], data["iterate"])
+            tool, model, effort = self.role_choice(data["stage"] + "_review", data["tool"])
+            reviewer, r_model, r_effort = self.role_choice(data["stage"] + "_second_opinion", data["reviewer"]) if data["reviewer"] else ("", "", "")
+            handle = conversation.start_assessment(self.server.conversation, project, tool,
+                                                   data["stage"], reviewer, data["iterate"], model=model, effort=effort,
+                                                   reviewer_model=r_model, reviewer_effort=r_effort)
             return {"turn": handle.turn, "operation": handle.snapshot()}
         if path == "/api/judgment":
             # One remembered read-only judgment when a current record's wording
@@ -875,8 +902,9 @@ class Handler(BaseHTTPRequestHandler):
                            "everything else unchanged. Findings that need the user's input are shown "
                            "separately and are not yours to decide.\n\n" +
                            "\n".join(f"- {finding}" for finding in findings))
-            handle = conversation.start_turn(self.server.conversation, project, data["tool"], data["stage"],
-                                             instruction, [], [])
+            tool, model, effort = self.role_choice(run_module.STAGE_ROLE[data["stage"]], data["tool"])
+            handle = conversation.start_turn(self.server.conversation, project, tool, data["stage"],
+                                             instruction, [], [], model=model, effort=effort)
             return {"turn": handle.turn, "operation": handle.snapshot(), "images": []}
         if path == "/api/deliver":
             # One-click stage handoff: Send prepares and saves the complete
@@ -889,6 +917,11 @@ class Handler(BaseHTTPRequestHandler):
                 raise ProjectError("Unknown handoff step.")
             if data["action"] not in {"send", "copy", "terminal"}:
                 raise ProjectError("Unknown delivery action.")
+            role = {"create-plan": "planning", "implement-plan": "implementation", "result": "implementation",
+                    "verification": "verification", "correction": "correction"}[data["step"]]
+            saved_choice = (self.server.preferences().get("role_defaults") or {}).get(role) or {}
+            tool, model, effort = self.role_choice(role, saved_choice.get("tool") or data["tool"])
+            data = {**data, "tool": tool}
             if data["action"] == "send" and data["tool"] not in run_module.CONVERSATION_PEERS:
                 raise ProjectError(f"{TOOL_LABELS.get(data['tool'], (data['tool'],))[0]} cannot exchange turns in-app; use Open in Terminal or Copy request.")
             if data["action"] == "send":
@@ -911,6 +944,9 @@ class Handler(BaseHTTPRequestHandler):
             purpose = "implement-plan" if data["step"] == "implement-plan" else None
             destination = TOOL_LABELS[data["tool"]][0] if data["tool"] in TOOL_LABELS else data["tool"] or "External AI chat"
             extra = []
+            if data["step"] in {"implement-plan", "correction"}:
+                reviewer, r_model, r_effort = self.role_choice("review")
+                extra.append(run_module.implementation_direction(tool, model, effort, reviewer or tool, r_model, r_effort))
             if data["step"] == "correction":
                 report = project.material("Verification Report")
                 if report["text"] is not None:
@@ -932,7 +968,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ProjectError("Invalid displayed upstream document.")
             supplied_documents = project.approve_transition(data["step"], data.get("upstream"))
             packet = run_module.step_request(project, data["step"], data["text"], destination, files,
-                                             data.get("verifier", ""), extra, supplied_documents=supplied_documents)
+                                             data.get("verifier", ""), extra, supplied_documents=supplied_documents,
+                                             model=model, effort=effort)
             # A new one-click delivery deliberately replaces the prior saved
             # request of the same kind; a change between reading and writing
             # still preserves the prior file and reports the conflict.
@@ -941,13 +978,14 @@ class Handler(BaseHTTPRequestHandler):
                 return {"text": packet, "path": str(project.packet_path(purpose)),
                         "pictures": [item.get("name", "") for item in images], "file_state": conversation.document_fingerprint(project)}
             if data["action"] == "terminal":
-                return {**continue_in(project, packet, destination, purpose=purpose, route="terminal"),
+                return {**continue_in(project, packet, destination, purpose=purpose, route="terminal",
+                                      model=model, effort=effort),
                         "file_state": conversation.document_fingerprint(project)}
             handle = conversation.start_turn(self.server.conversation, project, data["tool"],
                                              run_module.STEP_STAGE[data["step"]],
                                              run_module.build_input(data["step"], project, data["text"],
                                                                     data.get("verifier", ""), extra),
-                                             images, files, supplied_documents=supplied_documents)
+                                             images, files, model=model, effort=effort, supplied_documents=supplied_documents)
             return {"turn": handle.turn, "operation": handle.snapshot(),
                     "images": list(handle.retained_images), "file_state": conversation.document_fingerprint(project)}
         if path == "/api/run-start":
@@ -970,9 +1008,9 @@ class Handler(BaseHTTPRequestHandler):
             step3_tool = data.get("tool") if isinstance(data.get("tool"), str) else ""
             if not step3_tool or step3_tool not in conversation.PEERS:
                 raise ProjectError("Choose the step-3 coding tool for the active stage before starting a run.")
-            run_config = {"roles": config.get("roles", {}) if isinstance(config.get("roles"), dict) else {},
-                          "best_guess": bool(config.get("best_guess")),
-                          "hide_advisory": bool(config.get("hide_advisory"))}
+            run_config = {"roles": validated_roles(config.get("roles", {})),
+                          "best_guess": bool(config.get("best_guess", preferences.get("best_guess", False))),
+                          "hide_advisory": bool(config.get("hide_advisory", preferences.get("hide_advisory", False) or preferences.get("warn_skip_review") is False))}
             # Refuse for content reasons only when there is literally nothing
             # to build: no brief, no filled-in documents, no conversation.
             brief = data["text"].strip()
@@ -1020,7 +1058,7 @@ class Handler(BaseHTTPRequestHandler):
             driver = self.server.runs.find(project)
             if driver is None:
                 raise ProjectError("No run is active in this project to configure.")
-            roles = config.get("roles", {}) if isinstance(config.get("roles"), dict) else {}
+            roles = validated_roles(config.get("roles", {}))
             driver.configure({"roles": roles, "best_guess": bool(config.get("best_guess")),
                               "hide_advisory": bool(config.get("hide_advisory"))})
             return {"run": driver.status()}
@@ -1033,7 +1071,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ProjectError("No run is active in this project.")
             if not driver.status()["state"].startswith("paused"):
                 raise ProjectError("The run is not paused; its step is running.")
-            tool, _model, _effort, _origin = driver.assignment()
+            tool, model, effort, _origin = driver.assignment()
             destination = TOOL_LABELS.get(tool, (tool,))[0]
             # A paused entry step whose turn never dispatched still owes its
             # AI the brief, so the manual packet carries it; a dispatched
@@ -1044,9 +1082,12 @@ class Handler(BaseHTTPRequestHandler):
             pictures = driver.pending_pictures()
             extra = ([f"Brief pictures not included: {', '.join(pictures)}. A copy cannot carry pictures; "
                       "supply them through a route that can, if the work needs them."] if pictures else [])
+            if driver.step in {"build", "correction"}:
+                reviewer, r_model, r_effort, _origin = driver.assignment("review")
+                extra.append(run_module.implementation_direction(tool, model, effort, reviewer, r_model, r_effort))
             supplied_documents = project.approve_transition(driver.step)
             packet = run_module.step_request(project, driver.step, driver.pending_brief(), destination, extra=extra,
-                                             supplied_documents=supplied_documents)
+                                             supplied_documents=supplied_documents, model=model, effort=effort)
             purpose = "implement-plan" if driver.step == "build" else None
             project.save_packet(packet, purpose, expected=project.handoff_text(purpose))
             return {"text": packet, "path": str(project.packet_path("implement-plan" if driver.step == "build" else None)),
@@ -1066,8 +1107,20 @@ class Handler(BaseHTTPRequestHandler):
                 or any(not isinstance(item, str) or not item for item in material)):
             raise ProjectError("Invalid selected material.")
         supplied_documents = project.approve_transition(data["stage"], data.get("upstream")) if path == "/api/prepare" and data["stage"] in {"create-plan", "implement-plan"} else {}
+        role = {"create-plan": "planning", "implement-plan": "implementation",
+                "review-specification": "specification_review", "review-plan": "planning_review"}.get(
+                    data["stage"], run_module.STAGE_ROLE.get(data["stage"]))
+        selected = next((key for key, (label, _) in TOOL_LABELS.items() if data["destination"] in {key, label}), "")
+        _tool, model, effort = self.role_choice(role, selected) if role and selected else ("", "", "")
+        application_instructions = ""
+        if data["stage"] == "programming":
+            reviewer, r_model, r_effort = self.role_choice("review")
+            application_instructions = run_module.implementation_direction(
+                _tool or data["destination"], model, effort, reviewer or _tool or data["destination"],
+                r_model, r_effort, conditional=True)
         payload = prepare_request(project, data["stage"], data["input"], data["destination"], material,
-                                  supplied_documents=supplied_documents)
+                                  supplied_documents=supplied_documents, model=model, effort=effort,
+                                  application_instructions=application_instructions)
         if path == "/api/prepare":
             project.save_packet(payload, data["stage"], expected=data.get("expected"))
             return {"text": payload, "path": str(project.packet_path(data["stage"])), "file_state": conversation.document_fingerprint(project)}

@@ -31,9 +31,16 @@ CORRECTION = "correction"
 # The peers that can exchange turns in-app; Hermes and Qwen Code have no
 # Bridge work mode, so an unattended run cannot use them for any role.
 CONVERSATION_PEERS = frozenset({"codex", "claude", "zcode", "minimax"})
-ROLE_NAMES = {"specification": "Specification", "planning": "Planning", "review": "Review",
-              "implementation": "Implementation", "verification": "Verification",
-              "correction": "Correction"}
+ROLE_NAMES = {"specification": "Specification", "specification_review": "Specification Review",
+              "specification_second_opinion": "Specification Review Second Opinion",
+              "planning": "Planning", "planning_review": "Planning Review",
+              "planning_second_opinion": "Planning Review Second Opinion",
+              "implementation": "Implementation", "review": "Implementation Review",
+              "verification": "Verification", "correction": "Correction"}
+OPTIONAL_ROLES = frozenset({"specification_second_opinion", "planning_second_opinion"})
+STAGE_ROLE = {"specification": "specification", "planning": "planning", "programming": "implementation",
+              "programming-result": "implementation", "verification": "verification"}
+
 STEP_ROLE = {"specification": "specification", "planning": "planning", "build": "implementation",
              "verification": "verification", "correction": "correction"}
 STEP_STAGE = {"specification": "specification", "planning": "planning", "build": "programming",
@@ -133,7 +140,8 @@ def build_input(step, project, user_text="", verifier=None, extra=()):
     return "\n\n".join(parts)
 
 
-def step_request(project, step, user_text, destination, material=(), verifier=None, extra=(), supplied_documents=None):
+def step_request(project, step, user_text, destination, material=(), verifier=None, extra=(), supplied_documents=None,
+                 model="", effort=""):
     """One complete step request, shared by the manual buttons and the run.
 
     Returns the full prepared packet text. Ordinary requests are saved as
@@ -142,27 +150,33 @@ def step_request(project, step, user_text, destination, material=(), verifier=No
     """
     stage = STEP_STAGE[step]
     return prepare_request(project, stage, build_input(step, project, user_text, verifier, extra),
-                           destination, list(material or []), supplied_documents=supplied_documents)
+                           destination, list(material or []), supplied_documents=supplied_documents,
+                           model=model, effort=effort)
 
 
 # --- Resolving each assignment's tool and model -------------------------------
 
 def resolve_assignment(role, config, entry, step3_tool, defaults):
-    """The four-step resolution order, returning (tool, model, effort, origin).
-
-    1. this run's override; 2. the step-3 selection, for the active stage's own
-    step; 3. the saved role default; 4. the step-3 tool with its own configured
-    model. Unavailable choices are reported as unavailable, never replaced.
-    """
-    override = (config or {}).get("roles", {}).get(role) or {}
-    if override.get("tool"):
-        return override.get("tool", ""), override.get("model", ""), override.get("effort", ""), "run override"
-    if role == ENTRY_STEP_ROLE.get(entry) and step3_tool:
-        return step3_tool, "", "", "step-3 selection"
+    """Run override, saved default, then the selected harness's own defaults."""
+    override = (config or {}).get("roles", {}).get(role)
+    if isinstance(override, dict):
+        if override.get("tool") or role in OPTIONAL_ROLES:
+            return override.get("tool", ""), override.get("model", ""), override.get("effort", ""), "run override"
+        return step3_tool or "", "", "", "run override"
     default = (defaults or {}).get(role) or {}
-    if default.get("tool"):
+    if default.get("tool") or role in OPTIONAL_ROLES:
         return default.get("tool", ""), default.get("model", ""), default.get("effort", ""), "saved default"
-    return step3_tool or "", "", "", "step-3 tool"
+    return step3_tool or "", "", "", "selected harness"
+
+
+def implementation_direction(tool, model, effort, reviewer, r_model, r_effort, *, conditional=False):
+    direction = ("If the user's authorized work uses the bundled Programming Loop, use these selected choices. "
+                 "These choices do not request implementation or require the Loop for an ordinary question. "
+                 if conditional else "Use the bundled Programming Loop as the structured method for this work. ")
+    return (direction +
+            f"Name its executor choice as {model_label(tool, model, effort)}, and its separate fresh "
+            f"reviewer choice as {model_label(reviewer, r_model, r_effort)}; the Loop's own host "
+            "adapters carry those choices to the workers they create.")
 
 
 def model_label(tool, model, effort):
@@ -182,7 +196,7 @@ def unsupported_roles(config, entry, step3_tool, defaults):
     is chosen in Configure Path.
     """
     unsupported = []
-    for role in ROLE_NAMES:
+    for role in {**{STEP_ROLE[step]: "" for step in ROUTE}, "review": "", "correction": ""}:
         tool, _model, _effort, _origin = resolve_assignment(role, config, entry, step3_tool, defaults)
         if tool and tool not in CONVERSATION_PEERS:
             unsupported.append((role, tool))
@@ -486,12 +500,9 @@ class RunDriver:
             return False
         extra = []
         verifier = None
-        if self.step == "build":
+        if self.step in {"build", "correction"}:
             reviewer, r_model, r_effort, _origin = self._assignment_for("review")
-            extra.append("Use the bundled Programming Loop as the structured method for this work. "
-                         f"Name its executor choice as {model_label(tool, model, effort)}, and its separate fresh "
-                         f"reviewer choice as {model_label(reviewer, r_model, r_effort)}; the Loop's own host "
-                         "adapters carry those choices to the workers they create.")
+            extra.append(implementation_direction(tool, model, effort, reviewer, r_model, r_effort))
         if self.step == "verification":
             verifier = TOOL_LABELS.get(tool, (tool,))[0]
             if self.best_report is not None:
@@ -749,6 +760,9 @@ class RunDriver:
             handle = self.handle
             elapsed = time.monotonic() - self.started
             state, step = self.state, self.step
+            config = dict(self.config)
+            effective_roles = {role: dict(zip(("tool", "model", "effort"), self._assignment_for(role)[:3]))
+                               for role in ROLE_NAMES}
         operation = handle.snapshot() if handle is not None else None
         live = operation and operation.get("state") in {"starting", "running"}
         return {"run": self.run, "state": state, "step": step, "entry": self.entry,
@@ -759,7 +773,7 @@ class RunDriver:
                 "model": self.step_requested, "reported_model": self.reported_model,
                 "elapsed_seconds": round(operation.get("elapsed_seconds") if live else elapsed, 1),
                 "last_contact_seconds": operation.get("last_contact_seconds") if live else None,
-                "config": dict(self.config)}
+                "config": config, "effective_roles": effective_roles}
 
 
 class RunRegistry:
@@ -782,7 +796,7 @@ class RunRegistry:
         current = self.find(project)
         if current is not None:
             raise ProjectError("A Run to Completion is already active in this project. Stop it before starting another.")
-        unsupported = unsupported_roles(config.get("roles", {}), entry, step3_tool, defaults)
+        unsupported = unsupported_roles(config, entry, step3_tool, defaults)
         if unsupported:
             role, tool = unsupported[0]
             raise ProjectError(f"{ROLE_NAMES[role]} is assigned to {TOOL_LABELS.get(tool, (tool,))[0]}, "
