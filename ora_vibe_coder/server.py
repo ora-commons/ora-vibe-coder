@@ -33,7 +33,7 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
           "/static/vendor/Quicksand.ttf": ("vendor/Quicksand.ttf", "font/ttf")}
 WORKSPACES = ("specification", "plan", "build")
 RELEASE_LOOKUP_URL = "https://api.github.com/repos/ora-commons/ora-vibe-coder/releases/latest"
-UPDATE_STEPS = ("Download the new release, choose Stop Vibe, open the new release's setup, "
+UPDATE_STEPS = ("Download the new release, choose Quit Vibe in Settings, open the new release's setup, "
                 "and choose Install or update Vibe and selected entries.")
 
 
@@ -274,7 +274,11 @@ class LocalServer(HTTPServer):
         if driver is not None:
             return {"active": driver.status()}
         records = run_module.read_runs(project)
-        return {"active": None, "last": records[-1] if records else None}
+        ended = self.runs.last(project)
+        last = records[-1] if records else None
+        if last and ended and last["run"] == ended.run:
+            last = {**last, **ended.status()}
+        return {"active": None, "last": last}
 
     def aux_report(self, project, purpose, stage, tool, body, remember):
         """A remembered auxiliary answer, a live call, or one fresh call.
@@ -688,7 +692,7 @@ class Handler(BaseHTTPRequestHandler):
         allowed = {"/api/project", "/api/save", "/api/read", "/api/read-file", "/api/approve-reference", "/api/prepare", "/api/preview", "/api/handoff", "/api/copy", "/api/continue",
                    "/api/converse", "/api/turn-state", "/api/conversation", "/api/review",
                    "/api/judgment", "/api/sort-findings", "/api/approve-plan", "/api/approve-document", "/api/materiality", "/api/repair", "/api/deliver",
-                   "/api/project-settings", "/api/run-start", "/api/run-stop", "/api/run-answer", "/api/run-resume", "/api/run-configure", "/api/run-copy"}
+                   "/api/project-settings", "/api/run-start", "/api/run-stop", "/api/run-answer", "/api/run-resume", "/api/run-configure", "/api/run-copy", "/api/action-stop"}
         if path not in allowed:
             raise ProjectError("No such operation; arbitrary file access is not supported.")
         if not isinstance(data, dict) or not isinstance(data.get("id"), str):
@@ -932,7 +936,7 @@ class Handler(BaseHTTPRequestHandler):
                            "\n".join(f"- {finding}" for finding in findings))
             tool, model, effort = self.role_choice(run_module.STAGE_ROLE[data["stage"]], data["tool"], project=project, roles=data.get("roles"))
             handle = conversation.start_turn(self.server.conversation, project, tool, data["stage"],
-                                             instruction, [], [], model=model, effort=effort)
+                                             instruction, [], [], model=model, effort=effort, activity="Correcting")
             return {"turn": handle.turn, "operation": handle.snapshot(), "images": []}
         if path == "/api/deliver":
             # One-click stage handoff: Send prepares and saves the complete
@@ -1007,14 +1011,17 @@ class Handler(BaseHTTPRequestHandler):
             if data["action"] == "terminal":
                 return {**continue_in(project, packet, destination, purpose=purpose, route="terminal",
                                       model=model, effort=effort),
-                        "file_state": conversation.document_fingerprint(project)}
+                        "file_state": conversation.document_fingerprint(project), "text": packet, "path": str(project.packet_path(purpose))}
             handle = conversation.start_turn(self.server.conversation, project, data["tool"],
                                              run_module.STEP_STAGE[data["step"]],
                                              run_module.build_input(data["step"], project, data["text"],
                                                                     data.get("verifier", ""), extra),
-                                             images, files, model=model, effort=effort, supplied_documents=supplied_documents)
+                                             images, files, model=model, effort=effort, supplied_documents=supplied_documents,
+                                             activity={"create-plan": "Creating" if not project.material("Plan")["text"] or not_started(project.material("Plan")["text"]) else "Updating",
+                                                       "implement-plan": "Coding", "result": "Recording", "verification": "Reviewing", "correction": "Correcting"}[data["step"]])
             return {"turn": handle.turn, "operation": handle.snapshot(),
-                    "images": list(handle.retained_images), "file_state": conversation.document_fingerprint(project)}
+                    "images": list(handle.retained_images), "file_state": conversation.document_fingerprint(project),
+                    "text": packet, "path": str(project.packet_path(purpose))}
         if path == "/api/run-start":
             shape(data, ["id", "entry", "text", "images", "files"], ["config", "tool"])
             strings(data, ["entry", "text"])
@@ -1055,9 +1062,23 @@ class Handler(BaseHTTPRequestHandler):
                                             run_config, defaults, step3_tool,
                                             data["images"], data.get("files", []))
             return {"run": driver.status()}
+        if path == "/api/action-stop":
+            shape(data, ["id"])
+            driver = self.server.runs.find(project)
+            if driver is not None:
+                driver.request_stop()
+            with self.server.conversation.lock:
+                handle = self.server.conversation.by_project.get(str(project.root))
+            if handle is not None:
+                self.server.conversation.drain([handle])
+            if driver is not None:
+                driver.done.wait(20)
+            return {**self.server.conversation.report(project), "run": self.server.run_report(project)}
         if path == "/api/run-stop":
             shape(data, ["id"])
             driver = self.server.runs.stop(project)
+            if driver.handle is not None:
+                self.server.conversation.drain([driver.handle])
             driver.done.wait(20)
             return {"run": self.server.run_report(project)}
         if path == "/api/run-answer":
@@ -1117,7 +1138,8 @@ class Handler(BaseHTTPRequestHandler):
             purpose = "implement-plan" if driver.step == "build" else None
             project.save_packet(packet, purpose, expected=project.handoff_text(purpose))
             return {"text": packet, "path": str(project.packet_path("implement-plan" if driver.step == "build" else None)),
-                    "pictures": pictures}
+                    "pictures": pictures, "purpose": "implement-plan" if driver.step == "build" else driver.step,
+                    "destination": destination}
         fields = ["id", "stage", "input", "destination", "context"]
         shape(data, fields, ["expected", "upstream", "roles"])
         strings(data, ["stage", "input", "destination"])

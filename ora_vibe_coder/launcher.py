@@ -86,7 +86,7 @@ class AppLock:
         except OSError as error:
             self.stream.close()
             self.stream = None
-            raise ValueError("Ora Vibe Coder is already running. Use Stop app before updating or removing it.") from error
+            raise ValueError("Ora Vibe Coder is already running. Quit Vibe in Settings before updating or removing it.") from error
         return self
 
     def __exit__(self, *args):

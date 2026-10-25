@@ -134,6 +134,10 @@ def main():
     response = session / "messages" / ("%04d-peer-to-initiator.md" % answer)
     response.write_text("# Message %04d\\nFrom: peer\\nTo: vibe-coder\\nAnswers: %04d\\n\\n## Body\\n\\n"
                         % (answer, sequence) + reply, encoding="utf-8")
+    if directive.get("lost_final"):
+        emit({"event": "finished", "phase": "run", "outcome": "failure",
+              "reason": "temporary service connection lost after saving"})
+        return 1
     if args.events_jsonl:
         finished = {"event": "finished", "phase": "run", "outcome": "success",
                     "request_path": str(request), "response_path": str(response), "warnings": []}
@@ -896,6 +900,10 @@ class RunCase(unittest.TestCase):
         # No replay: nothing restarts the run after its stop.
         time.sleep(0.4)
         self.assertIsNone(self.runs.find(project))
+        self.assertEqual((self.scenario / "directive.count").read_text(), "1")
+        self.assertIn("Filled", (root / "Specification.md").read_text())
+        self.assertFalse(driver.handle.live_children())
+        self.assertFalse(driver.resume())
 
     def test_operational_failure_pauses_and_is_never_a_content_refusal(self):
         project = self.project()
@@ -910,6 +918,135 @@ class RunCase(unittest.TestCase):
         self.assertIn("not signed in", paused["reason"])
         self.assertNotIn("nothing to build", paused["reason"])
         self.assertNotIn("no actionable product brief", paused["reason"])
+        self.assertIn("Inspect the saved files", paused["reason"])
+        self.assertTrue(paused["operation"]["dispatched"])
+        frozen = paused["elapsed_seconds"]
+        self.assertEqual(driver.status()["elapsed_seconds"], frozen)
+        self.assertEqual((self.scenario / "directive.count").read_text(), "2")
+        # A pre-dispatch permission gate remains explicit and starts no model.
+        blocked = self.project("Permission")
+        with mock.patch.object(conversation, "require_work_route", side_effect=ProjectError("Native permission is required.")):
+            second = self.start(blocked)
+            waiting = self.settle(second, lambda state: state["state"] == "paused-failure")
+            self.assertIn("permission", waiting["reason"])
+            self.assertIn("Nothing was dispatched", waiting["reason"])
+            self.assertIsNone(waiting["operation"])
+            self.assertEqual(waiting["elapsed_seconds"], 0)
+            second.request_stop()
+            self.assertTrue(second.done.wait(10))
+
+    def test_transient_failure_recovers_without_replaying_changed_work(self):
+        import errno
+        project = self.project()
+        self.directive(0, reply="Recovered before dispatch.\n")
+        popen = conversation.subprocess.Popen
+        rejected = []
+        def temporarily_unavailable(argv, *args, **kwargs):
+            if "run" in argv and not rejected:
+                rejected.append(list(argv))
+                raise OSError(errno.EAGAIN, "temporarily unavailable")
+            return popen(argv, *args, **kwargs)
+        with mock.patch.object(conversation.subprocess, "Popen", side_effect=temporarily_unavailable):
+            safe = conversation.start_turn(self.registry, project, "codex", "specification", "Create it", [], activity="Creating")
+            self.assertTrue(safe.done.wait(10))
+        self.assertEqual(safe.state, "finished")
+        self.assertEqual(safe.activity, "Creating")
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual((self.scenario / "directive.count").read_text(), "1")
+        # Published responses survive a lost final event: consume, never rerun.
+        saved = project.root / "Programming Result.md"
+        self.directive(1, lost_final=True, reply="Already saved.\n", writes={str(saved): "Saved outcome"})
+        retained = conversation.start_turn(self.registry, project, "codex", "programming-result", "Record result", [])
+        self.assertTrue(retained.done.wait(10))
+        self.assertEqual(retained.state, "finished")
+        self.assertEqual(saved.read_text(), "Saved outcome")
+        self.assertEqual((self.scenario / "directive.count").read_text(), "2")
+        # Code can change outside the project-document fingerprint.
+        code = self.root / "separate-code"
+        code.mkdir()
+        project.save_brief(project.brief_text(), "One", "Description", "Goals", {"Code": str(code)})
+        changed = code / "main.py"
+        self.directive(2, fail=True, reason="temporary service unavailable", writes={str(changed): "consequential change"})
+        project.approve_transition("build")
+        before = {path: path.read_bytes() for path in project.root.glob("*.md")}
+        driver = self.start(project, "build")
+        paused = self.settle(driver, lambda state: state["state"] == "paused-failure")
+        self.assertEqual(changed.read_text(), "consequential change")
+        self.assertEqual({path: path.read_bytes() for path in project.root.glob("*.md")}, before)
+        self.assertEqual((self.scenario / "directive.count").read_text(), "3")
+        self.assertIn("Inspect the saved files", paused["reason"])
+        self.assertFalse(driver.resume())
+        self.assertEqual(changed.read_text(), "consequential change")
+        self.assertEqual((self.scenario / "directive.count").read_text(), "3")
+        driver.request_stop()
+        self.assertTrue(driver.done.wait(10))
+        # Explicitly read-only auxiliary calls can safely retry a transport error.
+        self.directive(3, fail=True, reason="temporary service unavailable")
+        self.directive(4, reply="PASSED\n")
+        auxiliary = conversation.start_aux(self.registry, project, "codex", conversation.PURPOSE_JUDGMENT,
+                                           "specification", "Read-only judgment", {"Key": "transient"})
+        self.assertTrue(auxiliary.done.wait(10))
+        self.assertEqual(auxiliary.state, "finished")
+        self.assertEqual((self.scenario / "directive.count").read_text(), "5")
+        # A repeated action carries its time, but never a prior attempt's
+        # dispatch evidence into a route or admission failure.
+        def cannot_dispatch(argv, *args, **kwargs):
+            if "run" in argv:
+                raise OSError(errno.EACCES, "Native permission is required before dispatch")
+            return popen(argv, *args, **kwargs)
+        for index, failure in enumerate(("route", "admission", "process")):
+            repeated = self.project("Repeat" + failure)
+            self.directive(5 + index * 2, reply=reply_with_questions("Which behavior?"), delay=.1)
+            self.directive(6 + index * 2, reply=reply_with_questions("Any final detail?"), delay=.2)
+            repeat = self.start(repeated)
+            first = self.settle(repeat, lambda state: state["state"] == "paused-question")
+            self.assertTrue(first["operation"]["dispatched"])
+            first_time = first["elapsed_seconds"]
+            self.assertGreater(first_time, 0)
+            target = "require_work_route" if failure == "route" else "start_turn"
+            rejected_attempt = (mock.patch.object(conversation.subprocess, "Popen", side_effect=cannot_dispatch)
+                                if failure == "process" else mock.patch.object(
+                                    conversation, target, side_effect=ProjectError("Temporary pre-dispatch condition.")))
+            with rejected_attempt:
+                repeat.receive_answer("Use the smaller behavior.")
+                blocked = self.settle(repeat, lambda state: state["state"] == "paused-failure")
+                if failure == "process":
+                    self.assertFalse(blocked["operation"]["dispatched"])
+                else:
+                    self.assertIsNone(blocked["operation"])
+                self.assertIn("Nothing was dispatched", blocked["reason"])
+                self.assertNotIn("original step will not repeat", blocked["reason"])
+                self.assertEqual(blocked["elapsed_seconds"], round(first["operation"]["elapsed_seconds"] +
+                    (blocked["operation"]["elapsed_seconds"] if blocked["operation"] else 0), 1))
+                self.assertEqual(repeat.status()["elapsed_seconds"], blocked["elapsed_seconds"])
+                self.assertEqual((self.scenario / "directive.count").read_text(), str(6 + index * 2))
+            self.assertTrue(repeat.resume())
+            resumed = self.settle(repeat, lambda state: state["state"] == "paused-question")
+            self.assertGreater(resumed["elapsed_seconds"], blocked["elapsed_seconds"])
+            self.assertEqual(repeat.status()["elapsed_seconds"], resumed["elapsed_seconds"])
+            self.assertEqual((self.scenario / "directive.count").read_text(), str(7 + index * 2))
+            self.assertIn("Use the smaller behavior.", self.step_requests(repeated)[-1])
+            repeat.request_stop()
+            self.assertTrue(repeat.done.wait(10))
+            self.assertFalse(repeat.resume())
+        # The first admitted turn can fail before dispatch too: the run's
+        # unsent brief remains owed to the first real request.
+        unsent = self.project("Unsent")
+        self.directive(11, reply=reply_with_questions("Which behavior?"))
+        with mock.patch.object(conversation.subprocess, "Popen", side_effect=cannot_dispatch):
+            deferred = self.start(unsent, brief="Preserve this initial brief.")
+            before_dispatch = self.settle(deferred, lambda state: state["state"] == "paused-failure")
+            self.assertFalse(before_dispatch["operation"]["dispatched"])
+            self.assertEqual(deferred.pending_brief(), "Preserve this initial brief.")
+            self.assertEqual((self.scenario / "directive.count").read_text(), "11")
+        self.assertTrue(deferred.resume())
+        self.settle(deferred, lambda state: state["state"] == "paused-question")
+        self.assertIn("Preserve this initial brief.", self.step_requests(unsent)[-1])
+        self.assertEqual(deferred.pending_brief(), "")
+        self.assertEqual((self.scenario / "directive.count").read_text(), "12")
+        deferred.request_stop()
+        self.assertTrue(deferred.done.wait(10))
+
 
     def test_unsupported_role_refused_before_start_with_disclosure(self):
         project = self.project()

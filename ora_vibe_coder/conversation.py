@@ -11,6 +11,7 @@ second transcript, index, or tracker.
 import base64
 import binascii
 import json
+import errno
 import os
 from pathlib import Path
 import re
@@ -193,7 +194,7 @@ def boost_facts():
         if root is None:
             return {"status": "missing", "version": None, "path": None,
                     "reason": "the bundled Ora AI Boost runtime was not found beside this application",
-                    "remedy": "Reinstall Ora Vibe Coder from a complete release, then Recheck."}
+                    "remedy": "Reinstall Ora Vibe Coder from a complete release, then reopen the project and try again."}
         try:
             sys.path.insert(0, str(root))
             try:
@@ -206,7 +207,7 @@ def boost_facts():
         except BaseException as error:  # A facts read must never break a sweep.
             return {"status": "unknown", "version": None, "path": str(root),
                     "reason": f"the bundled Ora AI Boost at {root} could not be read: {error}",
-                    "remedy": "Reinstall Ora Vibe Coder from a complete release, then Recheck."}
+                    "remedy": "Reinstall Ora Vibe Coder from a complete release, then reopen the project and try again."}
         facts["status"] = "ok"
         facts["path"] = str(root)
         facts["reason"] = ""
@@ -225,7 +226,7 @@ def bridge_component_facts():
     except ProjectError as error:
         return {"status": "missing", "version": None, "path": None,
                 "reason": str(error).split(". ", 1)[0].lower(),
-                "remedy": "Reinstall Ora Vibe Coder from a complete release, then Recheck."}
+                "remedy": "Reinstall Ora Vibe Coder from a complete release, then reopen the project and try again."}
     version = None
     try:
         match = re.search(r'^VERSION\s*=\s*"([^"]+)"', (root / "ora_agent_bridge" / "__init__.py").read_text(encoding="utf-8"), re.M)
@@ -235,7 +236,7 @@ def bridge_component_facts():
     if version is None:
         return {"status": "unknown", "version": None, "path": str(root),
                 "reason": f"the bundled Agent Bridge at {root} does not report its version",
-                "remedy": "Reinstall Ora Vibe Coder from a complete release, then Recheck."}
+                "remedy": "Reinstall Ora Vibe Coder from a complete release, then reopen the project and try again."}
     return {"status": "ok", "version": version, "path": str(root), "reason": "", "remedy": ""}
 
 
@@ -300,11 +301,11 @@ def gear_availability(tool, boost=None, bridge=None):
     if boost.get("status") != "ok":
         return {"available": False, "primary": False, "peer": False, "version": boost.get("version"),
                 "reason": boost.get("reason") or "the bundled Ora AI Boost is unavailable",
-                "remedy": boost.get("remedy") or "Reinstall Ora Vibe Coder from a complete release, then Recheck."}
+                "remedy": boost.get("remedy") or "Reinstall Ora Vibe Coder from a complete release, then reopen the project and try again."}
     if bridge.get("status") != "ok":
         return {"available": False, "primary": False, "peer": False, "version": boost.get("version"),
                 "reason": bridge.get("reason") or "the bundled Agent Bridge Boost depends on is unavailable",
-                "remedy": bridge.get("remedy") or "Reinstall Ora Vibe Coder from a complete release, then Recheck."}
+                "remedy": bridge.get("remedy") or "Reinstall Ora Vibe Coder from a complete release, then reopen the project and try again."}
     roles = boost.get("analytical_roles") or {}
     primary = tool in tuple(roles.get("primary") or ())
     peer = tool in tuple(roles.get("peer") or ())
@@ -312,7 +313,7 @@ def gear_availability(tool, boost=None, bridge=None):
         f"the bundled Ora AI Boost defines no analytical role for {TOOL_LABELS[tool][0]}"
     return {"available": primary or peer, "primary": primary, "peer": peer,
             "version": boost.get("version"), "reason": reason,
-            "remedy": "" if not reason else "Recheck after updating the bundled components."}
+            "remedy": "" if not reason else "Reopen the project after updating the bundled components, then try again."}
 
 
 def require_work_route(tool, action="an in-app turn"):
@@ -340,7 +341,7 @@ def require_work_route(tool, action="an in-app turn"):
     reason = checked.get("reason") or "the bundled Agent Bridge did not report this tool's work capability"
     raise ProjectError(
         f"{label} cannot start {action}: its Agent Bridge work compatibility is unknown ({reason}). "
-        "Resolve the readiness reason or reinstall Ora Vibe Coder from a complete release, then Recheck. "
+        "Resolve the readiness reason or reinstall Ora Vibe Coder from a complete release, then reopen the project and try again. "
         "Your input is retained; nothing was sent.")
 
 
@@ -353,7 +354,7 @@ def require_build_route(tool, action="an in-app Build"):
         raise ProjectError(
             f"{action} with {label} needs the bundled Programming Loop's {label} adapter"
             + (f"; {facts.get('reason')}" if facts.get("reason") else ", which is missing from the bundled package")
-            + ". " + (facts.get("remedy") or "Reinstall Ora Vibe Coder from a complete release, then Recheck.")
+            + ". " + (facts.get("remedy") or "Reinstall Ora Vibe Coder from a complete release, then reopen the project and try again.")
             + " Nothing was sent; Copy request can still deliver this step.")
 
 
@@ -410,7 +411,7 @@ def bridge_check(tool, stop_requested=None, work_permission=None):
         # and leaving the previous screen standing.
         return {"peer": tool, "mode": "work", "ready": False, "warnings": [],
                 "reason": str(error).split(". ", 1)[0].lower(),
-                "next_action": "Reinstall Ora Vibe Coder from a complete release, then Recheck."}
+                "next_action": "Reinstall Ora Vibe Coder from a complete release, then reopen the project and try again."}
     try:
         try:
             stdout, stderr = process.communicate(timeout=CHECK_TIMEOUT)
@@ -1265,6 +1266,9 @@ class TurnOperation:
         self.project_root = str(project_root)
         self.tool = tool
         self.stage = stage
+        self.activity = "Reviewing" if stage.startswith(("review-", "judgment-", "sorting-", "materiality-")) or stage == "verification" else "Recording" if stage == "programming-result" else "Coding" if stage == "programming" else "Discussing"
+        self.dispatched = False
+        self.read_only = False
         self.turn = ""
         self.locations = locations
         self.state = "starting"
@@ -1307,6 +1311,7 @@ class TurnOperation:
         self.effort = ""
         self.done = threading.Event()
         self.cancelled = False
+        self.cancel_requested = None
         self.worker = None
         self.artifact_start = None
         self.artifact = None
@@ -1320,7 +1325,7 @@ class TurnOperation:
         """Register one owned Bridge child; an already requested stop ends it."""
         with self.lock:
             self.children.append(process)
-            cancelled = self.cancelled and honor_cancel
+            cancelled = (self.cancelled or bool(self.cancel_requested and self.cancel_requested())) and honor_cancel
         if cancelled:
             try:
                 process.terminate()
@@ -1342,7 +1347,7 @@ class TurnOperation:
 
     def is_cancelled(self):
         with self.lock:
-            return self.cancelled
+            return self.cancelled or bool(self.cancel_requested and self.cancel_requested())
 
     def start_worker(self, target, args, name):
         self.worker = threading.Thread(target=target, args=args, daemon=False, name=name)
@@ -1411,6 +1416,7 @@ class TurnOperation:
             now = time.monotonic()
             return {"project": self.project_root, "tool": self.tool, "stage": self.stage,
                     "turn": self.turn, "state": self.state, "phase": self.phase,
+                    "activity": self.activity, "dispatched": self.dispatched,
                     "started": self.started_wall,
                     "elapsed_seconds": round(self.duration if self.duration is not None else now - self.started, 3),
                     "last_contact_seconds": round(now - self.last_contact, 3),
@@ -1728,7 +1734,7 @@ def _artifact_readback(project, before):
 
 
 def start_turn(registry, project, tool, stage, text, images, files=(), run_fields=None,
-               model="", effort="", supplied_documents=None, application_instructions=""):
+               model="", effort="", supplied_documents=None, application_instructions="", activity="", cancel_requested=None):
     """Validate, save durably, and start one bounded work turn; return promptly."""
     if tool not in PEERS:
         raise ProjectError("Select one of the six supported coding tools.")
@@ -1765,6 +1771,9 @@ def start_turn(registry, project, tool, stage, text, images, files=(), run_field
     code = project.code_folder()
     locations = _turn_locations(project, code, project.reference("Registry"))
     handle = registry.admit(project.root, tool, stage, locations)
+    handle.cancel_requested = cancel_requested
+    if activity:
+        handle.activity = activity
     handle.supplied_documents = supplied_documents or {}
     handle.application_instructions = application_instructions
     handle.artifact_start = _artifact_start(project, stage)
@@ -1793,6 +1802,8 @@ def start_turn(registry, project, tool, stage, text, images, files=(), run_field
             _record_outcome(handle, session, stage, state, NOT_EVALUATED, "", INTERRUPTED_REASON, "")
         handle.finish(state, reason=str(error))
         raise
+    if cancel_requested is not None and cancel_requested():
+        handle.cancel()
     handle.start_worker(_run_turn,
                         (handle, project, folder, session, stage, match[1], attachments, text, selected_files),
                         f"Ora Vibe Coder work turn {folder.name}")
@@ -1822,20 +1833,53 @@ def _bridge_run(handle, session, arguments, body, model=None, effort=None):
         argv += ["--model", requested_model]
     if requested_effort:
         argv += ["--effort", requested_effort]
-    process = subprocess.Popen(argv, cwd=str(bridge_root()), stdin=subprocess.PIPE,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, encoding="utf-8", shell=False,
-                                start_new_session=os.name != "nt")
-    handle.track(process)
-    try:
-        return _read_bridge_run(handle, process, session, body)
-    finally:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=STOP_GRACE)
-            except subprocess.TimeoutExpired:
-                _force_owned_children(handle)
+    # Only retry a failure whose replay is known safe. A spawned work call
+    # may have changed a separate code folder even when its documents did not.
+    before = set((session / "messages").glob("*.md"))
+    retried = False
+    while True:
+        if handle.is_cancelled():
+            raise TurnInterrupted(INTERRUPTED_REASON)
+        process = None
+        try:
+            process = subprocess.Popen(argv, cwd=str(bridge_root()), stdin=subprocess.PIPE,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       text=True, encoding="utf-8", shell=False,
+                                       start_new_session=os.name != "nt")
+            handle.dispatched = True
+            handle.track(process)
+            return _read_bridge_run(handle, process, session, body)
+        except (OSError, ProjectError) as error:
+            if handle.is_cancelled() or isinstance(error, TurnInterrupted):
+                raise TurnInterrupted(INTERRUPTED_REASON) from error
+            # A transport may lose the final event after publishing a reply.
+            # Consume only a response to this invocation's newly saved request.
+            messages = []
+            for path in sorted(set((session / "messages").glob("*.md")) - before):
+                try:
+                    messages.append(parse_message(path))
+                except (OSError, UnicodeDecodeError):
+                    continue
+            requests = {item["sequence"] for item in messages if item["kind"] == "request"}
+            saved = [item for item in messages if item["kind"] == "response"
+                     and any(value in requests for value in item["headers"].get("Answers", []))]
+            if saved:
+                return saved[-1]["body"]
+            temporary = (isinstance(error, OSError) and error.errno in {
+                errno.EAGAIN, errno.EINTR, errno.ETIMEDOUT, errno.ECONNRESET, errno.ENETUNREACH}
+                or bool(re.search(r"temporar|service unavailable|connection reset|timed out|rate limit|\b50[234]\b", str(error), re.I)))
+            if not retried and temporary and (process is None or handle.read_only):
+                retried = True
+                handle.bridge_diagnostics.append("A temporary service failure was retried safely.")
+                continue
+            raise
+        finally:
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=STOP_GRACE)
+                except subprocess.TimeoutExpired:
+                    _force_owned_children(handle)
 
 
 def _read_bridge_run(handle, process, session, body):
@@ -2702,6 +2746,7 @@ def start_aux(registry, project, tool, purpose, stage_key, body, remember):
         raise ProjectError("Select one of the six supported coding tools.")
     locations = _turn_locations(project, project.code_folder(), project.reference("Registry"))
     handle = registry.admit(project.root, tool, f"{purpose}-{stage_key}", locations)
+    handle.read_only = True
     handle.start_worker(_run_aux, (handle, project, tool, purpose, stage_key, body, remember),
                         f"Ora Vibe Coder {purpose} {stage_key}")
     return handle

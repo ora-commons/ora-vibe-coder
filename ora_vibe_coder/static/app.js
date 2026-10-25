@@ -23,13 +23,13 @@ let createUnder = "", parentAutoFill = "", createCode = "", createMaterial = [];
 let lastVisibleInput = null, pendingLocal = Promise.resolve();
 let appSettings = {warn_skip_review: true, best_guess: false, hide_advisory: false, role_defaults: {}};
 let runActive = null, runLast = null, pendingRunConfig = null;
-const notifiedRuns = new Set();
 const judgmentsSeen = new Set(), sortingSeen = new Set();
 const drafts = new Map(), editDrafts = new Map(), materialDrafts = new Map(), messageFileDrafts = new Map(), projectTools = new Map(), buildReplyStages = new Map();
 let filePickerTarget = "project";
 // Conversation, split view, readiness, and the reliability engine.
 let splitMode = "chat", splitFraction = 0.42;
 let conversationTurns = [], reviewRuns = [], attachments = [], conversationLoaded = false;
+let statusNotice = "", statusNoticeKind = "";
 let lastOperation = null, lastFiles = null, pollTimer = null, readinessState = {checking: false, peers: null};
 // The live operation state the last conversation render was drawn under, so
 // a poll redraws an unfinished turn's message only when that state changed.
@@ -64,18 +64,65 @@ const firstSpecificationMessage = "Read the relevant documents already in this p
 // The one status function: every last-action result, warning, and running
 // operation report lands in the header status bar. Nothing else renders status.
 function status(message, kind = "") {
-  const bar = $("status-bar");
-  bar.textContent = message || "";
-  bar.className = kind === "warning" ? "warning" : "";
+  statusNotice = message || "";
+  statusNoticeKind = kind;
   renderStatusActivity();
+}
+function actionStage(stage) {
+  return /specification/.test(stage || "") ? "Specification" : /plan/.test(stage || "") ? "Plan"
+    : /verification/.test(stage || "") ? "Verification" : "Implementation";
+}
+function actionTime(seconds) {
+  const total = Math.max(0, Math.floor(seconds || 0));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 function renderStatusActivity() {
   const bar = $("status-bar");
-  const endedRunTurn = runLast?.steps?.some(step => step.turn === lastOperation?.turn);
-  const active = runActive ? ["starting", "running"].includes(runActive.state)
-    : ["starting", "running"].includes(lastOperation?.state) && !endedRunTurn;
-  bar.classList.toggle("active", active && !contactLost && !stopped && !bar.classList.contains("warning"));
+  const run = runActive || (runLast && (!lastOperation || runLast.steps?.some(step => step.turn === lastOperation.turn)) ? runLast : null);
+  const operation = runActive ? runActive.operation : lastOperation;
+  const state = run?.state || operation?.state;
+  const active = run ? ["starting", "running"].includes(state) : ["starting", "running"].includes(state);
+  const questions = !active && operation?.state === "finished" && conversationTurns.find(turn => turn.turn === operation.turn)?.questions?.length;
+  const waiting = state?.startsWith("paused") || state === "failed" || questions;
+  const notices = operation ? [...new Set([...(operation.visible_warnings || []),
+    ...(operation.warnings || []).filter(item => !(operation.bridge_diagnostics || []).includes(item))])] : [];
+  if (operation?.maintenance && !["applied", "no-change", "none", "judgment", "sorting", "materiality"].includes(operation.maintenance))
+    notices.push(operation.maintenance_reason || "The document update was not saved. Inspect the saved document before continuing.");
+  const ended = ["interrupted", "open", "complete", "unfinished"].includes(state) || run?.stopped;
+  const userStopped = run?.stopped || (state === "unfinished" && /^Stopped by the user\./.test(run?.reason || ""));
+  // A rejected click or a receipt is a notice, not a lifecycle transition.
+  // In particular, work that is still running stays green and stoppable.
+  const needsAttention = !active && !ended && (waiting || notices.length > 0);
+  bar.textContent = statusNotice;
+  if ((operation || run) && !contactLost && !stopped) {
+    const step = run?.step || run?.steps?.at(-1)?.step || "specification";
+    const stage = run ? actionStage({build: "programming", correction: "programming"}[step] || step) : actionStage(operation.stage);
+    const endpoint = needsAttention ? "Waiting" : active ? (run?.activity || operation?.activity || "Discussing")
+      : state === "interrupted" || state === "open" || userStopped ? "Stopped" : "Finished";
+    const elapsed = run?.elapsed_seconds ?? operation?.elapsed_seconds;
+    bar.textContent = [run ? "Run to Completion" : "", stage, endpoint,
+      elapsed == null ? "" : actionTime(elapsed)].filter(Boolean).join(" · ");
+    if (needsAttention) {
+      const reason = [...new Set([run?.reason || operation?.reason,
+        run?.state === "paused-question" || questions ? "Answer the questions in the conversation to continue." : "",
+        ...notices].filter(Boolean))].join(" ");
+      bar.textContent += ` — ${reason || "Resolve the condition, then continue."}`;
+      if (!run && state === "failed") bar.textContent += " Inspect the saved files and response, then use the conversation to request only the remaining work. The action was not repeated.";
+    } else if (run?.state === "unfinished" && endpoint !== "Stopped") {
+      bar.textContent += ` — ${run.reason || "The run ended unfinished. Inspect the saved work before starting another run."}`;
+    } else if (run?.state === "open") {
+      bar.textContent += " — The previous run was interrupted and is unfinished. Saved files remain; nothing resumes by itself. Inspect the saved work before starting another run.";
+    }
+    const extra = [...new Set([statusNotice, ...(!needsAttention ? notices : [])].filter(Boolean))].join(" ");
+    if (extra) bar.textContent += ` — ${extra}`;
+  }
+  bar.classList.toggle("warning", !!statusNotice && statusNoticeKind === "warning" && (!operation && !run || contactLost || stopped));
+  bar.classList.toggle("notice", !needsAttention && (!!statusNotice || notices.length > 0));
+  bar.classList.toggle("active", !!active && !contactLost && !stopped);
+  bar.classList.toggle("waiting", !!needsAttention && !contactLost && !stopped);
+  $("stop-action").hidden = !currentId || !(runActive || (!run && ["starting", "running"].includes(lastOperation?.state))) || stopped;
 }
+
 function render(element, text) { element.innerHTML = md.render(text || "Not supplied yet."); }
 function draft() {
   const key = `${currentId}:${workspace}`;
@@ -173,11 +220,6 @@ function syncVisibleInput() {
 }
 function updateHost() {
   const host = hostChoices.find(h => h.name === $("destination").value);
-  // The tool's routine caveats ask nothing of the user, so they live in More.
-  $("host-note").textContent = host
-    ? `${host.detected ? `${host.name} terminal tool found on this computer.` : `${host.name} terminal tool was not found; Copy still works.`} ${host.notice}`
-    : "Choose the coding tool that should receive this assignment. No model or provider is selected by Vibe.";
-  $("more-tool").hidden = false;
   renderReadiness();
   applyTitleShift();  // The readiness text sizes the step-3 card the title must clear.
   renderReviewerChoices();
@@ -636,8 +678,8 @@ async function refreshProject() {
   $("rails").hidden = false;
   $("workspace-head").hidden = false;
   if (workspace) {
-    if ($("packet-tools").hidden) $("prepared-path").value = project.handoff_path;
-    renderMoreRequest();
+    if ($("packet-tools").hidden) $("prepared-path").value = draft().packetPath || project.handoff_path;
+    renderSavedRequest();
     renderAssessment();
     updateApprovePlan();
     renderReader();
@@ -733,9 +775,9 @@ function showPacket(text, purpose) {
   $("raw-details").hidden = false;
   $("delivery-note").textContent = currentOnly
     ? `This is the current saved file (${{"create-plan": "request to create the Plan", "implement-plan": "implementation request", "review-specification": "external Specification review request", "review-plan": "external Plan review request", verification: "independent verification request", programming: "programming or correction request"}[purpose] || `${workspaces[workspace].title} request`}); no new request was prepared. Review it, then Prepare again to replace it. Copy uses this displayed file.`
-    : "Saved request. The delivery actions are under More: Desktop opens a visible app, Terminal opens its command-line tool, and Copy lets you paste elsewhere. Confirm receipt and execution in the coding tool.";
+    : "Saved request. The delivery actions are beside the stage: Desktop opens a visible app, Terminal opens its command-line tool, and Copy lets you paste elsewhere. Confirm receipt and execution in the coding tool.";
   $("prepared-path").value = draft().packetPath || project?.handoff_path || "";
-  renderMoreRequest();
+  renderSavedRequest();
   updateHost();
 }
 function showAbsentPacket() {
@@ -749,11 +791,11 @@ function showAbsentPacket() {
   $("delivery-note").textContent = recovery
     ? "The earlier displayed Markdown is retained below for recovery. It is not the current saved file, so the delivery buttons are unavailable. Prepare again to save a new request."
     : "No earlier Markdown is available in this tab. Prepare again to save a new request.";
-  renderMoreRequest();
+  renderSavedRequest();
   updateHost();
 }
-// The saved-request section of More appears whenever a request path is known.
-function renderMoreRequest() { $("more-request").hidden = !$("prepared-path").value; }
+// Saved request controls stay beside the stage whenever a path is known.
+function renderSavedRequest() { $("saved-request").hidden = !$("prepared-path").value || !(draft().packet !== null || project?.handoff_exists || draft().recoveryPacket); }
 function openingWorkspace(state) {
   // A prepared outgoing request is not work on its destination stage. Only
   // actual document content and the existing live/retained work records count.
@@ -885,7 +927,7 @@ async function chooseProject(id) {
   renderProjectOptions();
   conversationTurns = []; reviewRuns = []; conversationLoaded = false; $("file-picker").hidden = true; filePickerTarget = "project";
   runActive = null; runLast = null; judgments.clear(); sortingState.clear(); judgmentsSeen.clear(); sortingSeen.clear();
-  $("run-banner").hidden = true; $("questions-box").hidden = true; $("repairs-box").hidden = true;
+  $("waiting-actions").hidden = true; $("questions-box").hidden = true; $("repairs-box").hidden = true;
   composerGeneration += 1;  // The composer now holds another project's draft context.
   // undefined means unobserved; only a successful status read may report idle (null).
   stopPolling(); readinessChain += 1; lastOperation = undefined; lastFiles = null; contactLost = false; conversationLiveMark = ""; conversationRunMark = "";
@@ -899,7 +941,7 @@ async function chooseProject(id) {
   $("project-completion").hidden = true;
   renderProjectDetailsLabel();
   for (const field of ["reader", "assessment", "result-status"]) $(field).textContent = "";
-  $("prepared-path").value = ""; renderMoreRequest();
+  $("prepared-path").value = ""; renderSavedRequest();
   $("overview-sources").replaceChildren(); $("overview-sources").hidden = true;
   $("raw").value = "";
   $("project-name").textContent = id ? "Selected project is not loaded" : "Choose or create a project";
@@ -970,7 +1012,7 @@ async function chooseWorkspace(next) {
   $("review-explain").textContent = config.assessment
     ? `Ask the selected tool to assess whether the current ${config.title} sufficiently guides the next work. Its advisory verdict is saved in this document.`
     : "Ask an AI coordinator to arrange a fresh, independent Ora Verification review and save a truthful Verification Report. Send in Vibe Coder, or copy the complete request into another AI chat. The implementation AI must not verify its own work.";
-  $("more-review").hidden = !config.assessment;
+  $("external-review").hidden = !config.assessment;
   $("stage-panel").hidden = false;
   applySplit();  // The title-over-spine shift can only be measured once the row is visible.
   $("packet-tools").hidden = true; $("raw").value = "";
@@ -1199,8 +1241,8 @@ async function preparePurpose(purpose, instruction = null) {
     await refreshProject();
     status(!shownView || readerView !== shownView ? "Request saved. Your selected document remains open; choose this workspace again to view the saved request."
       : purpose === workspaces[selectedWorkspace].review
-      ? "External review file saved; its path is under More. Preparing it did not run the review; the reviewer must save its verdict in the document."
-      : "Request saved; the path and delivery actions are under More. Review it, then open your coding tool with it or copy the full Markdown.");
+      ? "External review file saved; its path is beside the stage. Preparing it did not run the review; the reviewer must save its verdict in the document."
+      : "Request saved; the path and delivery actions are beside the stage. Review it, then open your coding tool with it or copy the full Markdown.");
   }
   catch (error) {
     if (error.status !== 409) throw error;
@@ -1422,14 +1464,14 @@ $("folder-cancel").onclick = () => { $("folder-picker").hidden = true; status("F
 $("file-cancel").onclick = () => { $("file-picker").hidden = true; filePickerTarget = "project"; renderMaterialChosen(); };
 $("file-go").onclick = guard(() => browseMaterialFiles($("file-path").value));
 $("file-up").onclick = guard(() => browseMaterialFiles(fileState.parent));
-$("stop").onclick = guard(async () => {
+$("quit-vibe").onclick = guard(async () => {
   // Await in-flight local operations before warning about unsent input.
   await pendingLocal.catch(() => {});
   const unsent = [$("message").value.trim() && "message text",
     (attachments.length || [...messageFileDrafts.values()].some(files => files.length)) && "files selected for a message"].filter(Boolean);
   const state = await api("quit-state", {});
   const active = state.active_turns || 0;
-  if ((unsent.length || active) && !confirm(`${active ? `${active} AI turn${active === 1 ? " is" : "s are"} still working. Stopping Vibe now interrupts that work; files already changed remain.\n\n` : ""}${unsent.length ? `You have unsent ${unsent.join(", ")}. The text and file choices remain visible in this tab until you close it.\n\n` : ""}Choose Cancel to keep working, or OK to stop Vibe now.`)) return;
+  if ((unsent.length || active) && !confirm(`${active ? `${active} AI turn${active === 1 ? " is" : "s are"} still working. Quitting Vibe now interrupts that work; files already changed remain.\n\n` : ""}${unsent.length ? `You have unsent ${unsent.join(", ")}. The text and file choices remain visible in this tab until you close it.\n\n` : ""}Choose Cancel to keep working, or OK to quit Vibe now.`)) return;
   let result;
   try { result = await api("stop", {}); }
   catch (error) { status(error.message); return; }
@@ -1693,12 +1735,12 @@ async function send() {
       if (currentId === originId) {
         status(error.status
           ? `${error.message} Your message and attachments are retained here; nothing was sent.`
-          : `${error.message} Your message and attachments are retained here; whether the submission reached the local server is unknown. Reopen this project and check its recorded turns before sending it again.`);
+          : `${error.message} Your message and attachments are retained here; whether the submission reached the local server is unknown. Reopen this project and check its recorded turns before sending it again.`, "warning");
       } else {
         const label = originLabel(originId);
         status(error.status
           ? `${error.message} The message and attachments sent from ${label} were not dispatched; nothing was sent.`
-          : `${error.message} Whether the message sent from ${label} reached the local server is unknown. Reopen ${label} and check its recorded turns before sending that message again.`);
+          : `${error.message} Whether the message sent from ${label} reached the local server is unknown. Reopen ${label} and check its recorded turns before sending that message again.`, "warning");
       }
       return;
     }
@@ -1860,7 +1902,7 @@ function messageCard(turn) {
   }
   appendArtifactReadback(card, turn.artifact);
   // The turn's Bridge diagnostics are secondary detail: they appear only under
-  // More through renderMoreTurn, never as a Technical details expander here.
+  // Routine diagnostics remain in the retained records.
   if (turn.maintenance && !["failed", "interrupted"].includes(turn.state)) {
     const chip = document.createElement("span");
     chip.className = `maintenance-chip${turn.maintenance.unsaved ? " unsaved" : ""}`;
@@ -1936,11 +1978,11 @@ function runCard(run) {
     card.append(details);
   }
   appendArtifactReadback(card, run.artifact);
-  // Review-run Bridge diagnostics live only under More, like every turn's.
+  // Review-run Bridge diagnostics live only beside the stage, like every turn's.
   return card;
 }
 // A readback that merely confirms a routine successful save is secondary
-// detail: it lives under More (renderMoreTurn) beside the turn it belongs to
+// detail: it stays in the retained turn records
 // and in the underlying records, never as a second receipt on the card — and
 // the local file's location lives there too. Only a readback the user can act
 // on stays visible beside the reply: no document, an unreadable one, or a
@@ -1982,7 +2024,7 @@ function renderConversation() {
   else holder.scrollTop = top;
 }
 
-// Live operation status: elapsed time and recent Bridge contact, never progress.
+// Live operation status: dispatched stage, activity and action duration.
 // A retained original is redelivered through the app's own same-origin
 // attachment route — the one image-delivery mechanism the page's narrowly
 // scoped policy permits. The token travels in the query because an image
@@ -2026,101 +2068,23 @@ function resolvePendingDraft(operation) {
 }
 function updateOperation(operation) {
   const wasUnknown = lastOperation === undefined;
+  const newlyDispatched = operation?.dispatched && (!lastOperation?.dispatched || operation.turn !== lastOperation.turn);
+  const previousReadiness = peerFacts(operation?.tool);
+  const changed = operation && [operation.turn, operation.state, operation.reason].join(":") !==
+    [lastOperation?.turn, lastOperation?.state, lastOperation?.reason].join(":");
+  if (changed) { statusNotice = ""; statusNoticeKind = ""; }
   resolvePendingDraft(operation);
-  const bar = $("status-bar");
-  if (operation && !["starting", "running"].includes(operation.state)) {
-    const key = JSON.stringify([operation.project, operation.turn, operation.state, operation.elapsed_seconds,
-      operation.reason, operation.maintenance, operation.maintenance_reason, operation.warnings,
-      operation.bridge_diagnostics, operation.visible_warnings, operation.artifact]);
-    if (bar.dataset.operationKey === key) {
-      lastOperation = operation;
-      renderStatusActivity();
-      updateSendState();
-      refreshRepairs();
-      return;
-    }
-    bar.dataset.operationKey = key;
-  } else {
-    bar.dataset.operationKey = "";
-  }
   lastOperation = operation;
-  let summary = "";
-  let warned = false;
-  if (!operation) {
-    summary = conversationTurns.some(turn => turn.state === "open")
-      ? "An earlier turn is unfinished: it was interrupted, nothing is running now, and nothing is replayed automatically."
-      : "";
-  } else if (["starting", "running"].includes(operation.state)) {
-    summary = `Working — ${Math.round(operation.elapsed_seconds)}s elapsed, last Bridge contact ${Math.max(0, Math.round(operation.last_contact_seconds))}s ago.`;
-  } else if (["failed", "interrupted"].includes(operation.state)) {
-    summary = `${operation.state === "interrupted" ? "Interrupted" : "The turn failed"}: ${operation.reason || "no reason was recorded."}`;
-    warned = true;
-  } else if (operation.state === "finished") {
-    const maintenance = operation.maintenance;
-    if (/^(judgment|sorting|materiality)-/.test(operation.stage || "")) {
-      summary = `Read-only check completed in ${Math.round(operation.elapsed_seconds)}s.`;
-    } else if (["review-specification", "review-plan"].includes(operation.stage)) {
-      const assessment = maintenance === "applied" ? " Assessment saved."
-        : ` Assessment not saved.${operation.maintenance_reason ? ` ${operation.maintenance_reason}` : ""}`;
-      summary = `Review completed in ${Math.round(operation.elapsed_seconds)}s.${assessment}`;
-      if (maintenance !== "applied") warned = true;
-    } else {
-      const registry = maintenance === "applied" ? " Registry updated."
-        : maintenance === "no-change" ? " Registry: no change needed."
-        : maintenance && maintenance !== "none" ? ` Registry update not applied (${maintenance}).${operation.maintenance_reason ? ` ${operation.maintenance_reason}` : ""}`
-        : "";
-      summary = `Reply complete in ${Math.round(operation.elapsed_seconds)}s.${registry}`;
-      if (maintenance && !["applied", "no-change", "none"].includes(maintenance)) {
-        warned = true;
-      }
-    }
-  }
-  if (operation && !["starting", "running"].includes(operation.state)) {
-    const diagnostics = operation.bridge_diagnostics || [];
-    const visible = operation.visible_warnings || [];
-    const classified = new Set([...diagnostics, ...visible]);
-    // Unknown warning sources remain in full view; only Bridge event warnings
-    // have been identified as diagnostics that require no action, so those
-    // sit under More while anything needing attention joins the status text.
-    const notices = [...new Set([...visible, ...(operation.warnings || []).filter(item => !classified.has(item))])];
-    if (notices.length) { summary = `${summary} ${notices.join(" ")}`; warned = true; }
-    renderMoreTurn(operation, diagnostics);
-  } else {
-    renderMoreTurn(null, []);
-  }
-  if (summary) status(summary, warned ? "warning" : "");
-  else renderStatusActivity();
+  if (newlyDispatched && previousReadiness && (!previousReadiness.ready || previousReadiness.authentication === "required"
+      || (operation.stage === "programming" && previousReadiness.programming?.ready === false))) refreshReadiness(true);
+  renderStatusActivity();
   if (wasUnknown) { updateSecondOpinion(); renderRunBanner(); }
   updateSendState();
   refreshRepairs();
 }
-// Secondary detail of the last turn: the saved-file readback and the Bridge
-// diagnostics that ask nothing of the user, kept in the More area.
-function renderMoreTurn(operation, diagnostics) {
-  const section = $("more-turn"), artifactLine = $("more-artifact"), list = $("more-diagnostics");
-  const artifact = operation?.artifact;
-  const outcomes = {changed: "The selected local document changed and was read back.",
-    unchanged: "The selected local document was read back unchanged.",
-    missing: "No document is available at the selected local path.",
-    unreadable: "The selected local document could not be read back.",
-    "selection-changed": "The selected document changed during this turn; its result is not confirmed."};
-  artifactLine.replaceChildren();
-  if (artifact) {
-    artifactLine.textContent = [artifact.role, artifact.reason || outcomes[artifact.outcome],
-      artifact.applies === "earlier" ? "This assessment covers an earlier document version." : "",
-      artifact.path ? `Local file: ${artifact.path}` : ""].filter(Boolean).join(" — ");
-  }
-  list.replaceChildren();
-  for (const value of diagnostics || []) {
-    const item = document.createElement("li");
-    item.textContent = value;
-    list.append(item);
-  }
-  section.hidden = !artifact && !(diagnostics || []).length;
-}
 
 // Background readiness: no model call, one poll chain per project. Only a
-// recheck (startup's first check and the Recheck button) asks the server to
+// refresh at project opening asks the server to
 // start the worker; the chain's own polls just read the report, so the chain
 // ends when checking turns false instead of restarting the worker forever.
 async function refreshReadiness(recheck = false) {
@@ -2171,14 +2135,14 @@ function routeBlock(id) {
   const bridge = readinessState.components?.bridge;
   if (bridge && bridge.status && bridge.status !== "ok")
     return {reason: `the bundled Agent Bridge is ${bridge.status === "missing" ? "missing" : "not readable"}${bridge.reason ? `: ${bridge.reason}` : ""}`,
-            remedy: bridge.remedy || "Reinstall Ora Vibe Coder from a complete release, then Recheck."};
+            remedy: bridge.remedy || "Reinstall Ora Vibe Coder from a complete release, then try the action again."};
   const facts = peerFacts(id);
   if (facts && facts.work === "unsupported")
     return {reason: `${host.name} has no Agent Bridge work mode`,
             remedy: "Open in Terminal and Copy request stay available for this tool."};
   if (facts && facts.work !== "supported")
     return {reason: `${host.name}'s in-app compatibility is unknown${facts.reason ? `: ${facts.reason}` : ""}`,
-            remedy: `${facts.next_action ? facts.next_action + " " : ""}Recheck refreshes readiness and discovery.`};
+            remedy: `${facts.next_action ? facts.next_action + " " : ""}Readiness is checked automatically before work.`};
   if (!facts && host.conversation === false)
     return {reason: `${host.name} has no in-app conversation route`,
             remedy: "Use Open in Terminal or Copy request."};
@@ -2201,68 +2165,22 @@ function buildBlock(id) {
   if (!loop || !host) return null;
   if (loop.status && loop.status !== "ok")
     return {reason: loop.reason || "the bundled Programming Loop package is not readable",
-            remedy: loop.remedy || "Reinstall Ora Vibe Coder from a complete release, then Recheck."};
+            remedy: loop.remedy || "Reinstall Ora Vibe Coder from a complete release, then try the action again."};
   if (Array.isArray(loop.adapters) && !loop.adapters.includes(id))
     return {reason: `the bundled Programming Loop has no ${host.name} adapter`,
-            remedy: "Reinstall Ora Vibe Coder from a complete release, then Recheck."};
+            remedy: "Reinstall Ora Vibe Coder from a complete release, then try the action again."};
   return null;
 }
 function renderReadiness() {
-  const chip = $("readiness"), button = $("recheck"), info = $("readiness-detail");
-  if (!currentId) { chip.hidden = true; button.hidden = true; $("more-tool").hidden = true; chip.setAttribute("aria-expanded", "false"); return; }
-  button.hidden = false;
-  chip.hidden = false;
-  const full = chip.querySelector(".readiness-full"), short = chip.querySelector(".readiness-short");
-  if (readinessState.checking && !readinessState.peers) { full.textContent = "Checking Bridge readiness…"; short.textContent = "Checking…"; chip.title = info.textContent = "A background check that makes no model call."; return; }
-  const facts = selectedReadiness();
-  if (!facts) { full.textContent = "Readiness not checked yet"; short.textContent = "Unchecked"; chip.title = info.textContent = "Readiness has not been checked for the selected tool."; return; }
-  const label = facts.label || facts.peer;
-  // A no-model-call readiness check establishes transport facts only. Even
-  // an older Bridge result cannot prove acceptance of Codex's next request,
-  // which reads the user's current model/account settings when it starts.
-  const codex = facts.peer === "codex";
-  const zcode = facts.peer === "zcode";
-  const fullAccess = zcode && facts.ready && facts.effective_permission === "full-access";
-  const programming = zcode && (readinessState.peers || []).find(peer => peer.peer === "zcode")?.programming;
-  const programmingReady = programming?.ready && programming.effective_permission === "full-access";
-  const authentication = facts.authentication === "confirmed" ? "Sign-in: confirmed."
-    : facts.authentication === "required" ? "Sign-in: required." : "Sign-in: unconfirmed.";
-  full.textContent = facts.ready
-    ? `${label}: ${fullAccess ? "Full access for programming" : zcode ? `Edit${programmingReady ? " · programming: Full access" : " · programming not ready"}` : codex ? "available — model unverified" : "ready"}${facts.authentication === "required" ? " — sign-in required" : facts.authentication === "unknown" ? " — sign-in unconfirmed" : ""}`
-    : `${label}: not ready`;
-  short.textContent = !facts.ready ? "Not ready" : fullAccess ? "Full access" : zcode ? `Edit / ${programmingReady ? "Full access" : "not ready"}` : facts.authentication === "required" ? "Sign in" : facts.authentication === "unknown" ? "Sign-in?" : codex ? "Model unverified" : "Ready";
-  const gear = facts.gear;
-  const gearLine = !gear ? "" : gear.available
-    ? `Gear (optional): available — primary ${gear.primary ? "yes" : "no"}, peer ${gear.peer ? "yes" : "no"} (bundled Ora AI Boost ${gear.version || "version unreported"}).`
-    : `Gear (optional): unavailable — ${gear.reason || "the bundled Ora AI Boost does not serve this tool"}. ${gear.remedy || ""}`;
-  const components = readinessState.components || {};
-  const componentLines = [
-    components.bridge ? `Bundled Agent Bridge: ${components.bridge.status === "ok" ? `${components.bridge.version} at ${components.bridge.path}` : `${components.bridge.status} — ${components.bridge.reason} ${components.bridge.remedy}`}` : "",
-    components.loop ? `Bundled Programming Loop: ${components.loop.status === "ok" ? `${components.loop.version} (adapters: ${(components.loop.adapters || []).join(", ") || "none"})` : `${components.loop.status} — ${components.loop.reason} ${components.loop.remedy}`}` : "",
-    components.boost ? `Bundled Ora AI Boost: ${components.boost.status === "ok" ? `${components.boost.version} at ${components.boost.path}` : `${components.boost.status} — ${components.boost.reason} ${components.boost.remedy}`}` : "",
-  ];
-  info.textContent = [...new Set([full.textContent, facts.message, authentication,
-    facts.compatibility ? `Agent Bridge compatibility of the installed ${label}: ${facts.compatibility}${facts.compatibility === "unknown" ? " (outside the exercised release evidence; the check's warnings name what is known)" : ""}.` : "",
-    gearLine,
-    `Executable: ${facts.executable || "not reported by Agent Bridge"}`,
-    `Version: ${facts.version || "not reported by Agent Bridge"}`,
-    zcode ? `Current stage permission: ${fullAccess ? "Full access under your account" : messageStage() === "programming" ? "Full access requested; readiness not established" : facts.effective_permission === "edit" ? "Edit (document edits; approval-needing shell work cannot run headlessly)" : "not established"}.` : "",
-    zcode ? `Programming and code repairs: ${programmingReady ? "Full access under your account; Git and tests can run without an approval connection" : "Full access readiness has not been established"}. Other stages and document assessments keep Edit. No global setting changes.` : "",
-    zcode ? "This readiness check makes no model call and executes no Git command or test; actual execution remains unverified." : "",
-    zcode && !programmingReady ? programming?.reason : "",
-    codex ? "The selected model's acceptance is unverified. This check makes no model call. Each request uses Codex's current model and account settings." : "",
-    ...componentLines,
-    facts.reason, facts.next_action, ...(facts.warnings || [])].filter(Boolean))].join("\n");
-  chip.title = `${info.textContent}\nSelect to show these details under More.`;
+  const info = $("tool-problem"), facts = selectedReadiness();
+  const blocked = currentId ? routeBlock(selectedToolId()) || (workspace === "build" ? buildBlock(selectedToolId()) : null) : null;
+  info.textContent = blocked ? `${blocked.reason}. ${blocked.remedy}`
+    : facts && (!facts.ready || facts.authentication === "required") ? [facts.reason || (facts.authentication === "required"
+      ? "Sign in to the selected coding tool." : facts.peer === "zcode" && messageStage() === "programming"
+        ? "Programming Full access is not available for the selected coding tool." : "The selected coding tool is not ready."),
+      facts.next_action || "Resolve this in the tool's own window, then send again."].filter(Boolean).join(" ") : "";
+  info.hidden = !info.textContent;
 }
-// Readiness stays beside the coding tool; its details open under More.
-$("readiness").onclick = () => {
-  const more = $("more");
-  more.open = true;
-  $("more-tool").hidden = false;
-  $("readiness-detail").scrollIntoView({block: "nearest"});
-};
-$("recheck").onclick = guard(() => refreshReadiness(true));
 
 // Step 5's own Reviewer picker is independent of the step 3 coding tool: it
 // starts out matching it, and afterwards changing either changes only itself.
@@ -2275,7 +2193,7 @@ function reviewerOptions() {
                                capable: peer.work === "supported",
                                reason: peer.work === "unsupported"
                                  ? `${peer.label || peer.peer} has no Agent Bridge work mode; it cannot assess in-app.`
-                                 : peer.work === "supported" ? "" : `${peer.label || peer.peer}'s in-app compatibility is unknown${peer.reason ? `: ${peer.reason}` : ""}. Recheck refreshes readiness and discovery.`}));
+                                 : peer.work === "supported" ? "" : `${peer.label || peer.peer}'s in-app compatibility is unknown${peer.reason ? `: ${peer.reason}` : ""}. Readiness is checked automatically before work.`}));
   }
   return hostChoices.map(host => ({id: host.id, label: host.name,
                                    capable: host.conversation !== false,
@@ -2406,13 +2324,11 @@ async function runReview() {
       result = await api("review", {id, tool, reviewer, stage: config.assessment, roles: oneTimeRoles(),
                                     iterate: secondOpinion && $("iterate-toggle").checked});
       if (currentId !== id) return;
-      lastOperation = result.operation;
+      updateOperation(result.operation);
       await loadConversation();
       if (currentId !== id) return;  // A switch during the load never shows this run under the other project.
       updateOperation(result.operation);
-      status(secondOpinion
-        ? `Second opinion running: the author (${tool}) assesses, ${reviewer} evaluates, then ${tool} revises. Each pass is a separate recorded call; nothing counts as conversation history.`
-        : `Review running in ${tool}. Its assessment will be saved to the document when the run finishes.`);
+      status("");
     } catch (error) {
       // The failure belongs to the originating project. After a switch, a
       // rejected or unconfirmed dispatch is attributed by name — starting it
@@ -2428,7 +2344,7 @@ async function runReview() {
         }
         return;
       }
-      status(error.message);
+      status(error.message, "warning");
     }
     return;
   }
@@ -2581,13 +2497,23 @@ async function deliverStep(step, action = null, note = "") {
                                 : submittedAttachments.map(item => ({name: item.name})),
       verifier, upstream});
   } catch (error) {
-    if (id === currentId) status(`${error.message} Your unsent text and files are retained; nothing was sent.`);
+    if (id === currentId) status(`${error.message} Your unsent text and files are retained; nothing was sent.`, "warning");
     return;
   }
   if (id !== currentId) return;
   if (result.file_state) { lastFiles = result.file_state; await refreshProject(); }
-  if (result.path) { $("prepared-path").value = result.path; renderMoreRequest(); }
+  if (result.path) {
+    const d = draft();
+    d.packetPath = result.path;
+    d.packetPurpose = step === "implement-plan" ? "implement-plan" : step;
+    if (typeof result.text === "string") {
+      d.packet = result.text; d.packetDestination = hostChoices.find(host => host.id === tool)?.name || "";
+      d.packetCurrentOnly = false;
+    }
+    $("prepared-path").value = result.path; renderSavedRequest(); updateHost();
+  }
   if (action === "copy") {
+    const copyView = readerView;
     try {
       await navigator.clipboard.writeText(result.text);
       // The request is delivered through the clipboard: the unsent text and
@@ -2602,19 +2528,23 @@ async function deliverStep(step, action = null, note = "") {
         $("message").value = "";
         composerGeneration += 1;
       }
+      if (currentId !== id || workspace !== selectedWorkspace || readerView !== copyView) return;
       renderMaterialChosen();
       syncVisibleInput();
       const pictures = (result.pictures || []).join(", ");
-      status(`Full ${DELIVERY_STEPS[step]?.title || step} request copied and saved. Paste it into the receiving AI chat; the app has not sent it.${pictures ? ` Pictures are not carried by a copy: ${pictures}.` : ""}`);
+      const receipt = `Full ${DELIVERY_STEPS[step]?.title || step} request copied and saved. Paste it into the receiving AI chat; the app has not sent it.${pictures ? ` Pictures are not carried by a copy: ${pictures}.` : ""}`;
+      $("prepared-status").textContent = receipt;
+      status(receipt);
     } catch (_) {
-      readerView = {id, workspace, role: null, element: $("reader")};
+      if (currentId !== id || workspace !== selectedWorkspace || readerView !== copyView) return;
+      readerView = {id, workspace, role: null, kind: "packet", element: $("reader")};
       render($("reader"), result.text); $("raw").value = result.text;
       $("packet-tools").hidden = false; $("raw-details").hidden = false; $("raw-details").open = true;
       $("delivery-note").textContent = `Saved ${DELIVERY_STEPS[step]?.title || step} request. Clipboard access was unavailable; the complete request is selected below for manual copy.`;
       $("raw").focus(); $("raw").select();
       status("Clipboard access was unavailable. The full saved request is selected in the document pane; use your browser's Copy command. Nothing was sent.");
     }
-    renderMoreRequest();
+    renderSavedRequest();
     return;
   }
   if (action === "terminal") {
@@ -2645,9 +2575,13 @@ async function deliverStep(step, action = null, note = "") {
     renderReadiness();
   }
   try { await loadConversation(); if (id === currentId) updateOperation(result.operation); }
-  catch (error) { if (id === currentId) status(`Turn ${result.turn} was submitted, but this view could not refresh: ${error.message} Check the recorded turn before sending again.`); }
+  catch (error) {
+    if (id === currentId) status(`The request was submitted, but this view could not refresh: ${error.message} Check the recorded turn before sending again.`);
+    updateSendState();
+    return;
+  }
   updateSendState();
-  status(`Sent to ${host?.name || tool} as turn ${result.turn}: the ${DELIVERY_STEPS[step]?.title || step} request is running. Watch the status bar; the complete answer appears in the conversation when it finishes.`);
+  status("");
 }
 
 
@@ -2893,91 +2827,77 @@ function compareChangedDocuments() {
 
 // --- Run to Completion -------------------------------------------------------
 
-const STEP_NAMES = {specification: "Specification", planning: "Plan", build: "Build",
-                     verification: "Independent verification", correction: "Correction"};
-function runBannerText(run) {
-  const step = STEP_NAMES[run.step] || run.step;
-  const elapsed = run.elapsed_seconds != null ? ` · ${Math.round(run.elapsed_seconds)}s` : "";
-  const contact = run.last_contact_seconds != null ? ` · last Bridge contact ${Math.max(0, Math.round(run.last_contact_seconds))}s ago` : "";
-  const model = run.model ? ` · ${run.model}` : "";
-  const reported = run.reported_model && run.reported_model !== "" ? ` (reported: ${run.reported_model})` : "";
-  if (run.state === "running") return {head: `Run to Completion — ${step}${elapsed}${contact}${model}${reported}`, detail: run.observation || ""};
-  if (run.state === "paused-question") return {head: `Run paused on ${step} — answer to continue`, detail: run.observation || ""};
-  if (run.state === "paused-failure") return {head: `Run paused on ${step} — operational failure`, detail: run.reason || ""};
-  if (run.state === "complete") return {head: "Run complete — verification passed", detail: run.observation || ""};
-  return {head: "Run unfinished", detail: run.reason || run.observation || ""};
-}
 function renderRunBanner() {
-  const banner = $("run-banner");
-  const button = $("run-completion");
-  if (!currentId) { banner.hidden = true; button.textContent = "Run to Completion"; return; }
-  if (runActive) {
-    const text = runBannerText(runActive);
-    banner.hidden = false;
-    banner.replaceChildren();
-    const head = document.createElement("span"); head.className = "run-text";
-    const strong = document.createElement("strong"); strong.textContent = text.head;
-    head.append(strong, document.createElement("br"), text.detail);
-    banner.append(head);
-    button.textContent = "Stop Run";
-    button.disabled = false;
-    if (runActive.state === "paused-failure") {
-      const resume = document.createElement("button"); resume.textContent = "Resume run";
-      resume.onclick = guard(async () => {
-        const id = currentId, result = await api("run-resume", {id});
-        if (id !== currentId) return;
-        updateRunState(result.run);
-        status("Run resumed.");
-      });
-      banner.append(resume);
-    }
-    if (runActive.state.startsWith("paused")) {
-      const copy = document.createElement("button"); copy.textContent = "Copy request";
-      copy.title = "Prepares and saves this paused step's complete request for manual delivery.";
-      copy.onclick = guard(async () => {
-        const result = await api("run-copy", {id: currentId});
-        try {
-          await navigator.clipboard.writeText(result.text);
-          // A copy cannot carry the brief's pictures, so the packet and the
-          // status both name each one as not included.
-          const pictures = (result.pictures || []).join(", ");
-          status(`Paused step's request copied and saved. Paste it into the tool yourself; the app has not sent it.${pictures ? ` Pictures are not carried by a copy: ${pictures}.` : ""}`);
-        } catch (_) { status("Clipboard access was unavailable. Use More to reach the saved request file and copy it there."); }
-        $("prepared-path").value = result.path; renderMoreRequest();
-      });
-      banner.append(copy);
-    }
-    const stop = document.createElement("button"); stop.textContent = "Stop Run";
-    stop.onclick = guard(async () => {
-      status("Stopping the run; the active step is cancelled through the ordinary turn cancel…");
-      const result = await api("run-stop", {id: currentId});
-      updateRunState(result.run);
-      status("Run stopped: recorded unfinished. Files already changed remain; nothing replays by itself.");
-    });
-    banner.append(stop);
-    return;
-  }
-  banner.hidden = true;
+  const holder = $("waiting-actions"), button = $("run-completion");
+  holder.replaceChildren();
+  holder.hidden = true;
   button.textContent = "Run to Completion";
-  // Run stays unavailable while the step-3 tool cannot exchange turns in-app;
-  // nothing is silently substituted. Configure Path offers the alternatives.
-  const host = selectedHost();
-  const blocked = routeBlock(selectedToolId());
-  const loopBlocked = !blocked && workspace === "build" ? buildBlock(selectedToolId()) : null;
-  const capable = !!host && !blocked && !loopBlocked;
-  button.disabled = !currentId || !capable;
-  button.title = blocked
-    ? `${host?.name || "The step-3 tool"} cannot exchange turns in-app (${blocked.reason}). ${blocked.remedy} Choose a supported tool in step 3 or Configure Path; Copy and Terminal handoffs stay available.`
-    : loopBlocked
-    ? `${host?.name || "The step-3 tool"} cannot run this build entry: ${loopBlocked.reason}. ${loopBlocked.remedy}`
-    : capable ? "" : `${host?.name || "The step-3 tool"} cannot exchange turns in-app, so an unattended run cannot use it. Choose a supported tool in step 3 or Configure Path; Copy and Terminal handoffs stay available.`;
-  if (runLast && runLast.state === "open" && !notifiedRuns.has(runLast.run)) {
-    notifiedRuns.add(runLast.run);
-    status("The last Run to Completion shows unfinished: it was interrupted, and it does not resume by itself.");
+  const blocked = routeBlock(selectedToolId()) || (workspace === "build" ? buildBlock(selectedToolId()) : null);
+  button.disabled = !currentId || !!runActive || !!blocked;
+  button.title = blocked ? `${blocked.reason}. ${blocked.remedy}` : "";
+  if (runActive?.state.startsWith("paused")) {
+    holder.hidden = false;
+    if (runActive.state === "paused-failure") {
+      const resume = document.createElement("button");
+      resume.textContent = runActive.operation?.dispatched ? "Inspect saved work" : "Continue";
+      resume.onclick = guard(async () => {
+        if (runActive.operation?.dispatched) {
+          splitMode = "chat"; applySplit();
+          $("conversation").scrollTop = $("conversation").scrollHeight;
+          renderStatusActivity();
+          return;
+        }
+        const id = currentId, result = await api("run-resume", {id});
+        if (id === currentId) updateRunState(result.run);
+      });
+      holder.append(resume);
+    }
+    const copy = document.createElement("button"); copy.textContent = "Copy request";
+    copy.onclick = guard(async () => {
+      const id = currentId, selectedWorkspace = workspace, d = draft();
+      let result;
+      try { result = await api("run-copy", {id}); }
+      catch (error) { if (id === currentId && selectedWorkspace === workspace) throw error; return; }
+      observePacket(id, result.path, result.text, d);
+      d.packet = result.text; d.packetPath = result.path; d.packetPurpose = result.purpose;
+      d.packetDestination = result.destination; d.packetCurrentOnly = false; d.recoveryPacket = null;
+      if (id !== currentId || selectedWorkspace !== workspace) return;
+      showPacket(result.text, result.purpose);
+      const view = readerView, pictures = (result.pictures || []).join(", ");
+      const note = `Paused step's request saved. The app has not sent it.${pictures ? ` Pictures are not carried by a copy: ${pictures}.` : ""}`;
+      $("prepared-status").textContent = note;
+      $("delivery-note").textContent = note;
+      try {
+        await navigator.clipboard.writeText(result.text);
+        if (id !== currentId || selectedWorkspace !== workspace || readerView !== view) return;
+        $("prepared-status").textContent = `${note} Copied; paste it into the receiving AI chat.`;
+      } catch (_) {
+        if (id !== currentId || selectedWorkspace !== workspace || readerView !== view) return;
+        splitMode = "doc"; applySplit();
+        $("raw-details").open = true; $("raw").focus(); $("raw").select();
+        $("delivery-note").textContent = `${note} Clipboard access was unavailable; the complete request is selected below for manual copy.`;
+      }
+    });
+    holder.append(copy);
   }
+  renderStatusActivity();
 }
+$("stop-action").onclick = guard(async () => {
+  const id = currentId;
+  const result = await api(runActive ? "run-stop" : "action-stop", {id});
+  if (id !== currentId) return;
+  if ("operation" in result) updateOperation(result.operation);
+  updateRunState(result.run);
+  renderStatusActivity();
+});
+
 function updateRunState(report) {
-  runActive = report?.run ? report : report?.active || null;
+  const next = report?.run ? report : report?.active || null;
+  if (next && [next.run, next.step, next.state, next.operation?.turn].join(":") !==
+      [runActive?.run, runActive?.step, runActive?.state, runActive?.operation?.turn].join(":")) {
+    statusNotice = ""; statusNoticeKind = "";
+  }
+  runActive = next;
   runLast = report?.last || null;
   renderStatusActivity();
   renderRunBanner();
@@ -3162,16 +3082,7 @@ $("configure-clear").onclick = guard(async () => {
 });
 $("run-completion").onclick = guard(async () => {
   if (!currentId || !workspace) { status("Choose or create a project first."); return; }
-  if (runActive) {
-    // The header's active-run action is the same stop as the banner's own
-    // button: cancel the active step through the ordinary turn cancel and
-    // record the run's truthful unfinished outcome.
-    status("Stopping the run; the active step is cancelled through the ordinary turn cancel…");
-    const result = await api("run-stop", {id: currentId});
-    updateRunState(result.run);
-    status("Run stopped: recorded unfinished. Files already changed remain; nothing replays by itself.");
-    return;
-  }
+  if (runActive) return;
   const config = {best_guess: project?.configuration?.best_guess ?? !!appSettings.best_guess, hide_advisory: savedHideAdvisory(), ...(pendingRunConfig || {}), roles: oneTimeRoles()};
   // The skip-review warning is advisory; Continue is one click, and the
   // saved or run-only hide-advisory preference removes it.
@@ -3222,7 +3133,7 @@ $("run-completion").onclick = guard(async () => {
   pendingRunConfig = null;
   updateTransitionLabel();
   updateRunState(result.run);
-  status("Run to Completion started. The status bar carries the current step; the composer answers pauses only.");
+  status("");
 });
 
 // Automatic refresh: poll operation state and file changes; never rescan Documents.
@@ -3377,6 +3288,9 @@ async function refreshChanged(changed, {silent = false} = {}) {
   await readDocument(anchor || $("document").value, {background: true});
 }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") pollTick(); });
+window.addEventListener("focus", () => {
+  if (currentId && !stopped && document.visibilityState === "visible" && !readinessState.checking) refreshReadiness(true);
+});
 $("refresh").onclick = guard(async () => {
   remember(); const view = readerView; const id = currentId; const space = workspace;
   try {

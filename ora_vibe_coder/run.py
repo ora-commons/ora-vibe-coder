@@ -352,6 +352,8 @@ class RunDriver:
         self.stop_requested = False
         self.resume_answer = ""
         self.handle = None
+        self.action_step = ""
+        self.action_elapsed = 0
         self.worker = None
         self.brief_used = False
         self.step_requested = ""
@@ -388,8 +390,8 @@ class RunDriver:
         _record_run_note(self.project, folder, RUN_START, self.run, fields)
 
     def request_stop(self):
+        self.stop_requested = True
         with self.lock:
-            self.stop_requested = True
             handle = self.handle
         if handle is not None:
             handle.cancel()
@@ -414,7 +416,7 @@ class RunDriver:
 
     def resume(self):
         with self.lock:
-            if self.state in {"paused-failure"}:
+            if self.state == "paused-failure" and not self.stop_requested and not (self.handle and self.handle.dispatched):
                 self.state = "running"
                 self.reason = ""
                 return True
@@ -482,6 +484,17 @@ class RunDriver:
 
     def _send_step(self):
         """Send the current step once and decide what followed, per the order."""
+        if self.stop_requested:
+            return False
+        with self.lock:
+            if self.action_step != self.step:
+                self.action_step, self.action_elapsed = self.step, 0
+            elif self.handle is not None:
+                self.action_elapsed += self.handle.snapshot()["elapsed_seconds"]
+            # Admission and route checks belong to this attempt. A prior
+            # dispatched turn must not make an unsent repeat look dispatched.
+            self.handle = None
+            self.reason = ""
         tool, model, effort, origin = self._assignment()
         if tool not in CONVERSATION_PEERS:
             self._pause_failure(f"{ROLE_NAMES[STEP_ROLE[self.step]]} is assigned to {TOOL_LABELS.get(tool, (tool,))[0]}, "
@@ -500,7 +513,7 @@ class RunDriver:
                 conversation.require_build_route(tool, action)
         except ProjectError as error:
             self._pause_failure(f"{error} Fix it and resume, or stop the run. "
-                                "Copy request under the run banner can deliver this step manually.")
+                                "Copy request beside Waiting can deliver this step manually.")
             return False
         extra = []
         verifier = None
@@ -521,7 +534,7 @@ class RunDriver:
         user_text = self.pending_brief()
         answer = ""
         with self.lock:
-            answer, self.resume_answer = self.resume_answer, ""
+            answer = self.resume_answer
         if answer:
             extra.append("## The user's answer to your paused questions\n\n" + answer)
         extra.append(f"This step runs on {model_label(tool, model, effort)} ({origin} for this run).")
@@ -530,22 +543,31 @@ class RunDriver:
         files = self.pending_files()
         self.step_requested = model_label(tool, model, effort)
         try:
-            supplied_documents = self.project.approve_transition(self.step)
-            self.handle = conversation.start_turn(
-                self.registry, self.project, tool, STEP_STAGE[self.step], text, images, files,
-                run_fields={"Run": self.run, "Run-Step": self.step}, model=model, effort=effort,
-                supplied_documents=supplied_documents)
+            # Stop and dispatch share the lock: a stop already requested wins.
+            with self.lock:
+                if self.stop_requested:
+                    return False
+                supplied_documents = self.project.approve_transition(self.step)
+                self.handle = conversation.start_turn(
+                    self.registry, self.project, tool, STEP_STAGE[self.step], text, images, files,
+                    run_fields={"Run": self.run, "Run-Step": self.step}, model=model, effort=effort,
+                supplied_documents=supplied_documents, cancel_requested=lambda: self.stop_requested,
+                activity="Reviewing" if self.step == "verification" else
+                         "Coding" if self.step == "build" else "Correcting" if self.step == "correction" else
+                         "Creating" if not_started(self.project.material("Specification" if self.step == "specification" else "Plan")["text"] or "") else "Updating")
         except (ProjectError, OSError) as error:
             self._pause_failure(f"The step could not start: {error} Fix it and resume, or stop the run. "
-                                "Copy request under the run banner can deliver this step manually.")
+                                "Copy request beside Waiting can deliver this step manually.")
             return False
-        # The brief is consumed only now that its step's turn was admitted and
-        # dispatched: the failed start above left it pending, so the retry and
-        # the Copy request fallback re-supply it instead of dropping it.
-        self.brief_used = True
         self.handle.done.wait()
         model_reported, _provider = self.handle.observed_identity()
         with self.lock:
+            # Admission alone does not prove the worker started a process.
+            # Unsent input stays available to safe Continue and manual copy.
+            if self.handle.dispatched:
+                self.brief_used = True
+                if self.resume_answer == answer:
+                    self.resume_answer = ""
             self.reported_model = model_reported
         return self._decide()
 
@@ -724,8 +746,11 @@ class RunDriver:
     def _pause_failure(self, reason):
         with self.lock:
             self.state = "paused-failure"
-            self.reason = reason
-            self.observation = "Paused: operational failure."
+            self.reason = (reason + " " + (
+                "Inspect the saved files and retained response. Stop this run, then use the conversation to request only the remaining work; the original step will not repeat."
+                if self.handle and self.handle.dispatched else
+                "Resolve this sign-in, permission or service condition, then Continue to start the step. Nothing was dispatched."))
+            self.observation = "Waiting for recovery."
         self._observe(f"Paused: {reason}")
 
     def _end_unfinished_no_progress(self, what):
@@ -762,12 +787,12 @@ class RunDriver:
     def status(self):
         with self.lock:
             handle = self.handle
-            elapsed = time.monotonic() - self.started
-            state, step = self.state, self.step
+            elapsed = self.action_elapsed
+            state, step, action_step = self.state, self.step, self.action_step
             config = dict(self.config)
             effective_roles = {role: dict(zip(("tool", "model", "effort"), self._assignment_for(role)[:3]))
                                for role in ROLE_NAMES}
-        operation = handle.snapshot() if handle is not None else None
+        operation = handle.snapshot() if handle is not None and action_step == step else None
         live = operation and operation.get("state") in {"starting", "running"}
         return {"run": self.run, "state": state, "step": step, "entry": self.entry,
                 "reason": self.reason, "questions": list(self.questions),
@@ -775,7 +800,9 @@ class RunDriver:
                 "best_verified": self.best_report is not None,
                 "verdicts": list(self.verdicts),
                 "model": self.step_requested, "reported_model": self.reported_model,
-                "elapsed_seconds": round(operation.get("elapsed_seconds") if live else elapsed, 1),
+                "elapsed_seconds": round(elapsed + (operation.get("elapsed_seconds", 0) if operation else 0), 1),
+                "activity": operation.get("activity", "") if operation else "",
+                "operation": operation, "stopped": self.stop_requested,
                 "last_contact_seconds": operation.get("last_contact_seconds") if live else None,
                 "config": config, "effective_roles": effective_roles}
 

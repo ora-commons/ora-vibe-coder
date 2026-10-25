@@ -127,7 +127,7 @@ class LocalBoundary(unittest.TestCase):
                     expect(page.get_by_role("button", name="Open existing project")).to_be_visible()
                     step = page.locator(".first-step").bounding_box()
                     controls = [page.locator(target).bounding_box() for target in
-                                (".first-step .step-number", "#destination", "#readiness", "#recheck")]
+                                (".first-step .step-number", "#destination")]
                     if width >= 1200:
                         self.assertLess(max(box["y"] + box["height"] / 2 for box in controls) -
                                         min(box["y"] + box["height"] / 2 for box in controls), 4)
@@ -135,15 +135,13 @@ class LocalBoundary(unittest.TestCase):
                                         for box in controls))
                     self.assertFalse(page.locator(".first-step").evaluate("element => element.scrollWidth > element.clientWidth"))
                     expect(page.get_by_label("Coding tool")).to_be_visible()
-                    expect(page.get_by_role("button", name="Recheck readiness")).to_be_enabled()
+                    expect(page.locator("#readiness, #recheck")).to_have_count(0)
                     if width == 320:
                         for target in ("new", "open", "project-card"):
                             page.locator(f"#{target}").focus()
                             self.assertEqual(page.evaluate("document.activeElement.id"), target)
                         page.locator("#destination").focus()
                         self.assertEqual(page.evaluate("document.activeElement.id"), "destination")
-                        page.locator("#recheck").focus()
-                        self.assertEqual(page.evaluate("document.activeElement.id"), "recheck")
                     page.locator("#project-card").click()
                     expect(page.locator("#editor")).to_be_visible()
                     self.assertEqual(page.locator("#editor").evaluate("element => element.scrollTop"), 0)
@@ -269,105 +267,113 @@ class LocalBoundary(unittest.TestCase):
                 browser.close()
 
     def test_completed_turn_status(self):
-        # The status bar is the one status surface; technical diagnostics that
-        # ask nothing of the user sit under More, and anything needing a reply
-        # stays in the bar itself.
-        try:
-            from playwright.sync_api import expect, sync_playwright
-        except ImportError:
-            self.skipTest("Playwright is not installed for the browser check")
+        from playwright.sync_api import expect, sync_playwright
         project_id = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
         second_id = self.request("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})[1]["id"]
+        evidence = Path(os.environ.get("VIBE_ACTIVITY_EVIDENCE", self.home))
         with sync_playwright() as playwright:
-            if not Path(playwright.chromium.executable_path).is_file():
-                self.skipTest("Playwright's Chromium is not installed for the browser check")
             browser = playwright.chromium.launch(headless=True)
             try:
                 page = browser.new_page(viewport={"width": 1600, "height": 1000})
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                responses = []
+                def retain(response):
+                    if "/api/" in response.url:
+                        try:
+                            responses.append({"path": response.url.split("/api/")[-1],
+                                              "request": response.request.post_data_json, "response": response.json()})
+                        except Exception:
+                            pass
+                page.on("response", retain)
                 page.goto(self.server.url)
                 self.select_project(page, project_id)
                 page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
                 page.evaluate("() => stopPolling()")
                 bar = page.locator("#status-bar")
-                appearance = """element => {
-                    const style = getComputedStyle(element), box = element.getBoundingClientRect();
-                    const row = element.closest('.status-row').getBoundingClientRect();
-                    return {background: style.backgroundColor, border: style.borderTopColor,
-                            borderWidth: parseFloat(style.borderTopWidth), color: style.color,
-                            font: parseFloat(style.fontSize), weight: Number(style.fontWeight),
-                            animation: style.animationName, transition: style.transitionDuration,
-                            box: [box.x, box.y, box.width, box.height], row: [row.y, row.height]};
-                }"""
-                # Both themes keep the same box and row while all work and
-                # review states receive a steady, more readable highlight.
-                for theme, green in [("dark", "rgb(95, 168, 110)"), ("light", "rgb(63, 125, 77)")]:
+                for removed in ("#more", "#readiness", "#recheck", "#run-banner", "#stop"):
+                    expect(page.locator(removed)).to_have_count(0)
+                # Returning from the tool, or observing a newly dispatched
+                # turn, replaces stale sign-in advice through the existing
+                # readiness worker. Ordinary operation polls do not recheck.
+                recovered = {"checking": False, "peers": [{"peer": "codex", "ready": True,
+                    "authentication": "confirmed", "work": "supported", "warnings": []}]}
+                readiness_requests = []
+                def recovered_readiness(route):
+                    readiness_requests.append(route.request.post_data_json)
+                    route.fulfill(json=recovered)
+                page.route("**/api/readiness", recovered_readiness)
+                page.locator("#destination").select_option(label="Codex")
+                page.evaluate("() => { readinessChain += 1; readinessState = {checking: false, peers: [{peer: 'codex', ready: false, authentication: 'required', work: 'supported', reason: 'Sign in to Codex.'}]}; renderReadiness(); }")
+                expect(page.locator("#tool-problem")).to_contain_text("Sign in to Codex.")
+                recovered_operation = {"turn": "recovered-dispatch", "tool": "codex", "stage": "specification",
+                    "state": "running", "activity": "Discussing", "dispatched": True, "elapsed_seconds": 0}
+                page.evaluate("op => updateOperation(op)", recovered_operation)
+                expect(page.locator("#tool-problem")).to_be_hidden()
+                page.evaluate("op => updateOperation(op)", recovered_operation)
+                self.assertEqual(readiness_requests, [{"recheck": True}])
+                page.evaluate("() => { readinessState = {checking: false, peers: [{peer: 'codex', ready: false, authentication: 'required', work: 'supported', reason: 'Sign in to Codex.'}]}; renderReadiness(); window.dispatchEvent(new Event('focus')); }")
+                expect(page.locator("#tool-problem")).to_be_hidden()
+                self.assertEqual(readiness_requests, [{"recheck": True}, {"recheck": True}])
+                state = {"project": str(self.home / "One"), "turn": "dispatch", "stage": "specification",
+                         "activity": "Updating", "state": "running", "elapsed_seconds": 330,
+                         "last_contact_seconds": 2, "bridge_diagnostics": ["Connector version is old."]}
+                styles = {}
+                for theme in ("dark", "light"):
                     page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
-                    page.evaluate("operation => updateOperation(operation)", {
-                        "turn": f"idle-{theme}", "state": "finished", "elapsed_seconds": 1})
-                    idle = bar.evaluate(appearance)
-                    for stage, state in [("specification", "starting"), ("specification", "running"),
-                                         ("review-specification", "running"), ("review-plan", "starting")]:
-                        page.evaluate("operation => updateOperation(operation)", {
-                            "turn": f"active-{stage}", "stage": stage, "state": state,
-                            "elapsed_seconds": 5, "last_contact_seconds": 2})
-                        active_style = bar.evaluate(appearance)
-                        self.assertNotEqual(active_style["background"], idle["background"])
-                        self.assertEqual(active_style["border"], green)
-                        self.assertGreater(active_style["borderWidth"], idle["borderWidth"])
-                        self.assertGreater(active_style["font"], idle["font"])
-                        self.assertGreaterEqual(active_style["weight"], 600)
-                        self.assertEqual(active_style["color"], idle["color"])
-                        self.assertEqual(active_style["box"], idle["box"])
-                        self.assertEqual(active_style["row"], idle["row"])
-                        self.assertEqual(active_style["animation"], "none")
-                        self.assertEqual(active_style["transition"], "0s")
-                    # An action receipt cannot hide activity, and an open
-                    # Settings panel keeps the same active colors.
-                    page.evaluate("() => status('Review running in Codex.')")
-                    self.assertEqual(bar.evaluate(appearance), active_style)
-                    page.locator("#settings").click()
-                    self.assertEqual(bar.evaluate(appearance)["background"], active_style["background"])
-                    page.locator("#settings-close").click()
-                    page.evaluate("() => lostContact()")
-                    expect(bar).to_contain_text("Lost contact with the local server")
-                    self.assertEqual(bar.evaluate(appearance)["background"], idle["background"])
-                    self.assertNotEqual(bar.evaluate(appearance)["color"], idle["color"])
-                    page.evaluate("() => { contactRestored(); updateOperation(lastOperation); }")
-                    self.assertEqual(bar.evaluate(appearance), active_style)
-                    page.evaluate("() => status('A warning needs attention.', 'warning')")
-                    self.assertEqual(bar.evaluate(appearance)["background"], idle["background"])
-                    page.evaluate("() => { updateOperation(lastOperation); updateOperation(null); }")
-                    self.assertEqual(bar.evaluate(appearance), idle)
-                # A narrow window also keeps its existing row and box height.
-                page.set_viewport_size({"width": 700, "height": 900})
-                narrow_idle = bar.evaluate(appearance)
-                page.evaluate("operation => updateOperation(operation)", {
-                    "turn": "narrow-turn", "state": "running", "elapsed_seconds": 5, "last_contact_seconds": 2})
-                narrow_active = bar.evaluate(appearance)
-                self.assertEqual(narrow_active["box"], narrow_idle["box"])
-                self.assertEqual(narrow_active["row"], narrow_idle["row"])
-                page.set_viewport_size({"width": 1600, "height": 1000})
-                page.evaluate("operation => updateOperation(operation)",
-                              {"turn": "finished-turn", "state": "running", "elapsed_seconds": 5,
-                               "last_contact_seconds": 2, "phase": "starting"})
-                expect(page.locator("#status-bar")).to_have_text("Working — 5s elapsed, last Bridge contact 2s ago.")
-                operation = {"turn": "finished-turn", "state": "finished", "elapsed_seconds": 7,
-                             "maintenance": "applied", "warnings": ["Connector version is old."],
-                             "bridge_diagnostics": ["Connector version is old."], "visible_warnings": []}
-                page.evaluate("operation => updateOperation(operation)", operation)
-                expect(page.locator("#status-bar")).to_have_text("Reply complete in 7s. Registry updated.")
-                self.assertEqual(bar.evaluate(appearance), idle)
-                # Repeated terminal polls must also preserve the idle look.
-                page.evaluate("operation => updateOperation(operation)", operation)
-                self.assertEqual(bar.evaluate(appearance), idle)
-                # Diagnostics that ask nothing sit under More, never in the bar.
-                expect(page.locator("#status-bar")).not_to_contain_text("Connector version is old.")
-                expect(page.locator("#more-turn")).not_to_have_attribute("hidden", "")
-                expect(page.locator("#more-diagnostics li")).to_have_text("Connector version is old.")
-                expect(page.locator("#more-artifact")).to_be_empty()
-                # The conversation cards carry no Technical details expander:
-                # More is the single home for those diagnostics, while the
-                # underlying record keeps them and the reply stays visible.
+                    page.evaluate("op => updateOperation(op)", state)
+                    expect(bar).to_have_text("Specification · Updating · 5:30")
+                    expect(bar).to_have_class("active")
+                    styles[theme] = bar.evaluate("el => getComputedStyle(el).backgroundColor")
+                    # Viewing another workspace never renames dispatched work.
+                    page.locator('.rail[data-stage="plan"]').click()
+                    expect(bar).to_have_text("Specification · Updating · 5:30")
+                    page.evaluate("op => updateOperation(op)", dict(state, state="finished", elapsed_seconds=331))
+                    expect(bar).to_have_text("Specification · Finished · 5:31")
+                    expect(bar).not_to_have_class("active")
+                    self.assertNotEqual(styles[theme], bar.evaluate("el => getComputedStyle(el).backgroundColor"))
+                # Every dispatched activity has an explicit, stable label.
+                for stage, activity in (("specification", "Discussing"), ("planning", "Creating"),
+                                        ("review-plan", "Reviewing"), ("programming", "Coding"),
+                                        ("programming", "Correcting"), ("programming-result", "Recording"),
+                                        ("sorting-verification", "Reviewing")):
+                    page.evaluate("op => updateOperation(op)", dict(state, stage=stage, activity=activity))
+                    expect(bar).to_contain_text(activity)
+                    expect(bar).not_to_contain_text("Bridge")
+                    expect(bar).not_to_contain_text("Working")
+                # Incidental rejected actions do not pause dispatched work.
+                for activity in ("Coding", "Reviewing"):
+                    page.evaluate("op => updateOperation(op)", dict(state, turn=activity,
+                        stage="programming", activity=activity))
+                    page.evaluate("() => status('One work turn per project at a time.', 'warning')")
+                    expect(bar).to_have_text(f"Implementation · {activity} · 5:30 — One work turn per project at a time.")
+                    expect(bar).to_have_class(re.compile(r"(?=.*\bnotice\b)(?=.*\bactive\b).*"))
+                    self.assertEqual(styles["light"], bar.evaluate("el => getComputedStyle(el).backgroundColor"))
+                    expect(page.locator("#stop-action")).to_be_visible()
+                    page.evaluate("op => updateOperation(op)", dict(state, turn=activity,
+                        stage="programming", activity=activity))
+                    expect(bar).to_contain_text("One work turn per project at a time.")
+                # All last-action notices, including unflagged conflicts and
+                # receipts, survive an ended turn and an idle status poll.
+                for notice in ("The saved request changed. Nothing was launched.", "Saved file path copied."):
+                    page.evaluate("op => updateOperation(op)", dict(state, turn="ended-notice", state="finished"))
+                    page.evaluate("text => status(text)", notice)
+                    expect(bar).to_have_text("Specification · Finished · 5:30 — " + notice)
+                    page.evaluate("() => updateOperation(null)")
+                    expect(bar).to_have_text(notice)
+                page.evaluate("op => updateOperation(op)", dict(state, turn="new-action"))
+                expect(bar).to_have_text("Specification · Updating · 5:30")
+                # Unchanged warnings stay actionable; routine diagnostics do
+                # not displace the reply or enter the status row.
+                warning = dict(state, state="finished", maintenance="stale",
+                               maintenance_reason="The Registry changed, so nothing was applied.",
+                               warnings=["Connector version is old.", "The outcome note could not be recorded: disk is full.", "Other warning."],
+                               visible_warnings=["The outcome note could not be recorded: disk is full."])
+                page.evaluate("op => updateOperation(op)", warning)
+                expect(bar).to_have_class("waiting")
+                for notice in ("Registry changed", "outcome note could not be recorded", "Other warning."):
+                    expect(bar).to_contain_text(notice)
+                expect(bar).not_to_contain_text("Connector version is old.")
                 page.evaluate("turns => { conversationTurns = turns; renderConversation(); }", [{
                     "turn": "diag-turn", "stage": "specification", "tool": "codex", "purpose": "work",
                     "text": "The work request.", "images": [], "files": [], "state": "complete",
@@ -376,58 +382,12 @@ class LocalBoundary(unittest.TestCase):
                 expect(page.locator("#conversation")).to_contain_text("The completed reply.")
                 expect(page.locator("#conversation .bridge-details")).to_have_count(0)
                 expect(page.locator("#conversation")).not_to_contain_text("Technical details")
-                expect(page.locator("#more-diagnostics li")).to_have_text("Connector version is old.")
-
-                operation.update({"maintenance": "stale", "maintenance_reason": "The Registry changed, so nothing was applied.",
-                                  "warnings": [], "bridge_diagnostics": [], "visible_warnings": []})
-                page.evaluate("operation => updateOperation(operation)", operation)
-                expect(page.locator("#status-bar")).to_contain_text("Registry update not applied (stale). The Registry changed")
-
-                # Warnings needing attention join the status text itself.
-                operation.update({
-                                  "warnings": ["Connector version is old.", "The outcome note could not be recorded: disk is full.", "Other warning."],
-                                  "bridge_diagnostics": ["Connector version is old."],
-                                  "visible_warnings": ["The outcome note could not be recorded: disk is full."]})
-                page.evaluate("operation => updateOperation(operation)", operation)
-                expect(page.locator("#status-bar")).to_contain_text("Registry update not applied (stale). The Registry changed")
-                expect(page.locator("#status-bar")).to_contain_text("outcome note could not be recorded")
-                expect(page.locator("#status-bar")).to_contain_text("Other warning.")
-
-                operation.update({"state": "failed", "reason": "The coding tool refused the request."})
-                page.evaluate("operation => updateOperation(operation)", operation)
-                expect(page.locator("#status-bar")).to_contain_text("The turn failed: The coding tool refused the request.")
-                self.assertEqual(bar.evaluate(appearance)["background"], idle["background"])
-                self.assertNotEqual(bar.evaluate(appearance)["color"], idle["color"])
-
-                operation.update({"state": "interrupted", "reason": "Stopped by the user. Files already changed remain.",
-                                  "warnings": [], "bridge_diagnostics": [],
-                                  "artifact": {"role": "Programming Result", "path": "/selected/Programming Result.md",
-                                               "outcome": "unchanged", "reason": ""}})
-                page.evaluate("operation => updateOperation(operation)", operation)
-                expect(page.locator("#status-bar")).to_contain_text("Interrupted: Stopped by the user.")
-                self.assertEqual(bar.evaluate(appearance)["font"], idle["font"])
-                expect(page.locator("#more-artifact")).to_contain_text("read back unchanged")
-
-                review = {"turn": "review-run", "stage": "review-specification", "state": "finished",
-                          "elapsed_seconds": 9, "maintenance": "applied", "warnings": [],
-                          "bridge_diagnostics": [], "visible_warnings": []}
-                page.evaluate("operation => updateOperation(operation)", review)
-                expect(page.locator("#status-bar")).to_have_text("Review completed in 9s. Assessment saved.")
-                expect(page.locator("#status-bar")).not_to_contain_text("Registry")
-
-                review.update({"stage": "review-plan", "maintenance": "unsaved",
-                               "maintenance_reason": "The document could not be read: permission denied.",
-                               "warnings": ["Connector version is old."],
-                               "bridge_diagnostics": ["Connector version is old."]})
-                page.evaluate("operation => updateOperation(operation)", review)
-                expect(page.locator("#status-bar")).to_have_text(
-                    "Review completed in 9s. Assessment not saved. The document could not be read: permission denied.")
-                expect(page.locator("#more-diagnostics li")).to_have_count(1)
-                page.evaluate("() => lostContact()")
-                expect(page.locator("#status-bar")).to_contain_text("Lost contact with the local server")
-                page.evaluate("() => { contactRestored(); updateOperation(lastOperation); }")
-                expect(page.locator("#status-bar")).not_to_contain_text("Lost contact")
-
+                page.evaluate("op => updateOperation(op)", dict(state, turn="review-warning", stage="review-plan",
+                    state="finished", maintenance="unsaved", maintenance_reason="The document could not be read: permission denied."))
+                expect(bar).to_contain_text("permission denied")
+                page.evaluate("() => status('A warning needs attention.', 'warning')")
+                expect(bar).to_contain_text("A warning needs attention.")
+                expect(bar).not_to_have_class("active")
                 page.locator('.rail[data-stage="build"]').click()
                 expect(page.get_by_label("What should the AI change or explain in the implementation?")).to_be_visible()
                 page.locator("#build-reply-stage").select_option("verification")
@@ -436,39 +396,63 @@ class LocalBoundary(unittest.TestCase):
                 expect(page.locator("#message-label")).to_have_text("What should the AI change or explain in the Specification?")
                 page.locator('.rail[data-stage="plan"]').click()
                 expect(page.locator("#message-label")).to_have_text("What should the AI change or explain in the Plan?")
-                page.evaluate("operation => updateOperation(operation)", {
-                    "turn": "long-failed-turn", "stage": "plan", "state": "failed",
-                    "reason": "The peer harness reported a failure. " * 80,
-                    "warnings": ["The saved Plan is unchanged."],
-                    "bridge_diagnostics": [], "visible_warnings": [],
-                })
-                bar = page.locator("#status-bar")
-                self.assertTrue(bar.evaluate("element => element.scrollHeight > element.clientHeight"))
-                self.assertEqual(bar.evaluate("element => getComputedStyle(element).overflowY"), "auto")
-                bar.evaluate("element => element.scrollTop = element.scrollHeight")
-                self.assertGreater(bar.evaluate("element => element.scrollTop"), 0)
+                page.evaluate("op => updateOperation(op)", dict(state, turn="long-warning", state="failed",
+                    reason="The peer harness reported a failure. " * 80))
+                self.assertTrue(bar.evaluate("el => el.scrollHeight > el.clientHeight"))
+                self.assertEqual(bar.evaluate("el => getComputedStyle(el).overflowY"), "auto")
+                bar.evaluate("el => el.scrollTop = el.scrollHeight")
+                self.assertGreater(bar.evaluate("el => el.scrollTop"), 0)
                 self.assertTrue(page.locator("#message").evaluate("element => {"
                     " const input = element.getBoundingClientRect();"
                     " const pane = document.getElementById('work-step-body').getBoundingClientRect();"
-                    " return input.height > 0 && input.top >= pane.top && input.bottom <= pane.bottom;"
-                    "}"))
-                self.select_project(page, second_id)
-                page.wait_for_function("id => currentId === id && !!project && workspace === 'specification'", arg=second_id)
-                expect(page.locator("#message-label")).to_have_text("What should the AI change or explain in the Specification?")
-                self.select_project(page, project_id)
-                page.wait_for_function("id => currentId === id && !!project && workspace === 'specification'", arg=project_id)
-                expect(page.locator("#message-label")).to_have_text("What should the AI change or explain in the Specification?")
+                    " return input.height > 0 && input.top >= pane.top && input.bottom <= pane.bottom; }"))
+                for selected in (second_id, project_id):
+                    page.evaluate("() => status('This notice belongs to the previous project.')")
+                    self.select_project(page, selected)
+                    page.wait_for_function("id => currentId === id && !!project && workspace === 'specification' && lastFiles !== null", arg=selected)
+                    expect(page.locator("#message-label")).to_have_text("What should the AI change or explain in the Specification?")
+                    expect(bar).not_to_contain_text("previous project")
+                page.evaluate("() => stopPolling()")
+                page.locator('.rail[data-stage="plan"]').click()
+                page.wait_for_function("() => workspace === 'plan' && workspaceReveal === null")
+                active = dict(state, stage="programming", activity="Coding", elapsed_seconds=1508)
+                page.evaluate("op => updateOperation(op)", active)
+                expect(bar).to_be_visible()
+                page.screenshot(path=str(evidence / "desktop-active.png"))
+                waiting = dict(active, state="failed", reason="Sign in to the selected tool, then inspect saved work.")
+                page.evaluate("op => updateOperation(op)", waiting)
+                expect(bar).to_have_class("waiting")
+                expect(bar).to_contain_text("Implementation · Waiting · 25:08")
+                self.assertNotEqual(styles["light"], bar.evaluate("el => getComputedStyle(el).backgroundColor"))
+                page.screenshot(path=str(evidence / "desktop-waiting.png"))
+                page.evaluate("op => updateOperation(op)", waiting)
+                expect(bar).to_contain_text("25:08")
+                stopped = dict(active, state="interrupted", reason="Stopped by the user.")
+                page.evaluate("op => updateOperation(op)", stopped)
+                expect(bar).to_have_text("Implementation · Stopped · 25:08")
+                expect(bar).not_to_have_class("active")
+                expect(bar).not_to_have_class("waiting")
+                page.screenshot(path=str(evidence / "desktop-endpoint.png"))
+                page.set_viewport_size({"width": 430, "height": 900})
+                page.evaluate("op => updateOperation(op)", active)
+                expect(bar).to_have_text("Implementation · Coding · 25:08")
+                self.assertTrue(bar.evaluate("el => el.scrollWidth <= el.clientWidth"))
+                page.screenshot(path=str(evidence / "narrow-active.png"))
+                page.evaluate("() => lostContact()")
+                expect(bar).to_contain_text("Lost contact")
+                expect(bar).not_to_have_class("active")
+                page.evaluate("() => { contactRestored(); updateOperation(lastOperation); }")
+                expect(bar).to_contain_text("Coding")
+                # Keep reusable, synthetic API evidence for installed-source comparison.
+                (evidence / "ui-fixture.json").write_text(json.dumps({"responses": responses,
+                    "project_id": project_id, "active": active, "waiting": waiting, "endpoint": stopped}), encoding="utf-8")
+                self.assertEqual(errors, [])
             finally:
                 browser.close()
 
-
-    def test_routine_readback_receipts_live_under_more_not_on_the_cards(self):
-        # The saved-file readback that merely confirms a routine successful
-        # save — and the local file's location — are secondary detail with one
-        # home: More, beside the turn they belong to, plus the underlying
-        # records. Completed cards keep their substantive replies and their
-        # actionable readback failures; the routine receipts and the
-        # "Local file" expanders are gone from the cards themselves.
+    def test_routine_readback_receipts_stay_in_records_not_on_the_cards(self):
+        # Routine successful readbacks stay in retained records; replies and
+        # actionable failures remain on the conversation cards.
         try:
             from playwright.sync_api import expect, sync_playwright
         except ImportError:
@@ -520,14 +504,13 @@ class LocalBoundary(unittest.TestCase):
                 expect(conversation).not_to_contain_text("unchanged since this turn began")
                 expect(conversation).not_to_contain_text("Local file:")
                 self.assertEqual(conversation.locator(".artifact-readback").count(), 1)
-                # More is the single home for the routine readback and the path.
                 page.evaluate("operation => updateOperation(operation)",
                               {"turn": "saved-turn", "state": "finished", "elapsed_seconds": 4,
                                "maintenance": None, "warnings": [], "bridge_diagnostics": [], "visible_warnings": [],
                                "artifact": routine})
-                expect(page.locator("#more-turn")).not_to_have_attribute("hidden", "")
-                expect(page.locator("#more-artifact")).to_contain_text("differs from the content captured")
-                expect(page.locator("#more-artifact")).to_contain_text("Local file: /selected/Specification.md")
+                expect(page.locator("#more")).to_have_count(0)
+                expect(page.locator("#status-bar")).not_to_contain_text("differs from the content captured")
+                expect(page.locator("#status-bar")).not_to_contain_text("Local file:")
             finally:
                 browser.close()
 
@@ -815,8 +798,8 @@ elif skill.exists():
                                       body=json.dumps({"error": f"Fixture: stale {endpoint} failure."}))
 
                 opened("Working", "build")
-                expect(page.locator("#status-bar")).to_contain_text("Working —")
-                # Hold the next project's live answer: the old Working text
+                expect(page.locator("#status-bar")).to_contain_text("Implementation · Coding")
+                # Hold the next project's live answer: the old activity text
                 # clears immediately, before any new status can replace it.
                 holds[(projects["Status"], "turn-state")] = "success"
                 self.select_project(page, projects["Status"])
@@ -824,12 +807,12 @@ elif skill.exists():
                 page.wait_for_function("() => document.getElementById('status-bar').textContent === ''")
                 expect(page.locator("#status-bar")).not_to_have_class("active")
                 capture("switch-clears-working")
-                # Its late successful answer cannot put Working on the idle
+                # Its late successful answer cannot put active work on the idle
                 # destination, even though the originating turn is still live.
                 opened("Destination", "specification")
                 release("Status", "turn-state")
                 page.wait_for_function("() => project?.name === 'Destination' && lastFiles !== null")
-                expect(page.locator("#status-bar")).not_to_contain_text("Working —")
+                expect(page.locator("#status-bar")).not_to_have_class(re.compile(r".*\bactive\b.*"))
                 self.assertIsNone(page.evaluate("lastOperation"))
 
                 failures.add((projects["History"], "conversation"))
@@ -867,7 +850,7 @@ elif skill.exists():
                 capture("status-failure-visible-history-and-draft")
                 failures.remove((projects["Status"], "turn-state"))
                 page.wait_for_function("() => lastOperation?.state === 'running' && !contactLost")
-                expect(page.locator("#status-bar")).to_contain_text("Working —")
+                expect(page.locator("#status-bar")).to_contain_text("Verification · Reviewing")
                 expect(page.locator("#send")).to_be_disabled()
                 expect(page.locator("#message")).to_have_value("Keep this unsent draft while live status is unknown.")
                 expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "opening-draft.png")
@@ -910,7 +893,7 @@ elif skill.exists():
                 release("History", "conversation")
                 page.wait_for_function("() => project?.name === 'Destination' && lastFiles !== null")
                 expect(page.locator("#status-bar")).not_to_contain_text("stale conversation failure")
-                expect(page.locator("#status-bar")).not_to_contain_text("Working —")
+                expect(page.locator("#status-bar")).not_to_have_class(re.compile(r".*\bactive\b.*"))
                 self.assertTrue(page.evaluate("conversationLoaded && lastOperation === null && pollTimer !== null"))
                 capture("stale-history-error-isolated")
                 dispatch.assert_not_called()
@@ -1416,16 +1399,12 @@ elif skill.exists():
                     page.set_viewport_size({"width": 1280, "height": 720})
                     expect(page.locator("#split")).to_have_attribute("data-mode", "split")
                     page.locator("#destination").select_option(label="Codex")
-                    expect(page.locator("#readiness")).to_contain_text("Codex: available — model unverified")
-                    # Readiness detail opens under More, never as a second panel.
-                    page.locator("#readiness").click()
-                    expect(page.locator("#more")).to_have_attribute("open", "")
-                    expect(page.locator("#readiness-detail")).to_contain_text("Sign-in: confirmed.")
-                    expect(page.locator("#readiness-detail")).to_contain_text("/Applications/Codex.app/Contents/Resources/codex")
-                    expect(page.locator("#readiness-detail")).to_contain_text("codex-cli 0.162.1")
-                    expect(page.locator("#readiness-detail")).to_contain_text("Each request uses Codex's current model and account settings.")
+                    page.wait_for_function("() => peerFacts('codex')?.authentication === 'confirmed'")
+                    expect(page.locator("#tool-problem")).to_be_hidden()
+                    expect(page.locator("#readiness, #recheck, #more")).to_have_count(0)
+                    self.assertEqual(page.evaluate("() => peerFacts('codex').executable"), "/Applications/Codex.app/Contents/Resources/codex")
+                    self.assertEqual(page.evaluate("() => peerFacts('codex').version"), "codex-cli 0.162.1")
                     checked = probes.call_count
-                    page.locator("#more").evaluate("element => element.open = false")
 
                     # The coding tool belongs to the project across stages, and a
                     # stage switch runs no new readiness probe.
@@ -1434,31 +1413,25 @@ elif skill.exists():
                     self.assertEqual(page.locator("#destination").input_value(), "Codex")
                     self.assertEqual(probes.call_count, checked)
                     page.locator("#destination").select_option(label="ZCode")
-                    expect(page.locator("#readiness")).to_contain_text("Edit · programming: Full access")
+                    self.assertEqual(page.evaluate("() => selectedReadiness().effective_permission"), "edit")
                     page.locator('.rail[data-stage="build"]').click()
-                    expect(page.locator("#readiness .readiness-short")).to_have_text("Full access")
-                    page.locator("#readiness").click()
-                    expect(page.locator("#readiness-detail")).to_contain_text("Full access under your account")
-                    expect(page.locator("#readiness-detail")).to_contain_text("Git and tests can run without an approval connection")
-                    expect(page.locator("#readiness-detail")).to_contain_text("actual execution remains unverified")
+                    self.assertEqual(page.evaluate("() => selectedReadiness().effective_permission"), "full-access")
                     page.locator("#build-reply-stage").select_option("verification")
-                    expect(page.locator("#readiness")).to_contain_text("Edit · programming: Full access")
-                    expect(page.locator("#readiness-detail")).to_contain_text("Current stage permission: Edit")
+                    self.assertEqual(page.evaluate("() => selectedReadiness().effective_permission"), "edit")
                     page.locator("#build-reply-stage").select_option("programming")
-                    expect(page.locator("#readiness .readiness-short")).to_have_text("Full access")
+                    self.assertEqual(page.evaluate("() => selectedReadiness().effective_permission"), "full-access")
                     permission_ready["full"] = False
-                    page.locator("#recheck").click()
-                    expect(page.locator("#readiness .readiness-short")).to_have_text("Not ready")
-                    expect(page.locator("#readiness-detail")).to_contain_text("Full access requested; readiness not established")
-                    expect(page.locator("#readiness-detail")).to_contain_text("Full access readiness has not been established")
+                    page.evaluate("() => refreshReadiness(true)")
+                    page.wait_for_function("() => selectedReadiness()?.ready === false")
+                    expect(page.locator("#tool-problem")).to_be_visible()
                     permission_ready["full"] = True
-                    page.locator("#recheck").click()
-                    expect(page.locator("#readiness .readiness-short")).to_have_text("Full access")
+                    page.evaluate("() => refreshReadiness(true)")
+                    page.wait_for_function("() => selectedReadiness()?.ready === true")
+                    expect(page.locator("#tool-problem")).to_be_hidden()
                     checked = probes.call_count
                     page.locator('.rail[data-stage="plan"]').click()
-                    expect(page.locator("#readiness")).to_contain_text("Edit · programming: Full access")
+                    self.assertEqual(page.evaluate("() => selectedReadiness().effective_permission"), "edit")
                     self.assertEqual(probes.call_count, checked)
-                    page.locator("#more").evaluate("element => element.open = false")
                     page.locator("#destination").select_option(label="Claude Code")
                     page.locator('.rail[data-stage="specification"]').click()
                     self.assertEqual(page.locator("#destination").input_value(), "Claude Code")
@@ -1469,7 +1442,7 @@ elif skill.exists():
                     expect(page.locator("#destination")).to_have_value("Claude Code")
 
                     # One-click handoffs: step 6 saves the complete request and the
-                    # status bar reports it; the path and manual copy stay in More.
+                    # status bar reports it; saved request controls stay beside the stage.
                     page.locator(".rail[data-stage=plan]").click()
                     page.locator("#next-step").evaluate("element => element.open = true")
                     expect(page.locator("#transition")).to_have_text("Send to Claude Code")
@@ -1486,7 +1459,7 @@ elif skill.exists():
                     self.assertIn("Framework instructions", implementation.read_text(encoding="utf-8"))
                     # Delivered through the clipboard: the unsent text is consumed once.
                     expect(page.locator("#message")).to_have_value("")
-                    expect(page.locator("#more-request")).not_to_have_attribute("hidden", "")
+                    expect(page.locator("#saved-request")).to_be_visible()
                     expect(page.locator("#prepared-path")).to_have_value(str(implementation))
                     # A Hermes/Qwen selection has no in-app route: the step-6
                     # button names Terminal, and Run to Completion stays off.
@@ -1786,7 +1759,7 @@ elif skill.exists():
                 page.locator("#destination").select_option(label="Codex")
                 # The step-5 Reviewer starts at the step-3 tool and then stays
                 # independent: changing either changes only itself.
-                expect(page.locator("#readiness")).to_contain_text("Codex", timeout=10000)
+                page.wait_for_function("() => readinessState.peers?.some(peer => peer.peer === 'codex')")
                 page.locator("#review-step").evaluate("element => element.open = true")
                 expect(page.locator("#step-reviewer")).to_have_value("codex")
                 page.locator("#destination").select_option(label="Claude Code")
@@ -1815,7 +1788,7 @@ elif skill.exists():
                     if body.get("action") == "copy":
                         route.fallback()  # A copy runs on the real server and saves the file.
                         return
-                    route.fulfill(json={"turn": f"turn-{len(sends)}", "operation": {"turn": f"turn-{len(sends)}", "state": "finished", "elapsed_seconds": 0}, "images": [], "path": str(root / "Handoff.md")})
+                    route.fulfill(json={"turn": f"turn-{len(sends)}", "operation": {"turn": f"turn-{len(sends)}", "state": "finished", "elapsed_seconds": 0}, "images": [], "path": str(root / "Handoff.md"), "text": "Synthetic prepared request"})
                 page.route("**/api/deliver", deliver)
                 # The ordinary operation poll can observe an optional meaning
                 # comparison. It leaves both the composer and next stage
@@ -1827,7 +1800,8 @@ elif skill.exists():
                 expect(page.locator("#transition")).to_be_enabled()
                 page.locator("#transition").click()
                 expect(page.locator("#message")).to_have_value("")
-                expect(page.locator("#status-bar")).to_contain_text("Sent to Codex as turn turn-1")
+                expect(page.locator("#prepared-path")).to_have_value(str(root / "Handoff.md"))
+                expect(page.locator("#saved-request")).to_be_visible()
                 self.assertEqual(sends[0]["step"], "create-plan")
                 self.assertEqual(sends[0]["text"], "Plan around the storage layer.")
                 self.assertEqual(sends[0]["files"], [str(note)])
@@ -1846,8 +1820,8 @@ elif skill.exists():
                 with page.expect_response(lambda response: "/api/deliver" in response.url) as copied_response:
                     page.locator("#copy-request").click()
                 self.assertEqual(copied_response.value.status, 200, copied_response.value.text())
-                expect(page.locator("#status-bar")).to_contain_text("copied and saved")
-                expect(page.locator("#status-bar")).to_contain_text("Pictures are not carried by a copy: shot.png")
+                expect(page.locator("#prepared-status")).to_contain_text("copied and saved")
+                expect(page.locator("#prepared-status")).to_contain_text("Pictures are not carried by a copy: shot.png")
                 expect(page.locator("#message")).to_have_value("")
                 handoff = (root / "Handoff.md").read_text(encoding="utf-8")
                 self.assertIn("Second attempt text.", handoff)
@@ -1860,6 +1834,19 @@ elif skill.exists():
                 # from the earlier turn.
                 self.assertNotIn("Outside context for the Plan.", handoff)
                 self.assertEqual(page.evaluate("() => window.clipboardText"), handoff)
+                # A saved-request conflict remains visible after a known
+                # ended action, and an idle poll cannot erase the remedy.
+                page.evaluate("() => { stopPolling(); updateOperation({turn: 'ended-copy', stage: 'planning', state: 'finished', elapsed_seconds: 2}); }")
+                changed_handoff = handoff + "\nAn external saved change.\n"
+                (root / "Handoff.md").write_text(changed_handoff, encoding="utf-8")
+                page.locator("#copy").click()
+                expect(page.locator("#status-bar")).to_contain_text("The saved request changed")
+                expect(page.locator("#status-bar")).to_contain_text("Review the current saved text, then use Copy again. Nothing was overwritten.")
+                expect(page.locator("#status-bar")).to_contain_text("Plan · Finished · 0:02")
+                self.assertEqual((root / "Handoff.md").read_text(encoding="utf-8"), changed_handoff)
+                page.evaluate("() => updateOperation(null)")
+                expect(page.locator("#status-bar")).to_contain_text("Review the current saved text, then use Copy again. Nothing was overwritten.")
+                page.evaluate("() => startPolling()")
                 self.assertIn("status: APPROVED", specification.read_text())
                 self.assertNotIn("review: PASSED", specification.read_text())
 
@@ -2362,103 +2349,176 @@ elif skill.exists():
                 browser.close()
 
     def test_header_stop_run_uses_the_run_stop_operation(self):
-        # While a run is active the header's own button reads Stop Run and
-        # uses the same stop operation as the banner's: the active step is
-        # cancelled and the run is recorded unfinished, never left running.
-        try:
-            from playwright.sync_api import expect, sync_playwright
-        except ImportError:
-            self.skipTest("Playwright is not installed for the browser check")
+        from playwright.sync_api import expect, sync_playwright
         project_id = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
+        other_id = self.request("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})[1]["id"]
         with sync_playwright() as playwright:
-            if not Path(playwright.chromium.executable_path).is_file():
-                self.skipTest("Playwright's Chromium is not installed for the browser check")
             browser = playwright.chromium.launch(headless=True)
             try:
                 page = browser.new_page()
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(self.server.url)
                 self.select_project(page, project_id)
                 page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
                 page.evaluate("() => stopPolling()")
-                bar = page.locator("#status-bar")
-                appearance = """element => {
-                    const style = getComputedStyle(element);
-                    return [style.backgroundColor, style.borderTopColor, style.borderTopWidth,
-                            style.fontSize, style.fontWeight, element.getBoundingClientRect().height,
-                            element.closest('.status-row').getBoundingClientRect().height];
-                }"""
-                idle = bar.evaluate(appearance)
-                active = {"run": "0001-20261017-000000", "state": "running", "step": "specification",
-                          "entry": "specification", "reason": "", "questions": [], "observation": "",
-                          "no_progress": 0, "best_verified": False, "verdicts": [], "model": "",
-                          "reported_model": "", "elapsed_seconds": 4, "last_contact_seconds": 1, "config": {}}
-                page.evaluate("report => updateRunState(report)", {"active": active, "last": None})
-                expect(page.locator("#run-completion")).to_have_text("Stop Run")
-                page.evaluate("() => status('Run to Completion started.')")
-                active_style = bar.evaluate(appearance)
-                self.assertNotEqual(active_style[0], idle[0])
-                self.assertEqual(active_style[-2:], idle[-2:])
-                # The run stays highlighted between steps, including when
-                # repeated polls still carry the previous completed turn.
-                completed = {"turn": "run-turn", "state": "finished", "elapsed_seconds": 4}
-                page.evaluate("operation => updateOperation(operation)", completed)
-                self.assertEqual(bar.evaluate(appearance), active_style)
-                page.evaluate("operation => updateOperation(operation)", completed)
-                self.assertEqual(bar.evaluate(appearance), active_style)
-                page.evaluate("() => updateOperation(null)")
-                self.assertEqual(bar.evaluate(appearance), active_style)
-                for state in ["paused-question", "paused-failure"]:
-                    page.evaluate("report => updateRunState(report)", {"active": dict(active, state=state)})
-                    self.assertEqual(bar.evaluate(appearance), idle)
-                    if state == "paused-failure":
-                        page.route("**/api/run-resume", lambda route: route.fulfill(json={"run": active}))
-                        page.locator("#run-banner").get_by_role("button", name="Resume run").click()
-                        expect(bar).to_have_text("Run resumed.")
-                    else:
-                        # Start/answer acknowledgements use a direct snapshot;
-                        # polls use the report containing active and last.
-                        page.evaluate("report => updateRunState(report)", active)
-                    self.assertEqual(bar.evaluate(appearance), active_style)
-                page.evaluate("operation => updateOperation(operation)", {
-                    "turn": "run-turn", "state": "failed", "reason": "The tool refused the step."})
-                self.assertEqual(bar.evaluate(appearance)[0], idle[0])
-                expect(bar).to_contain_text("The turn failed")
-                page.evaluate("report => updateRunState(report)", {"active": None,
-                    "last": {"run": active["run"], "state": "complete", "steps": [{"turn": "run-turn"}]}})
-                page.evaluate("operation => updateOperation(operation)", completed)
-                self.assertEqual(bar.evaluate(appearance), idle)
-                page.evaluate("report => updateRunState(report)", {"active": active})
-                page.evaluate("operation => updateOperation(operation)", {
-                    "turn": "run-turn", "state": "running", "elapsed_seconds": 4, "last_contact_seconds": 1})
-                self.assertEqual(bar.evaluate(appearance), active_style)
-                page.evaluate("() => lostContact()")
-                self.assertEqual(bar.evaluate(appearance)[0], idle[0])
-                page.evaluate("() => { contactRestored(); updateOperation(lastOperation); }")
-                self.assertEqual(bar.evaluate(appearance), active_style)
-                stopped = []
-
-                def run_stop(route):
-                    stopped.append(route.request.post_data_json)
-                    route.fulfill(json={"run": {"active": None,
-                                                "last": {"run": "0001-20261017-000000", "state": "unfinished",
-                                                         "reason": "Stopped by the user.", "steps": [{"turn": "run-turn"}]}}})
-
-                page.route("**/api/run-stop", run_stop)
+                page.locator("#destination").select_option(label="Codex")
+                page.evaluate("() => { readinessChain += 1; readinessState = {checking: false, peers: [{peer: 'codex', ready: true, work: 'supported', authentication: 'confirmed', warnings: []}]}; renderReadiness(); pendingRunConfig = {hide_advisory: true}; updateOperation({turn: 'ended-run-start', stage: 'programming', state: 'finished', elapsed_seconds: 12}); }")
+                page.route("**/api/run-start", lambda route: route.fulfill(status=409, json={"error": "The saved brief changed."}))
+                page.locator("#message").fill("Keep this brief after a rejected run start.")
                 page.locator("#run-completion").click()
+                expect(page.locator("#status-bar")).to_contain_text("Implementation · Finished · 0:12")
+                expect(page.locator("#status-bar")).to_contain_text("The run did not start; your brief stays here for retry.")
+                expect(page.locator("#message")).to_have_value("Keep this brief after a rejected run start.")
+                page.evaluate("() => updateOperation(null)")
+                expect(page.locator("#status-bar")).to_contain_text("The saved brief changed.")
+                active = {"run": "0001-20261017-000000", "state": "running", "step": "build",
+                          "entry": "specification", "elapsed_seconds": 264, "activity": "Coding", "config": {}}
+                page.evaluate("report => updateRunState(report)", {"active": active})
+                expect(page.locator("#status-bar")).to_have_text("Run to Completion · Implementation · Coding · 4:24")
+                expect(page.get_by_role("button", name="Stop Action", exact=True)).to_have_count(1)
+                expect(page.get_by_role("button", name="Stop Run", exact=True)).to_have_count(0)
+                expect(page.locator("#run-completion")).to_be_disabled()
+                paused = dict(active, state="paused-failure", reason="Sign in, then Continue.")
+                page.evaluate("report => updateRunState(report)", {"active": paused})
+                expect(page.locator("#status-bar")).to_have_class("waiting")
+                page.route("**/api/run-resume", lambda route: route.fulfill(json={"run": active}))
+                page.locator("#waiting-actions").get_by_role("button", name="Continue", exact=True).click()
+                expect(page.locator("#status-bar")).to_have_class("active")
+                paused["operation"] = {"dispatched": True}
+                page.evaluate("report => updateRunState(report)", {"active": paused})
+                expect(page.locator("#waiting-actions").get_by_role("button", name="Inspect saved work")).to_be_visible()
+                page.locator("#waiting-actions").get_by_role("button", name="Inspect saved work").click()
+                expect(page.locator("#conversation")).to_be_visible()
+                # A newly saved paused packet is usable even before project
+                # discovery knows the file exists, including clipboard denial.
+                packet = {"text": "# Paused implementation request\n\nPictures not included: sketch.png.\n",
+                          "path": str(self.home / "One" / "One — Implementation Request.md"),
+                          "purpose": "implement-plan", "destination": "Codex", "pictures": ["sketch.png"]}
+                page.route("**/api/run-copy", lambda route: route.fulfill(json=packet))
+                page.evaluate("() => { navigator.clipboard.writeText = () => Promise.reject(new Error('clipboard denied')); }")
+                page.locator("#waiting-actions").get_by_role("button", name="Copy request", exact=True).click()
+                expect(page.locator("#saved-request")).to_be_visible()
+                expect(page.locator("#prepared-path")).to_have_value(packet["path"])
+                expect(page.locator("#raw")).to_be_visible()
+                expect(page.locator("#raw")).to_have_value(packet["text"])
+                expect(page.locator("#delivery-note")).to_contain_text("Clipboard access was unavailable")
+                expect(page.locator("#delivery-note")).to_contain_text("sketch.png")
+                self.assertEqual(page.evaluate("() => draft().packetPurpose"), "implement-plan")
+                self.assertEqual(page.locator("#raw").evaluate("el => el.selectionEnd - el.selectionStart"), len(packet["text"]))
+                copied = []
+                def copy_saved(route):
+                    copied.append(route.request.post_data_json)
+                    route.fulfill(json={"text": packet["text"]})
+                page.route("**/api/copy", copy_saved)
+                page.locator("#copy").click()
+                with page.expect_response(lambda response: "/api/copy" in response.url):
+                    page.locator("#implementation-proceed").click()
+                expect(page.locator("#delivery-note")).to_contain_text("sketch.png")
+                self.assertEqual(copied, [{"id": project_id, "displayed": packet["text"], "purpose": "implement-plan"}])
+                # A fresh request replaces the previous identity. Its pending
+                # clipboard result cannot write into another project's view.
+                packet = dict(packet, text="# New paused request\n", path=str(self.home / "One" / "Handoff.md"),
+                              purpose="planning", pictures=[])
+                page.evaluate("() => { navigator.clipboard.writeText = () => new Promise((resolve, reject) => { window.rejectCopy = reject; }); }")
+                page.locator("#waiting-actions").get_by_role("button", name="Copy request", exact=True).click()
+                page.wait_for_function("() => !!window.rejectCopy")
+                expect(page.locator("#raw")).to_have_value(packet["text"])
+                self.select_project(page, other_id)
+                page.wait_for_function("id => currentId === id && !!project && lastFiles !== null", arg=other_id)
+                page.locator("#message").fill("Other unsent work.")
+                other_path = page.locator("#prepared-path").input_value()
+                page.evaluate("() => window.rejectCopy(new Error('late denial'))")
+                expect(page.locator("#message")).to_have_value("Other unsent work.")
+                expect(page.locator("#prepared-path")).to_have_value(other_path)
+                self.assertIsNone(page.evaluate("() => draft().packet"))
+                self.assertEqual(page.evaluate("id => drafts.get(`${id}:specification`).packet", project_id), packet["text"])
+                self.select_project(page, project_id)
+                page.wait_for_function("id => currentId === id && !!project && lastFiles !== null", arg=project_id)
+                page.evaluate("() => stopPolling()")
+                # A retained unfinished endpoint carries the reason, neutrally.
+                page.evaluate("op => updateOperation(op)", {"turn": "dispatch", "stage": "programming", "state": "finished"})
+                for reason in ("The run ended unfinished after three attempts without progress. Inspect the saved reports.",
+                               "The step's AI refused the work. Add material and start a new run.", "The run failed: disk unavailable."):
+                    page.evaluate("report => updateRunState(report)", {"active": None, "last": dict(active,
+                        state="unfinished", reason=reason, steps=[{"turn": "dispatch", "step": "build"}])})
+                    expect(page.locator("#status-bar")).to_contain_text("Finished · 4:24 — " + reason)
+                    expect(page.locator("#status-bar")).not_to_have_class("active")
+                    expect(page.locator("#status-bar")).not_to_have_class("waiting")
+                page.evaluate("report => updateRunState(report)", {"active": None, "last": dict(active,
+                    state="complete", reason="Verification passed; the run is complete.", steps=[{"turn": "dispatch", "step": "build"}])})
+                expect(page.locator("#status-bar")).to_have_text("Run to Completion · Implementation · Finished · 4:24")
+                expect(page.locator("#status-bar")).not_to_have_class("active")
+                page.evaluate("report => { updateOperation(null); updateRunState(report); }", {"active": None,
+                    "last": {"run": "reopened", "state": "open", "steps": [{"turn": "old", "step": "verification"}]}})
+                expect(page.locator("#status-bar")).to_contain_text("Verification · Stopped")
+                expect(page.locator("#status-bar")).to_contain_text("previous run was interrupted and is unfinished")
+                expect(page.locator("#status-bar")).to_contain_text("nothing resumes by itself")
+                expect(page.locator("#status-bar")).not_to_have_class("active")
+                page.evaluate("report => updateRunState(report)", {"active": paused})
+                stopped = []
+                def stop_run(route):
+                    stopped.append(route.request.post_data_json)
+                    route.fulfill(json={"run": {"active": None, "last": dict(active, state="unfinished", stopped=True,
+                        reason="Stopped by the user.", steps=[{"turn": "dispatch"}])}})
+                page.route("**/api/run-stop", stop_run)
+                page.evaluate("op => updateOperation(op)", {"turn": "dispatch", "stage": "programming", "state": "running"})
+                page.locator("#stop-action").click()
                 self.assertEqual(stopped, [{"id": project_id}])
-                expect(page.locator("#status-bar")).to_contain_text(
-                    "Run stopped: recorded unfinished. Files already changed remain; nothing replays by itself.")
-                expect(page.locator("#run-banner")).to_be_hidden()
-                expect(page.locator("#run-completion")).to_have_text("Run to Completion")
-                self.assertEqual(bar.evaluate(appearance), idle)
-                # A fresh ordinary turn after a stopped run is active again.
-                page.evaluate("operation => updateOperation(operation)", {
-                    "turn": "new-turn", "state": "starting", "elapsed_seconds": 0, "last_contact_seconds": 0})
-                self.assertEqual(bar.evaluate(appearance), active_style)
-                page.evaluate("() => { stopped = true; status('Vibe stopped.'); }")
-                self.assertEqual(bar.evaluate(appearance), idle)
+                expect(page.locator("#status-bar")).to_have_text("Run to Completion · Implementation · Stopped · 4:24")
+                expect(page.locator("#status-bar")).not_to_have_class("active")
+                expect(page.locator("#stop-action")).to_be_hidden()
+                expect(page.locator("#waiting-actions")).to_be_hidden()
+                page.locator("#settings").click()
+                expect(page.get_by_role("button", name="Quit Vibe", exact=True)).to_be_visible()
+                expect(page.locator(".footer").get_by_role("button", name="Quit Vibe")).to_have_count(0)
+                self.assertEqual(errors, [])
             finally:
                 browser.close()
+
+    def test_stop_action_preserves_other_projects(self):
+        from tests.test_run import FAKE_BRIDGE
+        bridge = self.home / "fake-bridge"
+        (bridge / "ora_agent_bridge").mkdir(parents=True)
+        (bridge / "ora_agent_bridge" / "__init__.py").write_text("")
+        (bridge / "ora_agent_bridge" / "__main__.py").write_text(FAKE_BRIDGE)
+        scenario = self.home / "scenario"
+        scenario.mkdir()
+        first = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
+        other = self.request("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})[1]["id"]
+        first_project = self.server.store.projects[first]
+        other_project = self.server.store.projects[other]
+        partial = first_project.root / "partial.txt"
+        other_file = other_project.root / "partial.txt"
+        (scenario / "0.json").write_text(json.dumps({"delay": 10, "writes": {str(partial): "Saved partial work"}}))
+        (scenario / "1.json").write_text(json.dumps({"delay": 10, "writes": {str(other_file): "Other saved work"}}))
+        with mock.patch.object(conversation, "BRIDGE_HOME", bridge), mock.patch.dict(os.environ, {"VIBE_FAKE_SCENARIO_DIR": str(scenario)}):
+            selected = conversation.start_turn(self.server.conversation, first_project, "codex", "specification", "First", [])
+            self.addCleanup(self.server.conversation.drain)
+            
+            for _ in range(100):
+                if partial.exists(): break
+                time.sleep(.05)
+            self.assertTrue(partial.exists())
+            concurrent = conversation.start_turn(self.server.conversation, other_project, "codex", "specification", "Other", [])
+            
+            for _ in range(100):
+                if other_file.exists(): break
+                time.sleep(.05)
+            self.assertTrue(other_file.exists())
+            self.assertTrue(concurrent.live_children())
+            code, result, _headers = self.request("/api/action-stop", {"id": first})
+            self.assertEqual(code, 200)
+            self.assertEqual(result["operation"]["state"], "interrupted")
+            self.assertTrue(selected.done.is_set())
+            self.assertFalse(selected.live_children())
+            self.assertFalse(concurrent.is_cancelled())
+            self.assertTrue(concurrent.live_children())
+            self.assertEqual(partial.read_text(), "Saved partial work")
+            self.assertEqual(other_file.read_text(), "Other saved work")
+            self.assertEqual((scenario / "directive.count").read_text(), "2")
+            self.server.conversation.drain([concurrent])
+            self.assertFalse(concurrent.live_children())
 
     def test_completed_review_polling_settles_without_repainting(self):
         from playwright.sync_api import expect, sync_playwright
@@ -2471,7 +2531,7 @@ elif skill.exists():
         # Same terminal shape as the observed completed second-opinion review,
         # with disposable names and text rather than private project material.
         operation = {"project": str(folder), "tool": "codex", "stage": "review-plan",
-                     "turn": "completed-review", "state": "finished", "phase": "done",
+                     "turn": "completed-review", "state": "finished", "phase": "done", "activity": "Reviewing",
                      "started": "2000-01-01T00:00:00Z", "elapsed_seconds": 335.387,
                      "last_contact_seconds": 678.77, "reason": "", "maintenance": "applied",
                      "warnings": ["Connector version evidence."], "bridge_diagnostics": ["Connector version evidence."],
@@ -2542,7 +2602,7 @@ elif skill.exists():
                 for _ in range(3):
                     page.evaluate("() => pollTick()")
                 self.assertEqual((len(conversations), len(reads)), baseline)
-                expect(page.locator("#status-bar")).to_have_text("Review completed in 335s. Assessment saved.")
+                expect(page.locator("#status-bar")).to_have_text("Plan · Finished · 5:35")
 
                 # Real mtime-only touches, then another file changing: no flash,
                 # node replacement, reading-position loss or input consumption.
@@ -2556,7 +2616,7 @@ elif skill.exists():
                 self.assertEqual(page.locator(".result-body").evaluate("element => element.scrollTop"), position)
                 self.assertEqual(page.locator("#message").evaluate("element => [element.selectionStart, element.selectionEnd]"), [5, 9])
                 expect(page.locator("#message")).to_have_value("Keep this unsent instruction.")
-                expect(page.locator("#status-bar")).to_have_text("Review completed in 335s. Assessment saved.")
+                expect(page.locator("#status-bar")).to_have_text("Plan · Finished · 5:35")
                 evidence = os.environ.get("ORA_VIBE_TEST_EVIDENCE")
                 if evidence:
                     Path(evidence).mkdir(parents=True, exist_ok=True)
@@ -2577,17 +2637,17 @@ elif skill.exists():
                 # Auxiliary outcomes are intentionally absent from both readers.
                 # Each transition refreshes once; the terminal operation settles.
                 for purpose in ("judgment", "sorting", "materiality"):
-                    operation.update(turn=f"aux-{purpose}", stage=f"{purpose}-planning", state="running", maintenance=purpose)
+                    operation.update(turn=f"aux-{purpose}", stage=f"{purpose}-planning", activity="Reviewing", state="running", maintenance=purpose)
                     page.evaluate("() => pollTick()")
                     stamp = document.stat()
                     os.utime(document, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
                     page.evaluate("() => pollTick()")
-                    expect(page.locator("#status-bar")).to_contain_text("Working —")
+                    expect(page.locator("#status-bar")).to_contain_text("Plan · Reviewing · 5:35")
                     operation.update(state="finished")
                     before = len(conversations)
                     page.evaluate("() => pollTick()")
                     self.assertEqual(len(conversations), before + 1)
-                    expect(page.locator("#status-bar")).to_have_text("Read-only check completed in 335s.")
+                    expect(page.locator("#status-bar")).to_have_text("Plan · Finished · 5:35")
                     expect(page.locator("#status-bar")).not_to_have_class("warning")
                     for _ in range(3):
                         page.evaluate("() => pollTick()")
@@ -2599,11 +2659,13 @@ elif skill.exists():
                 os.utime(document, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
                 page.evaluate("() => pollTick()")
                 expect(page.locator("#status-bar")).to_contain_text("The outcome note could not be recorded.")
-                expect(page.locator("#status-bar")).to_have_class("warning")
+                expect(page.locator("#status-bar")).to_contain_text("Plan · Waiting · 5:35")
+                expect(page.locator("#status-bar")).to_have_class("waiting")
                 operation.update(state="failed", reason="The read-only check failed.")
                 page.evaluate("() => pollTick()")
                 expect(page.locator("#status-bar")).to_contain_text("The read-only check failed.")
-                expect(page.locator("#status-bar")).to_have_class("warning")
+                expect(page.locator("#status-bar")).to_contain_text("Plan · Waiting · 5:35")
+                expect(page.locator("#status-bar")).to_have_class("waiting")
 
                 # Ordinary and review results can appear after terminal status.
                 # Missing records and late maintenance still catch up normally.
@@ -3195,7 +3257,7 @@ elif skill.exists():
                         if expected == "newer":
                             self.assertIn(f"{major}.{minor + 1}.0", result["label"])
                             self.assertEqual(result["url"], release_page(f"{major}.{minor + 1}.0"))
-                            self.assertRegex(result["note"], r"Stop Vibe.*Install or update")
+                            self.assertRegex(result["note"], r"Quit Vibe.*Settings.*Install or update")
                         elif expected == "same":
                             self.assertIn("up to date", result["label"])
                             self.assertIsNone(result["url"])
