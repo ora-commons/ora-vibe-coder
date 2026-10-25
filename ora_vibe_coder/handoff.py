@@ -89,7 +89,7 @@ def loop_component_facts(home=None):
     reports its reason.
     """
     facts = {"version": None, "path": str(LOOP), "adapters": (), "status": "unknown",
-             "reason": "", "remedy": "Reinstall Ora Vibe Coder from a complete release, then Recheck.",
+             "reason": "", "remedy": "Reinstall Ora Vibe Coder from a complete release, then reopen the project and try again.",
              "installed": {}}
     try:
         version = (LOOP / "VERSION").read_text(encoding="utf-8").strip()

@@ -1,5 +1,5 @@
 @font-face { font-family: "Quicksand"; src: url("/static/vendor/Quicksand.ttf") format("truetype-variations"); font-weight: 300 700; font-style: normal; font-display: swap; }
-:root { color-scheme: light dark; --ovc-bg: light-dark(#F4ECD8, #15110A); --ovc-panel: light-dark(#EDE3CC, #1F1A0F); --ovc-panel-2: light-dark(#E5DAC0, #2A2218); --ovc-text: light-dark(#1A1A1A, #E8E0CC); --ovc-muted: light-dark(#5A5248, #A89F8A); --ovc-border: light-dark(#D4C8A8, #3A3022); --ovc-accent: light-dark(#6D4F33, #A48055); --ovc-accent-text: light-dark(#FFFFFF, #15110A); --ovc-green: light-dark(#3F7D4D, #5FA86E); --ovc-red: light-dark(#B22222, #E66B5B); --spine-cols: minmax(200px, 42fr) 58px minmax(200px, 58fr); font-family: Avenir Next, Segoe UI, system-ui, sans-serif; color: var(--ovc-text); font-size: 14px; line-height: 1.45; background: var(--ovc-bg); }
+:root { color-scheme: light dark; --ovc-bg: light-dark(#F4ECD8, #15110A); --ovc-panel: light-dark(#EDE3CC, #1F1A0F); --ovc-panel-2: light-dark(#E5DAC0, #2A2218); --ovc-text: light-dark(#1A1A1A, #E8E0CC); --ovc-muted: light-dark(#5A5248, #A89F8A); --ovc-border: light-dark(#D4C8A8, #3A3022); --ovc-accent: light-dark(#6D4F33, #A48055); --ovc-accent-text: light-dark(#FFFFFF, #15110A); --ovc-green: light-dark(#3F7D4D, #5FA86E); --ovc-amber: light-dark(#A56F12, #E6BE61); --ovc-red: light-dark(#B22222, #E66B5B); --spine-cols: minmax(200px, 42fr) 58px minmax(200px, 58fr); font-family: Avenir Next, Segoe UI, system-ui, sans-serif; color: var(--ovc-text); font-size: 14px; line-height: 1.45; background: var(--ovc-bg); }
 :root[data-theme="dark"] { color-scheme: dark; } :root[data-theme="light"] { color-scheme: light; }
 * { box-sizing: border-box; }
 body { margin: 0; padding: 12px; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
@@ -21,7 +21,6 @@ h2 { font-size: 1.2rem; margin: 0; font-weight: 500; } h3 { font-size: 1rem; mar
 .glyph-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
 .glyph { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .glyph-caret { width: 13px; height: 13px; stroke-width: 2; }
-.more[open] .glyph-caret { transform: rotate(180deg); }
 
 /* The selected rail and earlier stages sit before the page; later stages
    sit after it. The one nav retains all three real buttons as they move. */
@@ -37,7 +36,7 @@ h2 { font-size: 1.2rem; margin: 0; font-weight: 500; } h3 { font-size: 1rem; mar
 
 .main-col { order: 1; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
-/* Header rows: 1 project, 2 Details/status/More, 3 tool/title/run actions.
+/* Header rows: 1 project, 2 Details/status/Stop Action, 3 tool/title/run actions.
    No border under the header: the page background continues through the title
    and the spine with no horizontal dividing line between them. */
 .top { border-bottom: 0; flex: none; }
@@ -51,6 +50,7 @@ h2 { font-size: 1.2rem; margin: 0; font-weight: 500; } h3 { font-size: 1rem; mar
 .project-card { flex: none; white-space: nowrap; padding: 4px 10px 4px 8px; gap: 7px; }
 #status-bar { flex: 1 1 auto; min-width: 0; margin: 0; padding: 4px 10px; border: 1px solid var(--ovc-border); border-radius: 999px; background: var(--ovc-panel-2); font-size: .85rem; color: var(--ovc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 30px; display: flex; align-items: center; }
 #status-bar.warning { color: var(--ovc-red); white-space: normal; max-height: 4.6em; overflow-y: auto; }
+#status-bar.notice { white-space: normal; max-height: 7em; overflow-y: auto; }
 #status-bar:empty { visibility: hidden; }
 body:has(.modal:not([hidden])) #status-bar { position: fixed; z-index: 60; inset: 8px auto auto 50%; transform: translateX(-50%); width: min(760px, 92vw); background: var(--ovc-panel-2); visibility: visible; }
 #status-bar.active, body:has(.modal:not([hidden])) #status-bar.active { background: color-mix(in srgb, var(--ovc-green) 35%, var(--ovc-panel-2)); border: 2px solid var(--ovc-green); padding: 3px 9px; font-size: 1rem; font-weight: 600; line-height: 20px; }
@@ -59,20 +59,13 @@ body:has(.modal:not([hidden])) #status-bar { position: fixed; z-index: 60; inset
 .overview-source .source-name { color: var(--ovc-muted); font-size: .78rem; }
 .conflicts { margin: 8px 12px 0; }
 
-/* More: the one expandable for secondary detail, at the right of the status row. */
-.more { position: relative; flex: none; }
-.more > summary { list-style: none; white-space: nowrap; padding: 4px 10px; border: 1px solid var(--ovc-border); border-radius: 7px; background: var(--ovc-panel-2); min-height: 30px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-size: .85rem; }
-.more > summary::-webkit-details-marker { display: none; }
-.more-body { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: min(430px, 92vw); max-height: 60vh; overflow: auto; background: var(--ovc-panel); border: 1px solid var(--ovc-border); border-radius: 9px; padding: 4px 12px 12px; box-shadow: 0 14px 40px #00000055; }
-.more-body h4 { margin: 10px 0 5px; font-size: .8rem; font-weight: 600; color: var(--ovc-muted); text-transform: uppercase; letter-spacing: .05em; }
-.more-body section + section { border-top: 1px dashed var(--ovc-border); margin-top: 10px; }
-.more-text { margin: 4px 0; font-size: .82rem; overflow-wrap: anywhere; }
-.more-text.pre { white-space: pre-wrap; max-height: 30vh; overflow: auto; }
-.more-list { margin: 4px 0; padding-left: 18px; font-size: .82rem; white-space: pre-wrap; }
-.more-path { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
-.more-path input { flex: 1; min-width: 0; background: var(--ovc-bg); font-size: .8rem; padding: 5px 8px; }
-.more-path button, .more-body .toolbar-row button { font-size: .8rem; min-height: 30px; padding: 4px 10px; }
-
+#stop-action { flex: none; margin-left: auto; white-space: nowrap; }
+#waiting-actions { flex: none; }
+#status-bar.waiting, body:has(.modal:not([hidden])) #status-bar.waiting { background: color-mix(in srgb, var(--ovc-amber) 25%, var(--ovc-panel-2)); border: 2px solid var(--ovc-amber); white-space: normal; max-height: 7em; overflow-y: auto; }
+#saved-request { padding: 7px 10px; border: 1px solid var(--ovc-border); border-radius: 8px; margin-bottom: 7px; }
+#saved-request h4, #external-review h4 { margin: 3px 0; }
+#saved-request input { min-width: 0; }
+#tool-problem { margin: 0 12px 6px; }
 /* Header row 3 shares the work area's column template above 1200px, so the
    stage title centers exactly over the spine. */
 .workspace-head { display: grid; grid-template-columns: var(--spine-cols); gap: 9px; align-items: center; padding: 6px 7px; }
@@ -83,7 +76,7 @@ body:has(.modal:not([hidden])) #status-bar { position: fixed; z-index: 60; inset
    narrow window the title takes its own row below them instead. */
 .workspace-head h2 { grid-column: 1 / -1; grid-row: 1; margin: 0; font-size: 1.5rem; font-weight: 650; text-align: center; white-space: nowrap; position: relative; left: calc(var(--title-shift, 0px)); pointer-events: none; }
 .workspace-head select { min-width: 150px; width: auto; flex: none; padding: 5px 8px; }
-.first-step { grid-column: 1; grid-row: 1; min-width: 0; max-width: 100%; justify-self: start; display: grid; grid-template-columns: auto minmax(150px, 1fr) minmax(0, auto) auto; align-items: center; gap: 5px; padding: 4px 6px 4px 9px; white-space: nowrap; z-index: 1; background: inherit; }
+.first-step { grid-column: 1; grid-row: 1; min-width: 0; max-width: 100%; justify-self: start; display: grid; grid-template-columns: auto minmax(150px, 1fr); align-items: center; gap: 5px; padding: 4px 6px 4px 9px; white-space: nowrap; z-index: 1; background: inherit; }
 .workspace-head .first-step select { min-width: 0; width: 100%; }
 .first-step #recheck { flex: none; font-size: .75rem; white-space: nowrap; }
 .recheck-short, .recheck-icon, .readiness-short { display: none; }
@@ -206,7 +199,7 @@ button.pending::after { content: "·"; margin-left: 2px; color: var(--ovc-muted)
 .run-head .run-tag { color: var(--ovc-muted); font-size: .78rem; }
 .run-summary { font-size: .82rem; margin: 0; }
 .exchange .full-evaluation { border-left: 3px solid var(--ovc-border); padding: 4px 9px; font-size: .85rem; }
-.readiness { display: block; min-height: 0; flex: 1 1 60px; min-width: 60px; max-width: 200px; font-size: .78rem; color: var(--ovc-muted); border: 1px solid var(--ovc-border); border-radius: 999px; padding: 3px 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 button.small { min-height: 28px; padding: 3px 9px; font-size: .8rem; }
 
 /* Questions the AI asked and repairs it can make, at the response box. */
@@ -221,13 +214,6 @@ button.small { min-height: 28px; padding: 3px 9px; font-size: .8rem; }
 .repairs-box .repairs-hint { font-size: .78rem; color: var(--ovc-muted); margin: 0; }
 
 /* Run to Completion banner under the stage header. */
-.run-banner { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 7px 5px; padding: 6px 11px; border: 1px solid var(--ovc-accent); border-radius: 9px; background: color-mix(in srgb, var(--ovc-accent) 10%, var(--ovc-panel)); font-size: .85rem; }
-.run-banner[hidden] { display: none; }
-.run-banner .run-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.run-banner .run-text strong { white-space: nowrap; }
-.run-banner button { min-height: 30px; padding: 4px 11px; font-size: .82rem; }
-.run-banner .run-reason { flex-basis: 100%; margin: 0; color: var(--ovc-text); font-size: .82rem; overflow-wrap: anywhere; }
-.run-banner .run-reason.warning { color: var(--ovc-red); }
 
 /* Shared configuration form. */
 .role-row { display: grid; grid-template-columns: 190px minmax(155px, 1fr) minmax(225px, 1.25fr) minmax(245px, 1.1fr); gap: 4px 8px; align-items: center; margin: 6px 0; }
@@ -314,7 +300,7 @@ details { margin: 10px 0; } summary { cursor: pointer; padding: 5px 0; } fieldse
   .project-action { padding-inline: 5px; font-size: .8rem; } .project-card { padding-inline: 8px 5px; font-size: .8rem; gap: 3px; }
   /* The crowded header stacks: the step-3 card takes the full row, the run
      actions wrap under it, and the title sits on its own row beneath both. */
-  .first-step { grid-column: 1 / -1; grid-template-columns: auto minmax(80px, 1fr) minmax(0, auto) auto; gap: 3px; padding: 3px 4px 3px 9px; }
+  .first-step { grid-column: 1 / -1; grid-template-columns: auto minmax(80px, 1fr); gap: 3px; padding: 3px 4px 3px 9px; }
   .head-actions { grid-column: 1 / -1; grid-row: 2; }
   .workspace-head h2 { grid-row: 3; }
   .first-step select { padding: 4px; } .first-step .readiness { padding: 2px 4px; font-size: .7rem; }
@@ -331,3 +317,5 @@ details { margin: 10px 0; } summary { cursor: pointer; padding: 5px 0; } fieldse
 @media (max-width: 980px) {
   #implementation-choice .role-row { grid-template-columns: minmax(0, 1fr); }
 }
+
+@media (max-width: 760px) { .status-row { flex-wrap: wrap; } #status-bar { flex-basis: calc(100% - 125px); white-space: normal; border-radius: 12px; } #waiting-actions { margin-left: auto; } }
