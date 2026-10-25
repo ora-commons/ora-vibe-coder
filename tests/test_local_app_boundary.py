@@ -1503,7 +1503,7 @@ elif skill.exists():
 
     def test_document_outcomes_and_build_send_copy_agree(self):
         from playwright.sync_api import expect, sync_playwright
-        project_name = "ORA-147 — Require diagrams from three analysis modes"
+        project_name = "Sample — Inspect the map"
         directory = "Stored project folder"
         project_id = self.request("/api/create", {"directory": directory, "name": project_name, "description": "", "goals": ""})[1]["id"]
         folder = self.home / directory
@@ -1514,7 +1514,10 @@ elif skill.exists():
         result = folder / f"{project_name} — Programming Result current.md"
         report = folder / f"{project_name} — Verification Report current.md"
         result.write_text("# Programming Result\n\nProgramming completed 8 October 2026 under the approved Plan.\n", encoding="utf-8")
-        report.write_text("# Verification Report\n\nOra Verification verdict: PASSED\n\n## Result\nThe corrected delivery meets its requirements.\n", encoding="utf-8")
+        passing_report = ("---\nstatus: PASSED\n---\n# Verification Report\n\n**PASSED.** "
+                          "The map meets the approved check by direct static inspection. No material finding remains. "
+                          "This verifies the map only; it does not implement or accept anything. The user owns acceptance.\n")
+        report.write_text(passing_report, encoding="utf-8")
         (folder / f"{project_name} — Implementation Request.md").write_text("EXACT_IMPLEMENTATION_REQUEST", encoding="utf-8")
         (folder / f"{directory} — Working notes v2.1.MARKDOWN").write_text("EXACT_WORKING_NOTES", encoding="utf-8")
         evidence = folder / "Selected evidence.txt"
@@ -1571,13 +1574,20 @@ elif skill.exists():
                 expect(page.locator("#result-status")).to_have_text("PASSED")
                 expect(page.locator("#assessment")).to_have_text("PASSED")
                 expect(page.locator("#assessment-note summary")).to_contain_text(report.name)
-                expect(page.locator("#reader")).to_contain_text("Ora Verification verdict: PASSED")
+                expect(page.locator("#reader")).to_contain_text("This verifies the map only")
                 expect(page.locator("#project-completion .completion-wide")).to_have_text("REPORTED COMPLETE")
 
-                report.write_text("# Verification Report\n\n**Verdict: PASSED.** But the current candidate failed.\n", encoding="utf-8")
+                for failed_report in (
+                        "# Verification Report\n\n**Verdict: PASSED.** But the current candidate failed.\n",
+                        passing_report.replace("No material finding remains.", "But the current candidate failed.")):
+                    report.write_text(failed_report, encoding="utf-8")
+                    page.locator("#refresh").click()
+                    expect(page.locator("#assessment")).to_have_text("REPORT ERROR")
+                    expect(page.locator("#assessment-note")).to_contain_text("current candidate failed")
+                    expect(page.locator("#project-completion")).to_be_hidden()
+                report.write_text(passing_report + "\nVerdict: NOT PASSED\n", encoding="utf-8")
                 page.locator("#refresh").click()
                 expect(page.locator("#assessment")).to_have_text("REPORT ERROR")
-                expect(page.locator("#assessment-note")).to_contain_text("current candidate failed")
                 expect(page.locator("#project-completion")).to_be_hidden()
                 report.write_text("# Verification Report\n\nStatus: PASSED\n\n## Earlier review\nVerdict: NOT PASSED\n", encoding="utf-8")
                 page.locator("#refresh").click()

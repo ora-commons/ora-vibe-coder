@@ -273,7 +273,15 @@ class ReportedStatus(unittest.TestCase):
             self.assertEqual(reported_verdict(report), verdict)
         current_report = "# Verification Report\n\nOra Verification verdict: PASSED\n"
         self.assertEqual(reported_verdict(current_report + "\n## Earlier review\nOra Verification verdict: NOT PASSED\n"), "PASSED")
+        scoped_report = ("---\nstatus: PASSED\n---\n# Verification Report\n\n**PASSED.** "
+                         "The map meets the approved check by direct static inspection. No material finding remains. "
+                         "This verifies the map only; it does not implement or accept anything. The user owns acceptance.\n")
+        self.assertEqual(read_conclusion("verification", scoped_report)["label"], "PASSED")
+        self.assertEqual(reported_verdict(scoped_report), "PASSED")
+        self.assertEqual(read_conclusion("programming", scoped_report)["label"], "")
         for conflicting in (
+                scoped_report.replace("No material finding remains.", "A required map check failed."),
+                scoped_report + "\nVerdict: NOT PASSED\n",
                 "Ora Verification verdict: PASSED\nOra Verification verdict: PASSED\n",
                 "Ora Verification verdict: PASSED\nVerdict: NOT PASSED\n",
                 "Ora Verification verdict: PASSED — but required checks failed.\n",

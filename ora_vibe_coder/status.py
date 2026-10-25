@@ -535,9 +535,12 @@ def _current_suffix(text, current_round=None):
     return "; ".join(kept)
 
 
-def _qualified_success(text, current_round=None, *, review=False):
+def _qualified_success(text, current_round=None, *, review=False, stage=None):
     # Ordinary absence-of-findings wording is not a failure qualification.
     text = _current_suffix(text, current_round)
+    if stage == "verification" and not review:
+        # Inspecting a map does not implement it or grant human acceptance.
+        text = re.sub(r"\bthis verifies the map only;\s*it does not implement or accept anything\.", "", text, flags=re.I)
     if review:
         # A document review can disclaim implementation proof without retracting its own verdict.
         subject = r"(?:code|the implementation|implementation|live publication|unbuilt software)"
@@ -547,7 +550,7 @@ def _qualified_success(text, current_round=None, *, review=False):
     return bool(re.search(r"\b(?:but|except|however|partially|partial|only|solely|limited|restricted|failed|failing|failure|not|incomplete|unfinished|unresolved|pending|remaining|withdraw|withdrawn|retract|retracted|revoke|revoked|rescind|rescinded|premature|cannot|unconfirmed|unjustified|unsupported|invalid|unwarranted)\b|\b(?:is|was|are|were|has|have|had|ca|could|does|do|did|wo|would|should|must|need)n['’]t\b|\bno\s+longer\b|\b\d+\s+of\s+\d+\b", text, re.I))
 
 
-def _status_token(literal, values, *, current_round=None, review=False):
+def _status_token(literal, values, *, current_round=None, review=False, stage=None):
     """Read a complete conclusion and preserve qualifications outside bold text."""
     literal = re.sub(r"^[🟢✅🔴❌🟡⚠][\ufe0f ]*", "", _plain(literal))
     for value in sorted(values, key=len, reverse=True):
@@ -560,7 +563,7 @@ def _status_token(literal, values, *, current_round=None, review=False):
                 suffix = re.sub(r"\bverification\s+PASSED\b", "", suffix, flags=re.I)
             alternatives = "|".join(re.escape(item) for item in sorted(values, key=len, reverse=True))
             competing = re.findall(rf"(?<![A-Z])(?:{alternatives})(?![A-Z])", suffix.upper())
-            if any(canonical_verdict(item) != canonical_verdict(value) for item in competing) or (value in {"COMPLETE", "PASSED"} and _qualified_success(suffix, current_round, review=review)):
+            if any(canonical_verdict(item) != canonical_verdict(value) for item in competing) or (value in {"COMPLETE", "PASSED"} and _qualified_success(suffix, current_round, review=review, stage=stage)):
                 return ""
             return value
     return ""
@@ -660,14 +663,14 @@ def _prose_conclusion(stage, paragraph, review=False):
         current = re.sub(r"^(?:but|however|except)[, ]+", "", sentence, flags=re.I)
         if re.match(rf"^(?:{target}\s+(?:is|was|has been)\s+{withdrawn}|(?:I|we)\s+(?:(?:now|hereby)\s+)?(?:withdraw|retract|revoke|rescind|have\s+{withdrawn})\s+{target})\b", current, re.I):
             return "", True
-        token = _status_token(sentence, allowed, review=review)
+        token = _status_token(sentence, allowed, review=review, stage=stage)
         if token or any(re.match(re.escape(value) + r"(?:[.!?—–;:]|\s|$)", sentence, re.I) for value in allowed):
             values.append(token)
             continue
         for phrase, value in outcomes:
             match = re.match(rf"^{subject}\s+{phrase}\b", sentence, re.I)
             if match:
-                values.append("" if value in {"COMPLETE", "PASSED"} and _qualified_success(paragraph[position + match.end():], review=review) else value)
+                values.append("" if value in {"COMPLETE", "PASSED"} and _qualified_success(paragraph[position + match.end():], review=review, stage=stage) else value)
                 break
         if any(value in {"COMPLETE", "PASSED"} for value in values) and re.match(r"^(?:but|however|except)\b", sentence, re.I):
             return "", True
@@ -703,9 +706,9 @@ def read_conclusion(stage, text, *, review=False):
                     literal = current_field[2].strip()
                     round_match = re.search(r"\bround\s+(\d+)\b", current_field[1] or "", re.I)
                     current_round = int(round_match[1]) if round_match else None
-                    candidates.append((_status_token(literal, allowed, current_round=current_round, review=review), literal, stripped))
+                    candidates.append((_status_token(literal, allowed, current_round=current_round, review=review, stage=stage), literal, stripped))
                     continue
-                token = _status_token(plain, allowed, review=review)
+                token = _status_token(plain, allowed, review=review, stage=stage)
                 first_sentence = re.split(r"(?<=[.!?])\s+|;\s*", plain)[0]
                 explanatory = _explanatory_conclusion(first_sentence, allowed, review)
                 starts_outcome = not explanatory and any(
@@ -716,7 +719,7 @@ def read_conclusion(stage, text, *, review=False):
                     if (field[2].strip().casefold() in names or (not review and re.fullmatch(r"current verdict(?: \(.*\))?", field[2].strip(), re.I))):
                         declarations.append(field[2].strip().casefold())
                         literal = field[3].strip()
-                        candidates.append((_status_token(literal, allowed, review=review), literal, stripped))
+                        candidates.append((_status_token(literal, allowed, review=review, stage=stage), literal, stripped))
                     continue
                 if token or starts_outcome:
                     candidates.append((token, plain, stripped))
@@ -772,7 +775,7 @@ def reported_status(stage, text, source, field=None):
         if yaml_error:
             values = [yaml_error]
         literal = values[0] if len(values) == 1 else ""
-        recognized = _status_token(literal, VALUES[stage]) if stage in {"programming", "verification"} else literal
+        recognized = _status_token(literal, VALUES[stage], stage=stage) if stage in {"programming", "verification"} else literal
     kind = "neutral"
     if conclusion and conclusion["present"] and not recognized:
         label = "Unknown — " + conclusion["reason"]
