@@ -19,7 +19,7 @@ from .handoff import PLUGIN, STAGES, prepare_request, stated_code_location
 from .hosts import model_inventory
 from .hosts import HOSTS as TOOL_LABELS, continue_in, discover
 from .launcher import Settings, documents_location
-from .project import Conflict, ProjectError, ProjectStore, ROLES, atomic_write, not_started, read_text
+from .project import Conflict, ProjectError, ProjectStore, ROLES, atomic_write, not_started, read_text, findings_key
 from .status import assessment_facts, metadata, review_basis, sections
 
 # A 4 MiB packet can expand sixfold when JSON escapes control characters.
@@ -286,7 +286,7 @@ class LocalServer(HTTPServer):
         key = f"{stage}:{remember.get('Key', '')}"
         remembered = conversation.read_aux_answers(project).get(key)
         if remembered and remembered["purpose"] == purpose:
-            return {"state": "answered", "answer": remembered["answer"], "tool": remembered["tool"]}
+            return {"state": "answered", "answer": remembered["answer"], "tool": remembered["tool"], "turn": remembered["turn"]}
         holder = (str(project.root), purpose, stage)
         with self.aux_lock:
             handle = self.aux_handles.get(holder)
@@ -298,7 +298,7 @@ class LocalServer(HTTPServer):
                     self.aux_handles.pop(holder, None)
                 remembered = conversation.read_aux_answers(project).get(key)
                 if remembered and remembered["purpose"] == purpose:
-                    return {"state": "answered", "answer": remembered["answer"], "tool": remembered["tool"]}
+                    return {"state": "answered", "answer": remembered["answer"], "tool": remembered["tool"], "turn": remembered["turn"]}
             else:
                 reason = handle.reason or "The call failed."
                 with self.aux_lock:
@@ -854,7 +854,7 @@ class Handler(BaseHTTPRequestHandler):
                     return {"state": "error", "reason": report["reason"] or "No Verification Report is resolved to sort."}
                 if run_module.verification_verdict(report["text"]) != "NOT PASSED":
                     return {"state": "error", "reason": "Sorting runs for a NOT PASSED Verification Report."}
-                basis, findings = review_basis(report["text"]), report["text"]
+                document, findings = report["text"], report["text"]
                 tool = next((turn["tool"] for turn in reversed(conversation.read_conversation(project))
                              if turn["stage"] == "verification" and turn["state"] == "complete"), "")
             else:
@@ -865,18 +865,21 @@ class Handler(BaseHTTPRequestHandler):
                 facts = assessment_facts(data["stage"], item["text"])
                 if facts.get("outcome", facts["verdict"]) != "NOT PASSED" or facts["issues"]:
                     return {"state": "error", "reason": "Sorting runs for a current NOT PASSED review."}
-                basis = review_basis(item["text"])
+                document = item["text"]
                 findings = conversation.section_body(item["text"], "Current review") or item["text"]
                 tool = next((run_record["tool"] for run_record in reversed(conversation.read_reliability_runs(project))
                              if run_record["stage"] == conversation.REVIEW_KEYS[data["stage"]]), "")
+            remembered = conversation.read_sorting(project, data["stage"], document)
+            if remembered:
+                return {"state": "answered", "answer": remembered["answer"], "tool": remembered["tool"], "turn": remembered["turn"]}
             if not tool:
                 return {"state": "error",
                         "reason": "The tool that ran this assessment is not recorded in this project, so the sorting call has nowhere to go."}
             return self.server.aux_report(project, conversation.PURPOSE_SORTING, data["stage"], tool,
                                           conversation.sorting_request(data["stage"],
-                                                                       report["text"] if data["stage"] == "verification" else item["text"],
+                                                                       document,
                                                                        findings),
-                                          {"Key": basis})
+                                          {"Key": findings_key(document, data["stage"])})
         if path in {"/api/approve-plan", "/api/approve-document"}:
             shape(data, ["id", "expected", "document"], ["stage"])
             strings(data, ["expected", "document"])
@@ -918,8 +921,7 @@ class Handler(BaseHTTPRequestHandler):
             item = project.material(role)
             if item["text"] is None:
                 raise ProjectError(f"No {role} document is resolved to repair.")
-            remembered = conversation.read_aux_answers(project).get(
-                f"{data['stage']}:{review_basis(item['text'])}")
+            remembered = conversation.read_sorting(project, data["stage"], item["text"])
             findings = ((remembered or {}).get("answer") or {}).get("ai") or []
             if not findings:
                 raise ProjectError("No remembered AI-can-fix findings for the current review. Run the sorting first.")
@@ -975,7 +977,7 @@ class Handler(BaseHTTPRequestHandler):
             if data["step"] == "correction":
                 report = project.material("Verification Report")
                 if report["text"] is not None:
-                    remembered = conversation.read_aux_answers(project).get(f"verification:{review_basis(report['text'])}")
+                    remembered = conversation.read_sorting(project, "verification", report["text"])
                     findings = ((remembered or {}).get("answer") or {}).get("ai") or []
                     if findings:
                         extra.append("The findings the AI can fix, from the sorted review:\n\n"
