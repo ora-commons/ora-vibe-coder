@@ -2800,5 +2800,25 @@ def read_aux_answers(project):
         if isinstance(answer, dict):
             answers[f"{fields.get('Stage', '')}:{key}"] = {
                 "purpose": turn["purpose"], "answer": answer,
-                "tool": turn["tool"], "turn": folder.name}
+                "tool": turn["tool"], "turn": folder.name, "request": turn["text"]}
     return answers
+
+
+def read_sorting(project, stage, document):
+    """Reuse the latest sorting of this review, or this exact report.
+
+    Older keys identify the document body. The retained request's quoted
+    review proves reuse after a body edit, without changing saved records.
+    """
+    answers = read_aux_answers(project)
+    findings = document if stage == "verification" else section_body(document, "Current review") or document
+    request = sorting_request(stage, document, findings)
+    # Everything before the current-document quote includes the exact review
+    # supplied for sorting. Only that quote may differ after a document edit.
+    prefix = sorting_request(stage, "", findings).removesuffix(quoted("") + "\n")
+    for key, answer in sorted(answers.items(), key=lambda item: item[1]["turn"], reverse=True):
+        if not key.startswith(f"{stage}:") or answer["purpose"] != PURPOSE_SORTING:
+            continue
+        if (answer["request"] == request if stage == "verification" else answer["request"].startswith(prefix)):
+            return answer
+    return None

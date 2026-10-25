@@ -1,6 +1,7 @@
 """Ordinary Markdown project files, with explicit selection and narrow writes."""
 
 from collections import deque
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,19 @@ from .status import (assessment_facts, body_start, document_type_values, metadat
 
 READ_LIMIT = 256 * 1024
 PACKET_LIMIT = 4 * 1024 * 1024
+
+
+def findings_key(text, stage):
+    """Identify the saved review, or the whole Verification Report."""
+    text = text or ""
+    if stage in {"specification", "planning"}:
+        reviews = [item for item in sections(text) if item[0].strip().casefold() == "current review"]
+        if len(reviews) == 1:
+            _name, _start, body, end = reviews[0]
+            text = text[body:end].strip()
+    return "findings-" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 # macOS cloud-backed filesystem calls cannot be cancelled in a Python thread.
 # This is an inactivity deadline for one isolated read, never a scan/content
 # limit: after five seconds without a response, name it and try siblings.
@@ -699,6 +713,7 @@ class Project:
             facts["unreadable"] = item["reason"]
         if not facts["present"] and item["text"] is not None and not_started(item["text"]):
             facts["untouched"] = True
+        facts["findings_key"] = findings_key(facts["expected"], stage)
         return facts
 
     def _reviewed_snapshots(self, role, path, basis):
@@ -962,6 +977,7 @@ class Project:
                                          "unreadable": result["reason"] if result["path"] and result["text"] is None else ""}}
         report = self.material("Verification Report", discovery=discovery)
         verification = {"path": report["path"], "name": Path(report["path"]).name if report["path"] else None,
+                        "findings_key": findings_key(report["text"], "verification"),
                         "verdict": reported_verdict(report["text"] or ""),
                         "status": reported_status("verification", report["text"] or "",
                                                   report["path"] or "No Verification Report document", field="Verdict") |

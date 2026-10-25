@@ -1733,6 +1733,43 @@ elif skill.exists():
         note.write_text("Outside context for the Plan.\n", encoding="utf-8")
         def ready(peer, **kwargs):
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
+
+        def record(number, entries):
+            turn = f"{number:04d}-20260101-120000"
+            messages = root / ".vibe" / turn / "session" / "messages"
+            messages.mkdir(parents=True)
+            for sequence, (suffix, headers, body) in enumerate(entries, 1):
+                (messages / f"{sequence:04d}-{suffix}.md").write_text(
+                    f"# Message {sequence:04d}\n{headers}\n## Body\n\n{body}", encoding="utf-8")
+            return turn
+
+        def saved_sorting(number, stage, document, finding, legacy=False):
+            key = review_basis(document) if legacy else project_module.findings_key(document, stage)
+            findings = document if stage == "verification" else conversation.section_body(document, "Current review") or document
+            return record(number, [
+                ("initiator-record", "", conversation.aux_note_body("sorting", stage, "codex", {"Key": key},
+                    conversation.sorting_request(stage, document, findings))),
+                ("initiator-record", "", conversation.aux_outcome_body("sorting", stage, "codex", {"Key": key},
+                    "answered", "", {"ai": [finding], "user": ["Choose the example behavior."]})),
+            ])
+
+        def accepted_turn(number, updated_document=None):
+            def start(_registry, _project, tool, stage, text, images, *args, **kwargs):
+                if updated_document is not None:
+                    path, document = updated_document
+                    path.write_text(document, encoding="utf-8")
+                turn = record(number, [
+                    ("initiator-record", "", conversation.user_note_body(stage, tool, text, [])),
+                    ("initiator-to-peer", "Note-Ref: 0001\n", "Example request."),
+                    ("peer-to-initiator", "Answers: 0002\n", "Example reply."),
+                    ("initiator-record", "", conversation.outcome_note_body(stage, "finished", "no-change", "", "", "")),
+                ])
+                handle = mock.Mock(turn=turn, retained_images=[])
+                handle.snapshot.return_value = {"project": str(root), "turn": turn, "stage": stage,
+                                                "state": "finished", "elapsed_seconds": 0}
+                return handle
+            return start
+
         with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready), \
                 mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
                 mock.patch("ora_vibe_coder.conversation.start_aux", side_effect=ValueError("comparison unavailable in this fixture")), sync_playwright() as playwright:
@@ -1745,6 +1782,7 @@ elif skill.exists():
                 page.goto(self.server.url)
                 page.evaluate("() => { window.clipboardText = ''; navigator.clipboard.writeText = text => { window.clipboardText = text; return Promise.resolve(); }; }")
                 self.select_project(page, project_id)
+                page.wait_for_function("() => pollTimer !== null && conversationLoaded")
                 page.locator("#destination").select_option(label="Codex")
                 # The step-5 Reviewer starts at the step-3 tool and then stays
                 # independent: changing either changes only itself.
@@ -1891,6 +1929,86 @@ elif skill.exists():
                 expect(page.locator("#build-action-title")).to_have_text("Correct the implementation")
                 page.locator("#build-action-cancel").click()
                 expect(page.locator("#build-action-dialog")).not_to_be_visible()
+
+                # Reuse the existing sorting record, then preserve the unanswered
+                # list on rejection and retire it only after an accepted reply.
+                report_path = root / "One — Verification Report.md"
+                original_report = report_path.read_text(encoding="utf-8")
+                saved_sorting(1, "verification", original_report, "Repair the first example.", legacy=True)
+                page.locator("#repairs-box button", has_text="Retry sorting").click()
+                expect(page.locator("#repairs-box")).to_contain_text("Repair the first example.")
+                expect(page.locator("#repairs-box")).to_contain_text("Needs your input")
+                page.evaluate("() => { window.unchangedFinding = document.querySelector('#repairs-box li'); }")
+                page.evaluate("() => pollTick()")
+                self.assertTrue(page.evaluate("() => unchangedFinding?.isConnected && unchangedFinding === document.querySelector('#repairs-box li')"))
+                # Returning to a cached list while another workspace's sorting
+                # is pending replaces its loading message with that list.
+                page.evaluate("() => { for (const key of sortingState.keys()) if (key.includes(':planning:')) sortingState.delete(key); }")
+                pending_sorting = []
+                page.route("**/api/sort-findings", lambda route: pending_sorting.append(route))
+                try:
+                    page.locator(".rail[data-stage=plan]").click()
+                    expect(page.locator("#repairs-box")).to_contain_text("Sorting the findings")
+                    self.assertTrue(pending_sorting)
+                    page.locator(".rail[data-stage=build]").click()
+                    expect(page.locator("#repairs-box")).to_contain_text("Repair the first example.")
+                finally:
+                    for route in pending_sorting:
+                        route.fulfill(json={"state": "failed", "reason": "Example sorting unavailable"})
+                    page.unroute("**/api/sort-findings")
+                operation = {"project": str(root), "turn": "0002-20260101-120000", "stage": "verification",
+                             "state": "running", "elapsed_seconds": 1, "last_contact_seconds": 0}
+                page.evaluate("operation => updateOperation(operation)", {**operation, "project": str(self.home / "Other")})
+                expect(page.locator("#repairs-box")).to_be_visible()
+                page.evaluate("operation => updateOperation(operation)", operation)
+                expect(page.locator("#repairs-box")).to_be_hidden()
+                page.evaluate("operation => updateOperation(operation)", {**operation, "state": "failed", "reason": "Example turn failed"})
+                expect(page.locator("#repairs-box")).to_contain_text("Repair the first example.")
+                page.locator("#build-reply-stage").select_option("verification")
+                page.locator("#message").fill("Use the example behavior and continue.")
+                before_images = page.evaluate("() => attachments.map(item => item.name)")
+                page.route("**/api/converse", lambda route: route.fulfill(status=409, json={"error": "Example submission rejected"}))
+                page.locator("#send").click()
+                expect(page.locator("#status-bar")).to_contain_text("Example submission rejected")
+                expect(page.locator("#repairs-box")).to_contain_text("Repair the first example.")
+                expect(page.locator("#message")).to_have_value("Use the example behavior and continue.")
+                self.assertEqual(page.evaluate("() => attachments.map(item => item.name)"), before_images)
+                page.unroute("**/api/converse")
+                with mock.patch("ora_vibe_coder.conversation.start_turn", side_effect=accepted_turn(2)):
+                    page.locator("#send").click()
+                    expect(page.locator("#repairs-box")).to_be_hidden()
+                    expect(page.locator("#message")).to_have_value("")
+                page.locator("#refresh").click()
+                page.evaluate("() => pollTick()")
+                expect(page.locator("#repairs-box")).to_be_hidden()
+                self.assertEqual(report_path.read_text(encoding="utf-8"), original_report)
+                expect(page.locator("#assessment")).to_have_text("NOT PASSED")
+                page.reload()
+                self.select_project(page, project_id)
+                page.wait_for_function("() => pollTimer !== null && conversationLoaded")
+                page.locator(".rail[data-stage=build]").click()
+                page.locator("#destination").select_option(label="Codex")
+                page.locator("#next-step").evaluate("element => element.open = true")
+                page.wait_for_function("() => [...sortingState.values()].some(result => result.turn === '0001-20260101-120000')")
+                expect(page.locator("#repairs-box")).to_be_hidden()
+
+                # The same filename and verdict with fresh findings must show
+                # its new list. Sending the verification step retires that list
+                # through the same path as an ordinary reply.
+                fresh_report = original_report + "\n## Current review\n\n- The next example needs adjustment.\n"
+                self.assertEqual(review_basis(original_report), review_basis(fresh_report))
+                report_path.write_text(fresh_report, encoding="utf-8")
+                saved_sorting(3, "verification", fresh_report, "Repair the next example.")
+                page.locator("#refresh").click()
+                expect(page.locator("#repairs-box")).to_contain_text("Repair the next example.")
+                expect(page.locator("#repairs-box")).not_to_contain_text("Repair the first example.")
+                page.unroute("**/api/deliver")
+                with mock.patch("ora_vibe_coder.conversation.start_turn", side_effect=accepted_turn(4)) as submitted:
+                    page.evaluate("() => deliverStep('verification', 'send')")
+                    submitted.assert_called_once()
+                expect(page.locator("#repairs-box")).to_be_hidden()
+                self.assertEqual(report_path.read_text(encoding="utf-8"), fresh_report)
+                expect(page.locator("#assessment")).to_have_text("NOT PASSED")
                 (root / "One — Verification Report.md").write_text("# Verification Report\n\nVerdict: NOT PASSED — REVIEW INCOMPLETE\n\n- A finding and an unfinished check.\n", encoding="utf-8")
                 page.locator("#refresh").click()
                 expect(page.locator("#assessment")).to_have_text("INCOMPLETE")
@@ -1940,6 +2058,43 @@ elif skill.exists():
                 report_path.write_text("---\nstatus: INCOMPLETE\n---\n# Verification Report\n\nRequired evidence is unavailable.\n", encoding="utf-8")
                 page.locator("#refresh").click()
                 expect(page.locator("#assessment")).to_have_text("INCOMPLETE")
+
+                # Specification and Plan repair buttons share the same retirement
+                # rule. A changed review alone supplies fresh findings even when
+                # the assessed document's substantive basis stays the same.
+                for offset, (stage, rail, path, title) in enumerate((
+                    ("specification", "specification", specification, "Specification"),
+                    ("planning", "plan", plan, "Plan"),
+                )):
+                    document = f"# One — {title}\n\n## Content\n\nExample behavior.\n\n## Current review\n\nStage: {title}\nVerdict: INCOMPLETE\nBasis: {{basis}}\nBasis format: content-v2\n\n- Repair the example.\n"
+                    document = document.replace("{basis}", review_basis(document))
+                    path.write_text(document, encoding="utf-8")
+                    number = 5 + offset * 3
+                    saved_sorting(number, stage, document, f"Repair the {title} example.", legacy=True)
+                    page.locator(f".rail[data-stage={rail}]").click()
+                    page.locator("#refresh").click()
+                    expect(page.locator("#repairs-box")).to_contain_text(f"Repair the {title} example.")
+                    document = document.replace("Example behavior.", "Adjusted example behavior.")
+                    with mock.patch("ora_vibe_coder.conversation.start_turn", side_effect=accepted_turn(number + 1, (path, document))):
+                        page.locator("#repairs-box button", has_text="Request repairs").click()
+                        expect(page.locator("#repairs-box")).to_be_hidden()
+                    page.locator("#refresh").click()
+                    expect(page.locator("#repairs-box")).to_be_hidden()
+                    self.assertEqual(path.read_text(encoding="utf-8"), document)
+                    page.reload()
+                    self.select_project(page, project_id)
+                    page.wait_for_function("() => pollTimer !== null && conversationLoaded")
+                    page.locator(f".rail[data-stage={rail}]").click()
+                    page.locator("#destination").select_option(label="Codex")
+                    page.wait_for_function("turn => [...sortingState.values()].some(result => result.turn === turn)",
+                                           arg=f"{number:04d}-20260101-120000")
+                    expect(page.locator("#repairs-box")).to_be_hidden()
+                    changed = document.replace("- Repair the example.", "- Repair the later example.")
+                    self.assertEqual(review_basis(document), review_basis(changed))
+                    path.write_text(changed, encoding="utf-8")
+                    saved_sorting(number + 2, stage, changed, f"Repair the later {title} example.")
+                    page.locator("#refresh").click()
+                    expect(page.locator("#repairs-box")).to_contain_text(f"Repair the later {title} example.")
             finally:
                 browser.close()
 
@@ -3908,12 +4063,22 @@ elif skill.exists():
         self.assertEqual((agents_storage / installer.LOOP_PROFILE).read_bytes(), profile_body)
 
     def test_common_launcher_and_desktop_link_are_maintained_and_removal_reports_shared_items(self):
+        import plistlib
         from ora_vibe_coder import installer
         user = self.home / "shared launcher user"
         release = self.synthetic_release()
         shared = user / "Applications"
         result = install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
         launcher = Path(result["launcher"])
+        approved_icon = (installer.ROOT / "ora_vibe_coder/static/ora-vibe-coder.icns").read_bytes()
+
+        def assert_launcher_icon():
+            plist = plistlib.loads((launcher / "Contents/Info.plist").read_bytes())
+            self.assertEqual(plist["CFBundleIconFile"], "applet.icns")
+            self.assertNotIn("CFBundleIconName", plist)
+            self.assertEqual((launcher / "Contents/Resources/applet.icns").read_bytes(), approved_icon)
+
+        assert_launcher_icon()
         link = user / "Desktop" / "Ora Vibe Coder"
         self.assertTrue(link.is_symlink() and os.readlink(link) == str(launcher))
         # A personal item at the Desktop link's path is never replaced.
@@ -3924,11 +4089,13 @@ elif skill.exists():
         self.assertEqual(second["desktop_link"], "kept an existing personal item")
         self.assertEqual(link.read_text(), "a personal item")
         self.assertFalse(link.is_symlink())
+        assert_launcher_icon()
         # A missing owned link is restored on update.
         link.unlink()
         third = install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
         self.assertEqual(third["desktop_link"], "created")
         self.assertTrue(link.is_symlink() and os.readlink(link) == str(launcher))
+        assert_launcher_icon()
         # Removal deletes only the owned link; the shared launcher stays for
         # another account, and the result reports exactly that.
         removed = remove(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
@@ -3936,6 +4103,9 @@ elif skill.exists():
         self.assertFalse(Path(result["app"]).exists())
         self.assertTrue(launcher.is_dir())
         self.assertTrue(any("shared launcher" in note and "was kept" in note for note in removed["notes"]))
+        # Reinstallation uses the same bundled artwork without a custom Finder icon.
+        install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
+        assert_launcher_icon()
         self.assertFalse(list(user.rglob(".ora-vibe-install-*")))
 
     def test_permission_refusal_and_signing_failures_preserve_the_previous_installation(self):

@@ -637,23 +637,6 @@ def applet_source():
     )
 
 
-def mac_icns(source_png):
-    """A provisional .icns from the local Ora logo through sips and iconutil."""
-    with tempfile.TemporaryDirectory(prefix="ora-vibe-icon-") as directory:
-        iconset = Path(directory) / "Ora Vibe Coder.iconset"
-        iconset.mkdir()
-        sizes = ((16, "icon_16x16.png"), (32, "icon_16x16@2x.png"), (32, "icon_32x32.png"),
-                 (128, "icon_128x128.png"), (256, "icon_128x128@2x.png"),
-                 (256, "icon_256x256.png"), (512, "icon_512x512.png"))
-        for size, name in sizes:
-            subprocess.run(["/usr/bin/sips", "-z", str(size), str(size), str(source_png), "--out", str(iconset / name)],
-                           check=True, capture_output=True, timeout=120)
-        icns = Path(directory) / "applet.icns"
-        subprocess.run(["/usr/bin/iconutil", "-c", "icns", str(iconset), "-o", str(icns)],
-                       check=True, capture_output=True, timeout=120)
-        return icns.read_bytes()
-
-
 def mac_applet_files(app=None, python=None, version="0.0.0"):
     if sys.platform != "darwin":
         raise ValueError("The Mac application launcher is generated on macOS.")
@@ -665,8 +648,8 @@ def mac_applet_files(app=None, python=None, version="0.0.0"):
                        check=True, capture_output=True, timeout=300)
         executable = bundle / "Contents" / "MacOS" / EXECUTABLE_NAME
         (bundle / "Contents" / "MacOS" / "applet").rename(executable)
-        logo = ROOT / "ora_vibe_coder" / "static" / "ora-logo.png"
-        (bundle / "Contents" / "Resources" / "applet.icns").write_bytes(mac_icns(logo))
+        icon = ROOT / "ora_vibe_coder" / "static" / "ora-vibe-coder.icns"
+        (bundle / "Contents" / "Resources" / "applet.icns").write_bytes(icon.read_bytes())
         # Edit the compiler's own plist: the applet runtime depends on its
         # stay-open and usage-description keys, so nothing else is replaced.
         plist_path = bundle / "Contents" / "Info.plist"
@@ -675,7 +658,10 @@ def mac_applet_files(app=None, python=None, version="0.0.0"):
             "CFBundleName": EXECUTABLE_NAME, "CFBundleDisplayName": EXECUTABLE_NAME,
             "CFBundleIdentifier": "org.ora.vibe-coder", "CFBundleExecutable": EXECUTABLE_NAME,
             "CFBundleShortVersionString": version,
+            "CFBundleIconFile": "applet.icns",
         })
+        # The compiler's named asset otherwise takes priority over the icon file.
+        plist.pop("CFBundleIconName", None)
         plist_path.write_bytes(plistlib.dumps(plist))
         # Every content and ownership write happens BEFORE final signing. The
         # ownership record lives in a valid bundle resource location and omits

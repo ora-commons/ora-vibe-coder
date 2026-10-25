@@ -1724,7 +1724,7 @@ async function send() {
     renderMaterialChosen();
     syncVisibleInput();
     if (currentId !== originId) return;  // The switch already routed this page to the other project.
-    lastOperation = result.operation;
+    updateOperation(result.operation);
     await loadConversation();
     if (currentId !== originId) return;  // Ownership rechecked after the await.
     updateOperation(result.operation);
@@ -1793,6 +1793,7 @@ async function loadConversation() {
   resolvePendingDraft(null);
   renderConversation();
   renderQuestions();
+  refreshRepairs();
   reviewSuggestion();
 }
 function turnMeta(kind, tool, stage) {
@@ -2035,6 +2036,7 @@ function updateOperation(operation) {
       lastOperation = operation;
       renderStatusActivity();
       updateSendState();
+      refreshRepairs();
       return;
     }
     bar.dataset.operationKey = key;
@@ -2090,6 +2092,7 @@ function updateOperation(operation) {
   else renderStatusActivity();
   if (wasUnknown) { updateSecondOpinion(); renderRunBanner(); }
   updateSendState();
+  refreshRepairs();
 }
 // Secondary detail of the last turn: the saved-file readback and the Bridge
 // diagnostics that ask nothing of the user, kept in the More area.
@@ -2634,7 +2637,7 @@ async function deliverStep(step, action = null, note = "") {
   renderAttachments();
   renderMaterialChosen();
   syncVisibleInput();
-  lastOperation = result.operation;
+  updateOperation(result.operation);
   const replyStage = DELIVERY_STEPS[step]?.stage === "verification" ? "verification" : "programming";
   if (workspace === "build") {
     buildReplyStages.set(id, replyStage);
@@ -2695,18 +2698,31 @@ function reviewSuggestion() {
 // only through its Retry button, never turned into a verdict or a question.
 const sortingState = new Map();
 function sortingTrigger() {
+  let stage, document;
   if (workspace === "build") {
     const verification = project?.verification;
     const label = verification?.status?.label || "";
     if (verification?.path && !verification.status?.unreadable && label.startsWith("NOT PASSED")
-        && !/^NOT PASSED — (REVIEW|REVISION) INCOMPLETE/.test(label)) return {stage: "verification", key: `${verification.path}:${label}`};
-    return null;
+        && !/^NOT PASSED — (REVIEW|REVISION) INCOMPLETE/.test(label)) {
+      stage = "verification"; document = verification;
+    }
+  } else {
+    stage = workspace === "specification" ? "specification" : "planning";
+    const assessment = project?.assessments?.[stage];
+    if ((assessment?.outcome || assessment?.verdict) === "NOT PASSED" && !assessment.issues?.length && !assessment.unreadable
+        && ["current", "unconfirmed"].includes(assessment.applies)) document = assessment;
   }
-  const key = workspace === "specification" ? "specification" : "planning";
-  const assessment = project?.assessments?.[key];
-  if ((assessment?.outcome || assessment?.verdict) === "NOT PASSED" && !assessment.issues?.length && !assessment.unreadable
-      && ["current", "unconfirmed"].includes(assessment.applies)) return {stage: key, key: `${assessment.path}:${assessment.verdict}:${assessment.applies}`};
-  return null;
+  if (!document) return null;
+  const key = `${currentId}:${stage}:${document.path}:${document.findings_key}`;
+  const sorted = sortingState.get(key);
+  // A later accepted reply retires this exact saved list. Failed submissions
+  // leave it unanswered; a later saved report has its own content key.
+  const relevant = turn => stage === "verification"
+    ? ["programming", "programming-result", "verification"].includes(turn.stage) : turn.stage === stage;
+  if (sorted?.turn && (conversationTurns.some(turn => relevant(turn) && turn.turn > sorted.turn && turn.state === "complete")
+      || lastOperation?.project === project.root && relevant(lastOperation) && lastOperation.turn > sorted.turn
+         && ["starting", "running", "finished"].includes(lastOperation.state))) return null;
+  return {stage, key};
 }
 async function reviewPointer() {
   const note = $("assessment-note");
@@ -2722,10 +2738,11 @@ async function renderRepairs() {
   const box = $("repairs-box");
   const trigger = currentId && workspace ? sortingTrigger() : null;
   reviewPointer();
-  if (!trigger) { sortingState.clear(); box.hidden = true; box.replaceChildren(); return; }
+  if (!trigger) { box.hidden = true; box.replaceChildren(); return; }
   const cached = sortingState.get(trigger.key);
   if (cached) { renderRepairsResult(trigger, cached); return; }
   box.hidden = false;
+  box.sortingResult = null;
   box.textContent = "Sorting the findings into AI-can-fix and needs-your-input…";
   let result;
   try { result = await api("sort-findings", {id: currentId, stage: trigger.stage}); }
@@ -2737,7 +2754,11 @@ async function renderRepairs() {
 function refreshRepairs() { if (currentId && workspace) renderRepairs(); }
 function renderRepairsResult(trigger, result) {
   const box = $("repairs-box");
+  if (sortingTrigger()?.key !== trigger.key) return;
   sortingState.set(trigger.key, result);
+  if (!sortingTrigger()) { box.hidden = true; box.replaceChildren(); reviewPointer(); return; }
+  if (!box.hidden && box.sortingResult === result) return;
+  box.sortingResult = result;
   box.hidden = false;
   box.replaceChildren();
   if (result.state === "answered") {
@@ -2760,7 +2781,7 @@ function renderRepairsResult(trigger, result) {
         const blocked = routeBlock(tool);
         if (blocked) { status(`${blocked.reason}. ${blocked.remedy}`, "warning"); return; }
         const result = await api("repair", {id: currentId, stage: trigger.stage, tool, roles: oneTimeRoles()});
-        lastOperation = result.operation;
+        updateOperation(result.operation);
         await loadConversation();
         if (currentId) updateOperation(result.operation);
       });
