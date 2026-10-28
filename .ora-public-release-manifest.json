@@ -33,7 +33,7 @@
     {
       "executable": false,
       "path": "NOTICE.md",
-      "sha256": "e140aa6ceb6a90501514b1952d52b1cc88cc42b22f53fd280e7d7035ce6d35e3"
+      "sha256": "9a86256470854a37c8f806f62f6efc4a9faa79f4affa27a47ac8f7621982803d"
     },
     {
       "executable": false,
@@ -463,7 +463,7 @@
     {
       "executable": false,
       "path": "ora_vibe_coder/server.py",
-      "sha256": "489a47f9a7a3eea005a72c9e1a659272596cda2f076775277cf75d852478fea3"
+      "sha256": "730b8e4c44858219257eca668a0b23c0ee4419f097f393b7589f57dbf31bb4bf"
     },
     {
       "executable": false,
@@ -473,7 +473,7 @@
     {
       "executable": false,
       "path": "ora_vibe_coder/static/index.html",
-      "sha256": "7d4233a53040d05ab4169e6312370647f0dfabb9ecb5e7a04652142a05c0d74e"
+      "sha256": "62177eb9820696fd1308b992afd8677e6d7a50a3e7c31b66c8dc424e410b0383"
     },
     {
       "executable": false,
@@ -488,17 +488,17 @@
     {
       "executable": false,
       "path": "ora_vibe_coder/static/style.css",
-      "sha256": "613fd9287ee4522834f212b3f87311c12e857aa731a958acc8c3dc329106d137"
+      "sha256": "68022a3635d16ba1da962ac8c82c94b1a06065023a2baa7a085a65aadc9b9ce5"
     },
     {
       "executable": false,
-      "path": "ora_vibe_coder/static/vendor/Quicksand.OFL.txt",
-      "sha256": "14d28541780d90f6577bb7abcc6f005bf6969614294e75c82abb8758a696ad46"
+      "path": "ora_vibe_coder/static/vendor/RockSalt-Regular.ttf",
+      "sha256": "c5421d1ced1949488f29d11b75b7ef967abe2d870f816246bf18fdc0f3e29c96"
     },
     {
       "executable": false,
-      "path": "ora_vibe_coder/static/vendor/Quicksand.ttf",
-      "sha256": "39c9b64223561f56aaff6062a6f04063c4fc86809ad6768722c06614d977e1cc"
+      "path": "ora_vibe_coder/static/vendor/RockSalt.LICENSE.txt",
+      "sha256": "513ba3cc9e9f3ef5793f908f10f5e0e9db44503bb4febe6748f26bc722ca8ed6"
     },
     {
       "executable": false,
@@ -518,17 +518,17 @@
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/.claude-plugin/plugin.json",
-      "sha256": "21054bc0be6be2479cb437172708deaa9f8b6d467a41fa745e6749f304206eb3"
+      "sha256": "10e452833c6d08f93c7ba1dd987407536085fb40cc0f3a2521c7764b77460c09"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/.codex-plugin/plugin.json",
-      "sha256": "2cd191ad6fe4bdcc9ed01b7e5f5dc963f5cf1101c57f03851884b1102a0791be"
+      "sha256": "0567277f9eac329c233f5f7c6abd208c1e9354fbd453309c607b695d5cad82cf"
     },
     {
       "executable": false,
       "path": "plugins/ora-vibe-coder/VERSION",
-      "sha256": "986489ec745f6b45b3e46d0c11e947631c79c6703097e1a5d25624b11a8bec60"
+      "sha256": "9c9a2728fbc8f59e74b3ae5a1223a13f641f61d677aa5f892d1b0d7ab5e9cf6e"
     },
     {
       "executable": false,

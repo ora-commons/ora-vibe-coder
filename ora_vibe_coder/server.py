@@ -30,7 +30,7 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
           "/static/app.js": ("app.js", "application/javascript; charset=utf-8"),
           "/static/style.css": ("style.css", "text/css; charset=utf-8"),
           "/static/vendor/markdown-it.min.js": ("vendor/markdown-it.min.js", "application/javascript; charset=utf-8"),
-          "/static/vendor/Quicksand.ttf": ("vendor/Quicksand.ttf", "font/ttf")}
+          "/static/vendor/RockSalt-Regular.ttf": ("vendor/RockSalt-Regular.ttf", "font/ttf")}
 WORKSPACES = ("specification", "plan", "build")
 RELEASE_LOOKUP_URL = "https://api.github.com/repos/ora-commons/ora-vibe-coder/releases/latest"
 UPDATE_STEPS = ("Download the new release, choose Quit Vibe in Settings, open the new release's setup, "
