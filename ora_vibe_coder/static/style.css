@@ -1,4 +1,4 @@
-@font-face { font-family: "Quicksand"; src: url("/static/vendor/Quicksand.ttf") format("truetype-variations"); font-weight: 300 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Rock Salt"; src: url("/static/vendor/RockSalt-Regular.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
 :root { color-scheme: light dark; --ovc-bg: light-dark(#F4ECD8, #15110A); --ovc-panel: light-dark(#EDE3CC, #1F1A0F); --ovc-panel-2: light-dark(#E5DAC0, #2A2218); --ovc-text: light-dark(#1A1A1A, #E8E0CC); --ovc-muted: light-dark(#5A5248, #A89F8A); --ovc-border: light-dark(#D4C8A8, #3A3022); --ovc-accent: light-dark(#6D4F33, #A48055); --ovc-accent-text: light-dark(#FFFFFF, #15110A); --ovc-green: light-dark(#3F7D4D, #5FA86E); --ovc-amber: light-dark(#A56F12, #E6BE61); --ovc-red: light-dark(#B22222, #E66B5B); --spine-cols: minmax(200px, 42fr) 58px minmax(200px, 58fr); font-family: Avenir Next, Segoe UI, system-ui, sans-serif; color: var(--ovc-text); font-size: 14px; line-height: 1.45; background: var(--ovc-bg); }
 :root[data-theme="dark"] { color-scheme: dark; } :root[data-theme="light"] { color-scheme: light; }
 * { box-sizing: border-box; }
@@ -155,7 +155,9 @@ button.pending::after { content: "·"; margin-left: 2px; color: var(--ovc-muted)
 .spine { position: relative; min-width: 0; display: flex; flex-direction: column; align-items: center; padding-top: 14px; border-inline: 1px solid var(--ovc-border); background: var(--ovc-panel-2); cursor: col-resize; touch-action: none; user-select: none; }
 .spine-mark { width: 50px; height: auto; display: block; }
 .spine-mark .wm-stroke-base { stroke: var(--ovc-muted); fill: none; } .spine-mark .wm-stroke-bright { stroke: var(--ovc-text); fill: none; } .spine-mark .wm-fill-base { fill: var(--ovc-muted); stroke: none; }
-.spine-name { margin-top: 14px; writing-mode: vertical-rl; text-orientation: upright; font-family: "Quicksand", "Avenir Next", system-ui, sans-serif; font-weight: 300; font-size: 32px; line-height: 1; letter-spacing: -0.16em; color: var(--ovc-text); opacity: .72; }
+.spine-name { margin-top: 14px; display: flex; flex: none; flex-direction: column; gap: 22px; font-family: "Rock Salt", cursive; font-weight: 400; font-size: 19.4px; font-synthesis: none; line-height: 38px; color: var(--ovc-text); }
+.spine-word { display: flex; flex-direction: column; }
+.spine-word > span { display: block; width: 44px; height: 38px; text-align: center; }
 .spine:hover, .spine:focus-visible { background: color-mix(in srgb, var(--ovc-accent) 7%, var(--ovc-panel-2)); }
 .spine:focus-visible { outline: 3px solid var(--ovc-accent); outline-offset: -3px; }
 .split[data-mode="chat"] .spine, .split[data-mode="doc"] .spine { cursor: default; }
@@ -305,7 +307,7 @@ details { margin: 10px 0; } summary { cursor: pointer; padding: 5px 0; } fieldse
   .workspace-head h2 { grid-row: 3; }
   .first-step select { padding: 4px; } .first-step .readiness { padding: 2px 4px; font-size: .7rem; }
   .first-step #recheck { width: 30px; padding: 3px; font-size: 1rem; } .recheck-short { display: none; } .recheck-icon { display: inline; }
-  .spine-mark { width: 42px; } .spine-name { font-size: 26px; }
+  .spine-mark { width: 42px; } .spine-name { font-size: 16px; line-height: 31px; gap: 18px; } .spine-word > span { height: 31px; }
 }
 @media (max-height: 560px), (max-width: 760px) {
   body { height: auto; min-height: 100dvh; overflow: auto; }
