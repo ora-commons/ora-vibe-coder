@@ -690,7 +690,7 @@ class Handler(BaseHTTPRequestHandler):
             self.server.remember_project(self.server.store.projects[key].root)
             return {"id": key}
         allowed = {"/api/project", "/api/save", "/api/read", "/api/read-file", "/api/approve-reference", "/api/prepare", "/api/preview", "/api/handoff", "/api/copy", "/api/continue",
-                   "/api/converse", "/api/turn-state", "/api/conversation", "/api/review",
+                   "/api/converse", "/api/turn-input", "/api/turn-state", "/api/conversation", "/api/review",
                    "/api/judgment", "/api/sort-findings", "/api/approve-plan", "/api/approve-document", "/api/materiality", "/api/repair", "/api/deliver",
                    "/api/project-settings", "/api/run-start", "/api/run-stop", "/api/run-answer", "/api/run-resume", "/api/run-configure", "/api/run-copy", "/api/action-stop"}
         if path not in allowed:
@@ -795,6 +795,15 @@ class Handler(BaseHTTPRequestHandler):
             # draft to this project and can redeliver originals same-origin.
             return {"turn": handle.turn, "operation": handle.snapshot(),
                     "images": list(handle.retained_images)}
+        if path == "/api/turn-input":
+            shape(data, ["id", "turn", "run", "target", "text"])
+            strings(data, ["turn", "run", "text"])
+            target = data["target"]
+            if not isinstance(target, dict) or set(target) != {"thread_id", "turn_id"} or any(not isinstance(value, str) or not value for value in target.values()):
+                raise ProjectError("The originating native turn is required.")
+            if self.server.stopping:
+                raise ProjectError("Vibe is closing. Your draft is retained.")
+            return self.server.conversation.send_input(project, data["turn"], data["run"], target, data["text"])
         if path == "/api/turn-state":
             shape(data, ["id"])
             report = self.server.conversation.report(project)

@@ -540,6 +540,7 @@ def read_turn(folder):
     """One turn's derived facts, from the retained records alone."""
     session = Path(folder) / "session"
     user, request, response, outcome = None, None, None, None
+    inputs = {}
     messages = session / "messages"
     if messages.is_dir():
         for path in sorted(messages.glob("*.md")):
@@ -548,6 +549,12 @@ def read_turn(folder):
             except (OSError, UnicodeDecodeError):
                 continue
             if message["kind"] == "note":
+                if message["body"].startswith("Work-Input-JSON: "):
+                    try:
+                        value = json.loads(message["body"].split(": ", 1)[1])
+                        inputs[value["id"]] = value
+                    except (ValueError, KeyError, TypeError):
+                        pass
                 fields = note_fields(message["body"]) or {}
                 if fields.get("Note") == NOTE_USER and user is None:
                     user = (message, fields)
@@ -572,7 +579,7 @@ def read_turn(folder):
         state = outcome_fields["Turn-Outcome"]
     elif response is not None:
         state = "complete"
-    return {"folder": Path(folder).name,
+    return {"folder": Path(folder).name, "inputs": list(inputs.values()),
             "stage": fields.get("Stage", ""), "tool": fields.get("Tool", ""),
             "purpose": fields.get("Purpose", ""), "fields": fields, "text": user_text_of(user[0]["body"]) if user else None,
             "images": [name for name in (fields.get("Images") or "").split("; ") if name],
@@ -629,7 +636,7 @@ def read_conversation(project):
         # (unconfirmed) rather than final, and refresh once it is not.
         view = {"turn": turn["folder"], "stage": turn["stage"], "tool": turn["tool"],
                 "purpose": turn["purpose"], "text": turn["text"] or "", "images": turn["images"], "files": turn["files"],
-                "state": turn["state"], "reply": None, "maintenance": None,
+                "state": turn["state"], "inputs": turn["inputs"], "reply": None, "maintenance": None,
                 "outcome_recorded": turn["outcome"] is not None,
                 "artifact": None, "bridge_diagnostics": [], "questions": []}
         if turn["reply"] is not None:
@@ -1316,6 +1323,11 @@ class TurnOperation:
         self.artifact_start = None
         self.artifact = None
         self.owned_descendants = {}
+        self.run = ""
+        self.input_process = None
+        self.input_target = None
+        self.input_results = {}
+        self.input_lock = threading.Lock()
 
     def begin(self, turn):
         with self.lock:
@@ -1380,6 +1392,13 @@ class TurnOperation:
             return
         with self.lock:
             self.last_contact = time.monotonic()
+            kind = event.get("event")
+            if kind == "work_input_ready":
+                self.input_target = {"thread_id": event["thread_id"], "turn_id": event["turn_id"]}
+            elif kind in {"work_input_closed", "finished"}:
+                self.input_target = None
+            elif kind == "work_input" and event.get("id") in self.input_results:
+                self.input_results[event["id"]] = event
             if event.get("event") in {"started", "heartbeat", "finished"}:
                 self.phase = str(event.get("phase") or self.phase)
             # Attribution is carried only when the tool reports it — the
@@ -1394,6 +1413,14 @@ class TurnOperation:
                 if isinstance(warning, str) and warning not in self.warnings:
                     self.warnings.append(warning)
                     self.bridge_diagnostics.append(warning)
+
+    def close_input(self):
+        with self.lock:
+            self.input_target = None
+            self.input_process = None
+            for identifier, result in self.input_results.items():
+                if result["status"] == "pending":
+                    self.input_results[identifier] = {"id": identifier, "status": "unknown", "reason": "The connection ended before delivery was acknowledged. Check the retained turn before resending."}
 
     def observed_identity(self):
         """(model, provider) the peer's events reported, empty when none did."""
@@ -1425,7 +1452,9 @@ class TurnOperation:
                     "bridge_diagnostics": list(self.bridge_diagnostics),
                     "visible_warnings": list(self.visible_warnings),
                     "maintenance_reason": self.maintenance_reason,
-                    "outcome_recorded": self.outcome_recorded, "artifact": self.artifact}
+                    "outcome_recorded": self.outcome_recorded, "artifact": self.artifact,
+                    "input_target": dict(self.input_target) if self.input_target else None,
+                    "input_results": list(self.input_results.values()), "run": self.run}
 
 
 def _descendants(pid):
@@ -1539,6 +1568,32 @@ class TurnRegistry:
             handle = self.by_project.get(str(project.root))
         return {"operation": handle.snapshot() if handle else None,
                 "files": document_fingerprint(project)}
+
+    def send_input(self, project, turn, run, target, text):
+        if not text.strip() or len(text.encode("utf-8")) > INPUT_LIMIT:
+            raise ProjectError("Send nonempty text within the ordinary message limit.")
+        with self.lock:
+            handle = self.by_project.get(str(project.root))
+        if handle is None:
+            raise ProjectError("The originating turn is no longer active. Your draft is retained.")
+        with handle.lock:
+            if (handle.tool != "codex" or handle.turn != turn or handle.run != run or handle.cancelled
+                    or handle.state != "running" or handle.input_target != target or not handle.input_process):
+                raise ProjectError("The originating Codex turn is no longer available for messages. Your draft is retained.")
+            identifier = str(time.monotonic_ns())
+            result = {"id": identifier, "status": "pending"}
+            handle.input_results[identifier] = result
+            process = handle.input_process
+        try:
+            with handle.input_lock:
+                process.stdin.write(json.dumps({"id": identifier, "text": text, **target}) + "\n")
+                process.stdin.flush()
+            return result
+        except (OSError, ValueError):
+            with handle.lock:
+                result = {"id": identifier, "status": "unknown", "reason": "The connection failed before delivery was acknowledged. Check the retained turn before resending."}
+                handle.input_results[identifier] = result
+            return result
 
     def in_flight(self):
         """The operation handles still starting or running, oldest first."""
@@ -1771,6 +1826,7 @@ def start_turn(registry, project, tool, stage, text, images, files=(), run_field
     code = project.code_folder()
     locations = _turn_locations(project, code, project.reference("Registry"))
     handle = registry.admit(project.root, tool, stage, locations)
+    handle.run = (run_fields or {}).get("Run", "")
     handle.cancel_requested = cancel_requested
     if activity:
         handle.activity = activity
@@ -1810,7 +1866,7 @@ def start_turn(registry, project, tool, stage, text, images, files=(), run_field
     return handle
 
 
-def _bridge_run(handle, session, arguments, body, model=None, effort=None):
+def _bridge_run(handle, session, arguments, body, model=None, effort=None, steerable=False):
     """One Bridge run in the worker thread: feed the body, observe the
     event stream for aliveness and phase, and return the published reply's
     exact body. Raises ProjectError with the peer's own reason on failure."""
@@ -1827,6 +1883,8 @@ def _bridge_run(handle, session, arguments, body, model=None, effort=None):
     # verification, result-only, and document-repair calls have other stages.
     if handle.tool == "zcode" and handle.stage == "programming":
         argv += ["--work-permission", "full-access"]
+    if steerable:
+        argv += ["--work-input-jsonl"]
     requested_model = handle.model if model is None else model
     requested_effort = handle.effort if effort is None else effort
     if requested_model:
@@ -1848,7 +1906,7 @@ def _bridge_run(handle, session, arguments, body, model=None, effort=None):
                                        start_new_session=os.name != "nt")
             handle.dispatched = True
             handle.track(process)
-            return _read_bridge_run(handle, process, session, body)
+            return _read_bridge_run(handle, process, session, body, steerable)
         except (OSError, ProjectError) as error:
             if handle.is_cancelled() or isinstance(error, TurnInterrupted):
                 raise TurnInterrupted(INTERRUPTED_REASON) from error
@@ -1874,6 +1932,7 @@ def _bridge_run(handle, session, arguments, body, model=None, effort=None):
                 continue
             raise
         finally:
+            handle.close_input()
             if process is not None and process.poll() is None:
                 process.terminate()
                 try:
@@ -1882,18 +1941,24 @@ def _bridge_run(handle, session, arguments, body, model=None, effort=None):
                     _force_owned_children(handle)
 
 
-def _read_bridge_run(handle, process, session, body):
+def _read_bridge_run(handle, process, session, body, steerable=False):
     """Read this owned run; its caller guarantees process cleanup on errors."""
 
     # The body can exceed a pipe buffer and Bridge may exit before reading it,
     # so a small feeder thread owns standard input.
     def feed():
         try:
-            process.stdin.write(body)
-            process.stdin.close()
+            process.stdin.write(json.dumps({"body": body}) + "\n" if steerable else body)
+            if steerable:
+                process.stdin.flush()
+            else:
+                process.stdin.close()
         except (BrokenPipeError, OSError):
             pass
 
+    if steerable:
+        with handle.lock:
+            handle.input_process = process
     feeder = threading.Thread(target=feed, daemon=True)
     feeder.start()
     diagnostic_output = []
@@ -1923,7 +1988,7 @@ def _read_bridge_run(handle, process, session, body):
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
-    for stream in (process.stdout, process.stderr):
+    for stream in (process.stdin, process.stdout, process.stderr):
         try:
             stream.close()
         except OSError:
@@ -1978,7 +2043,7 @@ def _run_turn(handle, project, folder, session, stage, note_ref, attachments, te
                                        getattr(handle, "application_instructions", ""))
         arguments = [*(part for path in attachments for part in ("--attachment", str(path))),
                      "--note-ref", note_ref, "--purpose", PURPOSE_WORK]
-        reply = _bridge_run(handle, session, arguments, request)
+        reply = _bridge_run(handle, session, arguments, request, steerable=tool == "codex")
     except Exception as error:
         state = "interrupted" if isinstance(error, TurnInterrupted) or handle.is_cancelled() else "failed"
         handle.artifact = _artifact_readback(project, handle.artifact_start)
