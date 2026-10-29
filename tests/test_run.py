@@ -1157,6 +1157,19 @@ class RunCase(unittest.TestCase):
         for step in ("build", "correction"):
             self.assertIn("review-model (requested)", self.step_requests(project, step)[0])
         self.assertEqual(final["reported_model"], "reported-native-model")
+        # The default internal reviewer shares the full implementation choice.
+        # A blank review override also supersedes a saved explicit reviewer.
+        for config in ({"roles": {}}, {"roles": {"review": {"tool": "", "model": "", "effort": ""}}}):
+            defaults = {"implementation": choices["implementation"]}
+            if config["roles"]:
+                defaults["review"] = choices["review"]
+            self.assertEqual(run_module.resolve_assignment("review", config, "build", "zcode", defaults)[:3],
+                             ("codex", "implementation-model", "high"))
+        self.assertIn("Requested independent verifier choices (not verified): Claude Code, model verification-model (requested), effort low (requested)", self.step_requests(project, "verification")[0])
+        self.assertEqual(run_module.resolve_assignment("correction", {"roles": {}}, "build", "claude",
+                                                       {"implementation": choices["implementation"]})[:3],
+                         ("codex", "implementation-model", "high"))
+
 
     def test_skip_review_warning_switch_round_trip(self):
         import http.client

@@ -54,6 +54,10 @@ def stalled_inventory_reader():
         project_module._inventory_reader()
 
 
+def compact_value(tool, model=""):
+    return json.dumps([tool, model], separators=(",", ":")) if tool else ""
+
+
 class LocalBoundary(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -72,6 +76,10 @@ class LocalBoundary(unittest.TestCase):
 
     def select_project(self, page, project_id):
         page.locator("#project").select_option(project_id)
+
+    def choose_primary(self, page, label):
+        tool = next(key for key, value in hosts.HOSTS.items() if value[0] == label)
+        page.locator("#primary-choice .role-model-choice").select_option(compact_value(tool))
 
     def test_mid_run_message_targets_origin_and_preserves_failed_draft(self):
         from playwright.sync_api import expect, sync_playwright
@@ -365,7 +373,7 @@ class LocalBoundary(unittest.TestCase):
                     readiness_requests.append(route.request.post_data_json)
                     route.fulfill(json=recovered)
                 page.route("**/api/readiness", recovered_readiness)
-                page.locator("#destination").select_option(label="Codex")
+                self.choose_primary(page, "Codex")
                 page.evaluate("() => { readinessChain += 1; readinessState = {checking: false, peers: [{peer: 'codex', ready: false, authentication: 'required', work: 'supported', reason: 'Sign in to Codex.'}]}; renderReadiness(); }")
                 expect(page.locator("#tool-problem")).to_contain_text("Sign in to Codex.")
                 recovered_operation = {"turn": "recovered-dispatch", "tool": "codex", "stage": "specification",
@@ -932,7 +940,7 @@ elif skill.exists():
                 page.locator("#file-list button", has_text=note.name).click()
                 page.locator("#file-cancel").click()
                 expect(page.locator("#message-files")).to_contain_text(note.name)
-                page.locator("#destination").select_option(label="Codex")
+                self.choose_primary(page, "Codex")
                 page.locator("#message").press("Enter")
                 expect(page.locator("#status-bar")).to_contain_text("Test stopped before dispatch")
                 self.assertEqual(submitted[0]["text"], page.locator("#message").get_attribute("placeholder"))
@@ -1022,7 +1030,7 @@ elif skill.exists():
                                            arg={"name": name, "stage": stage})
                     expect(page.locator("#stage-panel")).to_be_visible()
                     expect(page.locator("#rails")).to_be_visible()
-                    page.locator("#destination").select_option(label="Codex")
+                    self.choose_primary(page, "Codex")
                     page.wait_for_function("() => readinessState.peers?.some(peer => peer.peer === 'codex' && peer.ready)")
 
                 def capture(name):
@@ -1375,7 +1383,7 @@ elif skill.exists():
                     delete window.openingRace; delete window.firstOpening; delete window.secondOpening; }""")
 
                 opened("Specification", "specification")
-                page.locator("#destination").select_option(label="Codex")
+                self.choose_primary(page, "Codex")
                 page.evaluate("() => deliverStep('create-plan', 'copy')")
                 expect(page.locator("#status-bar")).to_contain_text("Create the Plan request copied and saved")
                 self.assertTrue((self.home / "Specification" / "Handoff.md").is_file())
@@ -1607,6 +1615,7 @@ elif skill.exists():
 
         with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready) as probes, \
                 mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
+                mock.patch("ora_vibe_coder.server.model_inventory", return_value={"models": []}), \
                 mock.patch.object(hosts, "desktop_application", side_effect=lambda host, platform=None: None if host == "qwen" else Path("/Applications") / hosts.DESKTOP_APPS[host]):
             with sync_playwright() as playwright:
                 if not Path(playwright.chromium.executable_path).is_file():
@@ -1638,7 +1647,7 @@ elif skill.exists():
                     expect(page.locator("#split")).to_have_attribute("data-mode", "doc")
                     page.set_viewport_size({"width": 1280, "height": 720})
                     expect(page.locator("#split")).to_have_attribute("data-mode", "split")
-                    page.locator("#destination").select_option(label="Codex")
+                    self.choose_primary(page, "Codex")
                     page.wait_for_function("() => peerFacts('codex')?.authentication === 'confirmed'")
                     expect(page.locator("#tool-problem")).to_be_hidden()
                     expect(page.locator("#readiness, #recheck, #more")).to_have_count(0)
@@ -1652,7 +1661,7 @@ elif skill.exists():
                     expect(page.locator("#stage-title")).to_have_text("Plan")
                     self.assertEqual(page.locator("#destination").input_value(), "Codex")
                     self.assertEqual(probes.call_count, checked)
-                    page.locator("#destination").select_option(label="ZCode")
+                    self.choose_primary(page, "ZCode")
                     self.assertEqual(page.evaluate("() => selectedReadiness().effective_permission"), "edit")
                     page.locator('.rail[data-stage="build"]').click()
                     self.assertEqual(page.evaluate("() => selectedReadiness().effective_permission"), "full-access")
@@ -1672,20 +1681,20 @@ elif skill.exists():
                     page.locator('.rail[data-stage="plan"]').click()
                     self.assertEqual(page.evaluate("() => selectedReadiness().effective_permission"), "edit")
                     self.assertEqual(probes.call_count, checked)
-                    page.locator("#destination").select_option(label="Claude Code")
+                    self.choose_primary(page, "Claude Code")
                     page.locator('.rail[data-stage="specification"]').click()
-                    self.assertEqual(page.locator("#destination").input_value(), "Claude Code")
+                    self.assertEqual(page.locator("#destination").input_value(), "Codex")
                     self.select_project(page, second)
                     expect(page.locator("#project-name")).to_have_text("Two")
                     expect(page.locator("#destination")).to_have_value("")
                     self.select_project(page, first)
-                    expect(page.locator("#destination")).to_have_value("Claude Code")
+                    expect(page.locator("#destination")).to_have_value("Codex")
 
                     # One-click handoffs: step 6 saves the complete request and the
                     # status bar reports it; saved request controls stay beside the stage.
                     page.locator(".rail[data-stage=plan]").click()
                     page.locator("#next-step").evaluate("element => element.open = true")
-                    expect(page.locator("#transition")).to_have_text("Send to Claude Code")
+                    expect(page.locator("#transition")).to_have_text("Send to Codex")
                     page.locator("#message").fill("Focus the storage layer only.")
                     page.locator("#copy-request").click()
                     expect(page.locator("#implementation-warning")).to_be_visible()
@@ -1703,11 +1712,12 @@ elif skill.exists():
                     expect(page.locator("#prepared-path")).to_have_value(str(implementation))
                     # A Hermes/Qwen selection has no in-app route: the step-6
                     # button names Terminal, and Run to Completion stays off.
-                    page.locator("#destination").select_option(label="Qwen Code")
+                    self.choose_primary(page, "Qwen Code")
                     expect(page.locator("#transition")).to_have_text("Open Qwen Code in Terminal")
                     expect(page.locator("#run-completion")).to_be_disabled()
-                    self.assertIn("cannot exchange turns in-app", page.locator("#run-completion").get_attribute("title") or "")
-                    page.locator("#destination").select_option(label="Claude Code")
+                    self.assertIn("has no Agent Bridge work mode", page.locator("#run-completion").get_attribute("title") or "")
+                    self.assertIn("Open in Terminal and Copy request stay available", page.locator("#run-completion").get_attribute("title") or "")
+                    self.choose_primary(page, "Claude Code")
                     expect(page.locator("#run-completion")).to_be_enabled()
                 finally:
                     browser.close()
@@ -1739,7 +1749,8 @@ elif skill.exists():
         def ready(peer, **kwargs):
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "unknown", "warnings": []}
         with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready), \
-                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
+                mock.patch("ora_vibe_coder.server.model_inventory", return_value={"models": []}), sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             context = browser.new_context(permissions=["clipboard-read", "clipboard-write"])
             try:
@@ -1809,9 +1820,9 @@ elif skill.exists():
                 # Build's steps share one delivery path: Copy saves the complete
                 # request with the selected evidence; Send posts the identical
                 # instruction. No conversation turn is started by Copy.
-                page.locator("#destination").select_option(label="Codex")
+                self.choose_primary(page, "Codex")
                 page.locator("#review-step").evaluate("element => element.open = true")
-                page.locator("#verification-verifier").select_option(label="Claude Code")
+                page.locator("#verifier-choice .role-model-choice").select_option(compact_value("claude"))
                 page.evaluate("path => material().push({path, name: 'Selected evidence.txt'})", str(evidence))
                 deliveries = []
 
@@ -1822,7 +1833,7 @@ elif skill.exists():
                         route.fallback()  # A copy runs on the real server and saves the file.
                         return
                     deliveries.append(body)
-                    route.fulfill(json={"turn": f"fake-{len(deliveries)}", "operation": {"turn": f"fake-{len(deliveries)}", "state": "finished", "elapsed_seconds": 0}, "images": []})
+                    route.fulfill(json={"turn": f"fake-{len(deliveries)}", "operation": {"turn": f"fake-{len(deliveries)}", "state": "finished", "stage": "verification" if body["step"] == "verification" else "programming", "elapsed_seconds": 0}, "images": []})
                 page.route("**/api/deliver", deliver)
                 # The delivery assertions read the status bar's own words; the
                 # poll's changed-file notice for this test's own writes would
@@ -1836,7 +1847,7 @@ elif skill.exists():
                         page.locator("#review-step").evaluate("element => element.open = true")
                     page.locator(button).click()
                     expect(page.locator("#build-action-dialog")).to_be_visible()
-                    expect(page.locator("#build-action-send")).to_have_text("Send to Codex")
+                    expect(page.locator("#build-action-send")).to_have_text("Send to Claude Code" if action == "verify" else "Send to Codex")
                     page.locator("#build-action-copy").click()
                     expect(page.locator("#build-action-dialog")).not_to_be_visible()
                     # This project's Specification and Plan carry COMPLETE
@@ -1860,15 +1871,17 @@ elif skill.exists():
                     # A copy consumes the unsent text once it is delivered.
                     expect(page.locator("#message")).to_have_value("")
                     page.locator(button).click()
-                    page.locator("#build-action-send").click()
+                    with page.expect_response("**/api/deliver"):
+                        page.locator("#build-action-send").click()
                     expect(page.locator("#build-action-dialog")).not_to_be_visible()
-                    expect(page.locator("#status-bar")).to_contain_text("Sent to Codex as turn")
+                    page.wait_for_function("turn => lastOperation?.turn === turn", arg=f"fake-{len(deliveries)}")
+                    expect(page.locator("#status-bar")).to_contain_text("Verification · Finished" if action == "verify" else "Implementation · Finished")
                 self.assertEqual([item["step"] for item in deliveries],
                                  ["verification", "verification", "correction", "correction"])
                 self.assertEqual([item["action"] for item in deliveries], ["copy", "send", "copy", "send"])
                 self.assertEqual(deliveries[0]["files"], [str(evidence)])
                 self.assertIn("Stop there.", (folder / "Handoff.md").read_text(encoding="utf-8"))
-                self.assertTrue(all(item["tool"] == "codex" for item in deliveries))
+                self.assertEqual([item["tool"] for item in deliveries], ["claude", "claude", "codex", "codex"])
             finally:
                 browser.close()
 
@@ -1985,6 +1998,7 @@ elif skill.exists():
 
         with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready), \
                 mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
+                mock.patch("ora_vibe_coder.server.model_inventory", return_value={"models": []}), \
                 mock.patch("ora_vibe_coder.conversation.start_aux", side_effect=ValueError("comparison unavailable in this fixture")), sync_playwright() as playwright:
             if not Path(playwright.chromium.executable_path).is_file():
                 self.skipTest("Playwright's Chromium is not installed for the browser check")
@@ -1996,16 +2010,17 @@ elif skill.exists():
                 page.evaluate("() => { window.clipboardText = ''; navigator.clipboard.writeText = text => { window.clipboardText = text; return Promise.resolve(); }; }")
                 self.select_project(page, project_id)
                 page.wait_for_function("() => pollTimer !== null && conversationLoaded")
-                page.locator("#destination").select_option(label="Codex")
+                self.choose_primary(page, "Codex")
                 # The step-5 Reviewer starts at the step-3 tool and then stays
                 # independent: changing either changes only itself.
                 page.wait_for_function("() => readinessState.peers?.some(peer => peer.peer === 'codex')")
                 page.locator("#review-step").evaluate("element => element.open = true")
                 expect(page.locator("#step-reviewer")).to_have_value("codex")
-                page.locator("#destination").select_option(label="Claude Code")
+                page.locator("#document-review-choice .role-model-choice").select_option(compact_value("codex"))
+                self.choose_primary(page, "Claude Code")
                 expect(page.locator("#step-reviewer")).to_have_value("codex")
-                page.locator("#step-reviewer").select_option("claude")
-                page.locator("#destination").select_option(label="Codex")
+                page.locator("#document-review-choice .role-model-choice").select_option(compact_value("claude"))
+                self.choose_primary(page, "Codex")
                 expect(page.locator("#step-reviewer")).to_have_value("claude")
 
                 # No assessment means NOT REVIEWED, never a failure; an
@@ -2214,7 +2229,7 @@ elif skill.exists():
                 self.select_project(page, project_id)
                 page.wait_for_function("() => pollTimer !== null && conversationLoaded")
                 page.locator(".rail[data-stage=build]").click()
-                page.locator("#destination").select_option(label="Codex")
+                self.choose_primary(page, "Codex")
                 page.locator("#next-step").evaluate("element => element.open = true")
                 page.wait_for_function("() => [...sortingState.values()].some(result => result.turn === '0001-20260101-120000')")
                 expect(page.locator("#repairs-box")).to_be_hidden()
@@ -2312,7 +2327,7 @@ elif skill.exists():
                     self.select_project(page, project_id)
                     page.wait_for_function("() => pollTimer !== null && conversationLoaded")
                     page.locator(f".rail[data-stage={rail}]").click()
-                    page.locator("#destination").select_option(label="Codex")
+                    self.choose_primary(page, "Codex")
                     page.wait_for_function("turn => [...sortingState.values()].some(result => result.turn === turn)",
                                            arg=f"{number:04d}-20260101-120000")
                     expect(page.locator("#repairs-box")).to_be_hidden()
@@ -2322,6 +2337,197 @@ elif skill.exists():
                     saved_sorting(number + 2, stage, changed, f"Repair the later {title} example.")
                     page.locator("#refresh").click()
                     expect(page.locator("#repairs-box")).to_contain_text(f"Repair the later {title} example.")
+            finally:
+                browser.close()
+
+    def test_compact_choices_follow_native_defaults_across_stages(self):
+        from playwright.sync_api import expect, sync_playwright
+        self.server.settings = Settings(self.home / "compact-settings.json")
+        defaults = {role: {"tool": "codex", "model": "", "effort": ""}
+                    for role in ("specification", "planning", "implementation")}
+        self.server.settings.update(role_defaults=defaults, hide_advisory=True)
+        project_id = self.request("/api/create", {"directory": "Compact", "name": "Compact", "description": "A compact sample", "goals": "A working sample"})[1]["id"]
+        other = self.request("/api/create", {"directory": "Other", "name": "Other", "description": "", "goals": ""})[1]["id"]
+        native = {"configured_model": "native-before", "configured_effort": "high"}
+        calls, assessments, effective_models = [], [], []
+        def inventory(tool):
+            return {**(native if tool == "codex" else {}), "models": [
+                {"id": "named", "label": "Named model", "efforts": ["low", "high"], "default_effort": "low"},
+                {"id": "native-before", "efforts": ["low", "high"]},
+                {"id": "native-after", "efforts": ["low", "high"]}]}
+        def handle(tool, stage):
+            operation = mock.Mock(turn=f"fake-{len(calls) + len(assessments)}", retained_images=[])
+            operation.snapshot.return_value = {"turn": operation.turn, "state": "finished", "tool": tool, "stage": stage}
+            return operation
+        def start(_registry, project, tool, stage, text, images, *args, **kwargs):
+            calls.append({"tool": tool, "stage": stage, "text": text, **kwargs})
+            effective_models.append(kwargs.get("model") or native["configured_model"])
+            if stage == "programming" and "Implement the current Plan" in text:
+                (project.root / "Programming Result.md").write_text("# Programming Result\n\nStatus: COMPLETE\n\nFake implementation and separate review completed.\n")
+            return handle(tool, stage)
+        def assess(_registry, project, tool, stage, reviewer, iterate, **kwargs):
+            assessments.append({"tool": tool, "stage": stage, "reviewer": reviewer, **kwargs})
+            return handle(tool, stage)
+        ready = lambda peer, **kwargs: {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
+        with mock.patch.object(conversation, "bridge_check", side_effect=ready), \
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
+                mock.patch("ora_vibe_coder.server.model_inventory", side_effect=inventory) as inventories, \
+                mock.patch.object(conversation, "start_turn", side_effect=start), \
+                mock.patch.object(conversation, "start_assessment", side_effect=assess), sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 1050})
+                errors = []; page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(self.server.url); self.select_project(page, project_id)
+                page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
+                page.evaluate("() => stopPolling()")
+                primary = page.locator("#primary-choice .role-model-choice")
+                expect(primary).to_have_value(compact_value("codex"))
+                expect(primary.locator("option:checked")).to_contain_text("native-before")
+                self.assertEqual(page.locator("#primary-choice select:visible").count(), 2)
+                # A blank request uses the harness's changing defaults at each call.
+                page.locator("#message").fill("Before defaults change")
+                page.locator("#send").click()
+                page.wait_for_function("() => !document.querySelector('#send').disabled")
+                self.assertEqual((calls[-1]["model"], calls[-1]["effort"]), ("", ""))
+                self.assertEqual(effective_models[-1], "native-before")
+                page.locator("#message").fill("Preserve this draft while metadata changes")
+                native.update(configured_model="native-after", configured_effort="low")
+                page.evaluate("() => window.dispatchEvent(new Event('focus'))")
+                expect(primary.locator("option:checked")).to_contain_text("native-after")
+                expect(page.locator("#message")).to_have_value("Preserve this draft while metadata changes")
+                expect(primary).to_have_value(compact_value("codex"))
+                page.locator("#send").click()
+                page.wait_for_function("() => !document.querySelector('#send').disabled")
+                self.assertEqual((calls[-1]["model"], calls[-1]["effort"]), ("", ""))
+                self.assertEqual(effective_models[-1], "native-after")
+                for workspace, role in (("specification", "specification"), ("plan", "planning")):
+                    page.locator(f'[data-stage="{workspace}"]').click()
+                    primary.select_option(compact_value("codex", "named"))
+                    page.locator("#primary-choice .role-effort").select_option("high")
+                    page.locator("#review-step").evaluate("element => element.open = true")
+                    page.locator("#document-review-choice .role-model-choice").select_option(compact_value("claude", "named"))
+                    page.locator("#document-review-choice .role-effort").select_option("low")
+                    page.locator("#opinion-toggle").check()
+                    page.locator("#peer-choice .role-model-choice").select_option(compact_value("codex", "named"))
+                    page.locator("#peer-choice .role-effort").select_option("high")
+                    page.locator("#review").click()
+                    page.wait_for_function("() => !document.querySelector('#review').disabled")
+                    self.assertEqual(assessments[-1], {"tool": "claude", "stage": role, "reviewer": "codex", "model": "named", "effort": "low", "reviewer_model": "named", "reviewer_effort": "high"})
+                    page.locator("#message").fill(f"Work on {workspace}"); page.locator("#send").click()
+                    page.wait_for_function("() => !document.querySelector('#send').disabled")
+                    self.assertEqual((calls[-1]["stage"], calls[-1]["model"], calls[-1]["effort"]), (role, "named", "high"))
+                    page.locator("#settings").click()
+                    expect(page.locator(f'#settings-roles [data-role="{role}_review"] .role-model-choice')).to_have_value(compact_value("claude", "named"))
+                    expect(page.locator(f'#settings-roles [data-role="{role}"] .role-effort')).to_have_value("high")
+                    page.locator("#settings-close").click()
+                    evidence = os.environ.get("VIBE_CONFIGURATION_EVIDENCE")
+                    if evidence:
+                        Path(evidence).mkdir(parents=True, exist_ok=True)
+                        page.screenshot(path=str(Path(evidence) / f"compact-{workspace}-1440.png"), full_page=True)
+                page.locator('[data-stage="build"]').click()
+                page.locator("#result-step").evaluate("element => element.open = true")
+                page.locator("#build-implementation-choice .role-model-choice").select_option(compact_value("codex", "named"))
+                page.locator("#build-implementation-choice .role-effort").select_option("high")
+                expect(primary).to_have_value(compact_value("codex", "named"))
+                loop = page.locator("#loop-review-choice .role-model-choice")
+                expect(loop.locator("option:checked")).to_contain_text("Same as implementation")
+                expect(page.locator("#loop-review-choice .role-effort option:checked")).to_have_text("Same as implementation (high)")
+                with page.expect_response("**/api/deliver"):
+                    page.locator("#implement-review").click()
+                    page.locator("#implementation-proceed").click()
+                self.assertIn("separate fresh reviewer choice as Codex, model named (requested), effort high (requested)", calls[-1]["text"])
+                self.assertIn("save the one current Programming Result", calls[-1]["text"])
+                self.assertTrue((self.home / "Compact" / "Programming Result.md").is_file())
+                loop.select_option(compact_value("claude", "named"))
+                page.locator("#loop-review-choice .role-effort").select_option("low")
+                with page.expect_response("**/api/deliver"):
+                    page.locator("#implement-review").click()
+                    page.locator("#implementation-proceed").click()
+                self.assertIn("separate fresh reviewer choice as Claude Code, model named (requested), effort low (requested)", calls[-1]["text"])
+                page.locator("#review-step").evaluate("element => element.open = true")
+                page.locator("#verifier-choice .role-model-choice").select_option(compact_value("claude", "named"))
+                page.locator("#verifier-choice .role-effort").select_option("high")
+                with page.expect_response("**/api/deliver"):
+                    page.locator("#review").click(); page.locator("#build-action-send").click()
+                self.assertEqual((calls[-1]["tool"], calls[-1]["stage"], calls[-1]["model"], calls[-1]["effort"]), ("claude", "verification", "named", "high"))
+                self.assertIn("Requested independent verifier choices (not verified): Claude Code, model named (requested), effort high (requested)", calls[-1]["text"])
+                expect(page.locator("#destination")).to_have_value("Claude Code")
+                expect(page.locator("#send")).to_contain_text("Claude Code")
+                with page.expect_response("**/api/converse"):
+                    page.locator("#message").fill("Follow up with the selected verifier")
+                    page.locator("#send").click()
+                self.assertEqual((calls[-1]["tool"], calls[-1]["model"], calls[-1]["effort"]), ("claude", "named", "high"))
+                # Repairs inherit implementation, independent of the active verifier.
+                with page.expect_response("**/api/deliver"):
+                    page.locator("#next-step").evaluate("element => element.open = true")
+                    page.locator("#transition").click()
+                    page.locator("#build-action-send").click()
+                    page.locator("#implementation-proceed").click()
+                self.assertEqual((calls[-1]["tool"], calls[-1]["model"], calls[-1]["effort"]), ("codex", "named", "high"))
+                # Refresh the open settings view without replacing its unsaved choices.
+                page.locator("#settings").click()
+                config_primary = page.locator('#settings-roles [data-role="implementation"] .role-model-choice')
+                expect(config_primary).to_have_value(compact_value("codex", "named"))
+                page.locator('#settings-roles [data-role="review"] .role-model-choice').select_option("")
+                config_primary.select_option(compact_value("claude", "named"))
+                page.locator('#settings-roles [data-role="implementation"] .role-effort').select_option("low")
+                expect(page.locator('#settings-roles [data-role="review"] .role-model-choice option:checked')).to_contain_text("Claude Code · named")
+                expect(page.locator('#settings-roles [data-role="review"] .role-effort option:checked')).to_have_text("Same as implementation (low)")
+                native.update(configured_model="native-before")
+                page.evaluate("() => window.dispatchEvent(new Event('focus'))")
+                expect(config_primary).to_have_value(compact_value("claude", "named"))
+                page.locator("#settings-close").click()
+                # Correction returns the composer to the implementation role.
+                expect(primary).to_have_value(compact_value("codex", "named"))
+                expect(page.locator("#build-implementation-choice .role-model-choice")).to_have_value(compact_value("codex", "named"))
+                page.locator("#message").fill("Keep this Build draft")
+                evidence = os.environ.get("VIBE_CONFIGURATION_EVIDENCE")
+                for width, height in ((1440, 1050), (420, 900)):
+                    page.set_viewport_size({"width": width, "height": height})
+                    if width < 700:
+                        page.get_by_role("button", name="Show document", exact=True).click()
+                        expect(page.locator("#build-implementation-choice .role-selected")).to_be_visible()
+                        expect(page.locator("#build-implementation-choice .role-selected")).to_have_text("Codex · Named model")
+                        expect(page.locator("#loop-review-choice .role-selected")).to_have_text("Claude Code · Named model")
+                    page.locator("#result-step").scroll_into_view_if_needed()
+                    self.assertTrue(page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"))
+                    for control in page.locator("#result-step select:visible").all():
+                        self.assertGreater(control.bounding_box()["width"], 120)
+                    if evidence:
+                        Path(evidence).mkdir(parents=True, exist_ok=True)
+                        page.screenshot(path=str(Path(evidence) / f"compact-build-{width}.png"), full_page=True)
+                page.set_viewport_size({"width": 1440, "height": 1050})
+                self.select_project(page, other)
+                expect(primary).to_have_value(compact_value("codex"))
+                self.select_project(page, project_id)
+                expect(page.locator("#message")).to_have_value("Keep this Build draft")
+                # Metadata requests happen on view/picker/focus events only; no timer probes.
+                self.assertGreater(inventories.call_count, 0)
+                self.assertEqual(self.server.settings.read()["role_defaults"], defaults)
+                # Editing an active run retains inheritance intent, even though
+                # its effective reviewer values expand to the implementation choice.
+                from ora_vibe_coder.run import RunDriver
+                active_project = self.server.store.projects[project_id]
+                driver = RunDriver(self.server.conversation, active_project, "build", "Build the sample", {"roles": {}},
+                                   {"implementation": {"tool": "codex", "model": "named", "effort": "high"}}, "codex")
+                driver.run, driver.state = "compact-active", "paused-failure"
+                self.server.runs.by_project[str(active_project.root)] = driver
+                try:
+                    page.evaluate("async () => { stopPolling(); const data = await api('turn-state', {id: currentId}); updateRunState(data.run); }")
+                    page.locator("#configure-path").click()
+                    expect(page.locator('#settings-roles [data-role="review"] .role-model-choice')).to_have_value("")
+                    page.locator('#settings-roles [data-role="implementation"] .role-model-choice').select_option(compact_value("claude", "named"))
+                    page.locator('#settings-roles [data-role="implementation"] .role-effort').select_option("low")
+                    with mock.patch("ora_vibe_coder.run._record_run_note"):
+                        page.locator("#configure-save").click()
+                        expect(page.locator("#settings-panel")).to_be_hidden()
+                    self.assertEqual(driver.config["roles"]["review"], {"tool": "", "model": "", "effort": ""})
+                    self.assertEqual(driver.assignment("review")[:3], ("claude", "named", "low"))
+                finally:
+                    self.server.runs.by_project.pop(str(active_project.root), None)
+                    page.evaluate("() => updateRunState({active: null})")
+                self.assertEqual(errors, [])
             finally:
                 browser.close()
 
@@ -2361,7 +2567,7 @@ elif skill.exists():
         def ready(peer, **kwargs):
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
         with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready), \
-                mock.patch("ora_vibe_coder.server.model_inventory", side_effect=lambda tool: {**native, "reason": native_reasons[tool]}), \
+                mock.patch("ora_vibe_coder.server.model_inventory", side_effect=lambda tool: {**native, "reason": native_reasons.get(tool, native_reasons["hermes"])}), \
                 mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
@@ -2376,14 +2582,13 @@ elif skill.exists():
                 self.assertEqual(page.locator('#settings-panel input:not([type="checkbox"])').count(), 0)
                 self.assertEqual(page.locator("#interview-panel, #configure-panel, #settings-spending").count(), 0)
                 planning = page.locator('#settings-roles .role-row[data-role="planning"]')
-                expect(planning.locator(".role-tool")).to_have_value("claude")
-                expect(planning.locator(".role-model")).to_have_value("saved-unavailable-model")
+                expect(planning.locator(".role-model-choice")).to_have_value(compact_value("claude", "saved-unavailable-model"))
                 expect(planning.locator(".role-effort")).to_have_value("high")
-                expect(page.locator('#settings-roles [data-role="review"] .role-tool')).to_have_value("hermes")
-                expect(page.locator('#settings-roles [data-role="specification_second_opinion"] .role-tool')).to_have_value("")
+                expect(page.locator('#settings-roles [data-role="review"] .role-model-choice')).to_have_value(compact_value("hermes"))
+                expect(page.locator('#settings-roles [data-role="specification_second_opinion"] .role-model-choice')).to_have_value("")
                 specification = page.locator('#settings-roles .role-row[data-role="specification"]')
-                expect(specification.locator(".role-model option[value='other-model']")).to_have_count(1)
-                specification.locator(".role-model").select_option("other-model")
+                expect(specification.locator(".role-model-choice option").filter(has_text="Codex · Other model")).to_have_count(1)
+                specification.locator(".role-model-choice").select_option(compact_value("codex", "other-model"))
                 expect(specification.locator(".role-effort")).to_have_value("")
                 self.assertEqual(specification.locator(".role-effort option").all_text_contents(), ["Use harness default (xhigh)", "low — model recommendation"])
                 # Every option lives on this first screen, and one save persists them all.
@@ -2395,13 +2600,13 @@ elif skill.exists():
                     Path(evidence).mkdir(parents=True, exist_ok=True)
                 # Populate even the optional rows for the layout proof, using the
                 # complete native explanations rather than a short placeholder.
-                layout_choices = page.locator("#settings-roles .role-row[data-role]").evaluate_all("rows => rows.map(row => ({role: row.dataset.role, tool: row.querySelector('.role-tool').value}))")
+                layout_choices = page.locator("#settings-roles .role-row[data-role]").evaluate_all("rows => rows.map(row => ({role: row.dataset.role, tool: row.readChoice().tool}))")
                 for choice in layout_choices:
                     row = page.locator(f'#settings-roles [data-role="{choice["role"]}"]')
                     if not choice["tool"]:
-                        row.locator(".role-tool").select_option("claude" if choice["role"].endswith("second_opinion") else "codex")
-                    expect(row.locator(".role-origin")).to_have_text(native_reasons[row.locator(".role-tool").input_value()])
-                    row.locator(".role-model").select_option("")
+                        row.locator(".role-model-choice").select_option(compact_value("claude" if choice["role"].endswith("second_opinion") else "codex"))
+                    expect(row.locator(".role-origin")).to_have_text(native_reasons[json.loads(row.locator(".role-model-choice").input_value())[0]])
+                    row.locator(".role-model-choice").select_option(compact_value(json.loads(row.locator(".role-model-choice").input_value())[0]))
                     row.locator(".role-effort").select_option("")
                 layout_evidence = []
                 for theme, width, height in (("light", 1440, 1100), ("dark", 1440, 1100),
@@ -2422,7 +2627,7 @@ elif skill.exists():
                             top: rect.top, bottom: rect.bottom, roleWidth: role.width, effortWidth: effort.width,
                             allRowsInside: rows.every(row => row.getBoundingClientRect().top >= rect.top && row.getBoundingClientRect().bottom <= rect.bottom),
                             actionsInside: [...element.querySelectorAll('.editor-actions button')].every(button => button.getBoundingClientRect().bottom <= rect.bottom),
-                            defaultLabelsFit: [...element.querySelectorAll('.role-model, .role-effort')].every(select => {
+                            defaultLabelsFit: [...element.querySelectorAll('.role-model-choice, .role-effort')].every(select => {
                                 const style = getComputedStyle(select); context.font = style.font;
                                 return context.measureText(select.selectedOptions[0].text).width + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + 24 <= select.clientWidth;
                             }),
@@ -2450,7 +2655,7 @@ elif skill.exists():
                         self.assertTrue(metrics["defaultLabelsFit"], metrics)
                         self.assertTrue(metrics["optionsSingleLine"], metrics)
                     else:
-                        expect(page.get_by_label("Specification harness", exact=True)).to_be_visible()
+                        expect(page.get_by_label("Specification harness and model", exact=True)).to_be_visible()
                         page.locator("#settings-close").scroll_into_view_if_needed()
                         page.locator("#settings-close").focus()
                         expect(page.locator("#settings-close")).to_be_focused()
@@ -2460,7 +2665,7 @@ elif skill.exists():
                 page.locator("#settings-close").click()
                 page.set_viewport_size({"width": 1440, "height": 1100})
                 page.locator("#settings").click()
-                specification.locator(".role-model").select_option("other-model")
+                specification.locator(".role-model-choice").select_option(compact_value("codex", "other-model"))
                 page.locator("#settings-best-guess").check()
                 page.locator("#settings-hide-advisory").check()
                 page.locator("#settings-save").click()
@@ -2492,13 +2697,13 @@ elif skill.exists():
                 page.locator('[data-stage="build"]').click()
                 page.locator("#build-reply-stage").select_option("verification")
                 expect(page.locator("#destination")).to_have_value("Claude Code")
-                page.locator("#destination").select_option("Codex")
+                self.choose_primary(page, "Codex")
                 expect(page.locator("#destination")).to_have_value("Codex")
                 page.locator("#configure-path").click()
                 expect(page.locator("#settings-best-guess")).to_be_checked()
                 verification = page.locator('#settings-roles [data-role="verification"]')
-                verification.locator(".role-tool").select_option("codex")
-                expect(verification.locator(".role-model")).to_have_value("")
+                verification.locator(".role-model-choice").select_option(compact_value("codex"))
+                expect(verification.locator(".role-model-choice")).to_have_value(compact_value("codex"))
                 expect(verification.locator(".role-effort")).to_have_value("")
                 page.locator("#configure-save").click()
                 page.wait_for_function("() => pendingRunConfig?.roles?.verification?.tool === 'codex'")
@@ -2513,7 +2718,7 @@ elif skill.exists():
                 page.wait_for_function("() => pendingRunConfig && Object.keys(pendingRunConfig.roles).length === 0")
                 self.assertEqual(request("/api/settings", {})["role_defaults"], saved["role_defaults"])
                 page.locator("#configure-path").click()
-                page.locator('#settings-roles [data-role="verification"] .role-tool').select_option("codex")
+                page.locator('#settings-roles [data-role="verification"] .role-model-choice').select_option(compact_value("codex"))
                 page.locator("#configure-save").click()
                 self.select_project(page, created["id"])
                 page.wait_for_function("() => project !== null && workspace !== '' && pendingRunConfig === null")
@@ -2531,7 +2736,7 @@ elif skill.exists():
                 page.evaluate("() => pollTick()")
                 page.wait_for_function("() => runActive?.run === '0001-20261021-000000'")
                 page.locator("#settings").click()
-                page.locator('#settings-roles [data-role="verification"] .role-tool').select_option("codex")
+                page.locator('#settings-roles [data-role="verification"] .role-model-choice').select_option(compact_value("codex"))
                 page.locator("#settings-hide-advisory").uncheck()
                 page.locator("#settings-save").click()
                 expect(page.locator("#settings-panel")).to_be_hidden()
@@ -2539,8 +2744,7 @@ elif skill.exists():
                 self.assertEqual(globals_after["role_defaults"]["verification"]["tool"], "codex")
                 self.assertEqual(driver.assignment("verification")[:3], ("claude", "verification-model", "low"))
                 page.locator("#configure-path").click()
-                expect(page.locator('#settings-roles [data-role="verification"] .role-tool')).to_have_value("claude")
-                expect(page.locator('#settings-roles [data-role="verification"] .role-model')).to_have_value("verification-model")
+                expect(page.locator('#settings-roles [data-role="verification"] .role-model-choice')).to_have_value(compact_value("claude", "verification-model"))
                 page.locator("#settings-best-guess").check()
                 with mock.patch("ora_vibe_coder.run._record_run_note"):
                     page.locator("#configure-save").click()
@@ -2549,7 +2753,7 @@ elif skill.exists():
                 self.assertTrue(driver.config["best_guess"])
                 self.assertEqual(request("/api/settings", {}), globals_after)
                 page.locator("#settings").click()
-                expect(page.locator('#settings-roles [data-role="verification"] .role-tool')).to_have_value("codex")
+                expect(page.locator('#settings-roles [data-role="verification"] .role-model-choice')).to_have_value(compact_value("codex"))
                 page.locator("#settings-close").click()
                 server.runs.by_project.pop(str(active_project.root))
                 page.evaluate("() => updateRunState({active: null})")
@@ -2602,7 +2806,7 @@ elif skill.exists():
                 self.select_project(page, project_id)
                 page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
                 page.evaluate("() => stopPolling()")
-                page.locator("#destination").select_option(label="Codex")
+                self.choose_primary(page, "Codex")
                 page.evaluate("() => { readinessChain += 1; readinessState = {checking: false, peers: [{peer: 'codex', ready: true, work: 'supported', authentication: 'confirmed', warnings: []}]}; renderReadiness(); pendingRunConfig = {hide_advisory: true}; updateOperation({turn: 'ended-run-start', stage: 'programming', state: 'finished', elapsed_seconds: 12}); }")
                 page.route("**/api/run-start", lambda route: route.fulfill(status=409, json={"error": "The saved brief changed."}))
                 page.locator("#message").fill("Keep this brief after a rejected run start.")
@@ -3126,7 +3330,7 @@ elif skill.exists():
                 def warns():
                     return page.evaluate("() => { const event = new Event('beforeunload', {cancelable:true}); window.dispatchEvent(event); return event.defaultPrevented; }")
                 results = {"fresh": warns()}
-                page.locator("#destination").select_option("Codex")
+                self.choose_primary(page, "Codex")
                 results["tool_selected"] = warns()
                 page.evaluate("() => { draft().packet = 'saved snapshot'; draft().packetDestination = 'Claude Code'; }")
                 results["stale_prepared_packet"] = warns()
@@ -3337,7 +3541,7 @@ elif skill.exists():
                 self.select_project(page, project_id)
                 page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
                 page.evaluate("() => stopPolling()")
-                page.locator("#destination").select_option(label="Codex")
+                self.choose_primary(page, "Codex")
                 page.locator("#message").fill("Keep my unsent message through every stage.")
 
                 def content(question_list, repair_list):

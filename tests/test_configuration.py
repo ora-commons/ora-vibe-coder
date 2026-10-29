@@ -14,6 +14,10 @@ from ora_vibe_coder.launcher import Settings
 from ora_vibe_coder.server import LocalServer
 
 
+def compact_value(tool, model=""):
+    return json.dumps([tool, model], separators=(",", ":")) if tool else ""
+
+
 class Configuration(unittest.TestCase):
     def test_codex_inventory_uses_effective_config_and_metadata_only(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -123,8 +127,12 @@ for line in sys.stdin:
                 bridge = root / "bridge-home"
                 (bridge / "ora_agent_bridge").mkdir(parents=True)
                 (bridge / "ora_agent_bridge" / "__init__.py").write_text("")
+                # This fixture keeps exact UTF-8/newlines while accepting the
+                # current steerable work protocol; no live input is sent here.
                 (bridge / "ora_agent_bridge" / "__main__.py").write_text(FAKE_BRIDGE.replace(
-                    "body = sys.stdin.read()", "body = sys.stdin.buffer.read().decode('utf-8')"))
+                    'run.add_argument("--events-jsonl", action="store_true")',
+                    'run.add_argument("--events-jsonl", action="store_true")\n    run.add_argument("--work-input-jsonl", action="store_true")').replace(
+                    "body = sys.stdin.read()", "body = json.loads(sys.stdin.buffer.readline())['body'] if getattr(args, 'work_input_jsonl', False) else sys.stdin.buffer.read().decode('utf-8')"))
                 reply = root / "reply.md"
                 reply.write_text("The function explains the sample.\n" + no_change_block())
                 user_text = "What does this function do?\r\n\r\nKeep café spacing  \n"
@@ -134,7 +142,7 @@ for line in sys.stdin:
                     project = server.store.projects[project_id]
                     actual = server.conversation.by_project[str(project.root)]
                     self.assertTrue(actual.done.wait(20), "the fake conversation did not finish")
-                    self.assertEqual(actual.state, "finished")
+                    self.assertEqual(actual.state, "finished", actual.snapshot())
                 retained = conversation.read_conversation(project)[-1]
                 self.assertEqual(retained["text"].encode("utf-8"), user_text.encode("utf-8"))
                 messages = [conversation.parse_message(path) for path in
@@ -167,6 +175,17 @@ for line in sys.stdin:
                     request("deliver", {"id": project_id, "step": "implement-plan", "action": "send", "tool": "codex", "text": user_text,
                                         "roles": {"implementation": {"tool": "codex", "model": "", "effort": ""}}})
                     self.assertEqual((turn.call_args.kwargs["model"], turn.call_args.kwargs["effort"]), ("", ""))
+                # Same-as-implementation inherits the entire current assignment,
+                # including correction turns and deliberately blank native defaults.
+                with mock.patch("ora_vibe_coder.conversation.start_turn", return_value=handle) as turn, \
+                        mock.patch("ora_vibe_coder.conversation.require_build_route"):
+                    for step, role in (("implement-plan", "implementation"), ("correction", "correction")):
+                        overrides = {role: {"tool": "codex", "model": "shared-model", "effort": "high"},
+                                     "review": {"tool": "", "model": "", "effort": ""}}
+                        request("deliver", {"id": project_id, "step": step, "action": "send", "tool": "codex", "text": "Work on the sample.", "roles": overrides})
+                        self.assertIn("separate fresh reviewer choice as Codex, model shared-model (requested), effort high (requested)", turn.call_args.args[4])
+                    request("deliver", {"id": project_id, "step": "verification", "action": "send", "tool": "claude", "verifier": "claude", "text": "Verify the sample."})
+                    self.assertIn("Requested independent verifier choices (not verified): Claude Code, model verification-model (requested), effort low (requested)", turn.call_args.args[4])
                 # Exercise the real terminal vector with a local fake harness:
                 # no model call, native settings change, or desktop is involved.
                 receipt = root / "terminal-argv.jsonl"
@@ -307,10 +326,10 @@ for line in sys.stdin:
                         page.locator("#next-step").evaluate("element => element.open = true")
                         chooser = page.locator("#implementation-choice")
                         expect(chooser).to_be_visible()
-                        expect(chooser.locator(".role-tool")).to_have_value("codex")
-                        chooser.locator(".role-tool").select_option("claude")
-                        expect(chooser.locator('.role-model option[value="project-model"]')).to_have_count(1)
-                        chooser.locator(".role-model").select_option("project-model")
+                        expect(chooser.locator(".role-model-choice")).to_have_value(compact_value("codex"))
+                        chooser.locator(".role-model-choice").select_option(compact_value("claude"))
+                        expect(chooser.locator(".role-model-choice option").filter(has_text="Claude Code · project-model")).to_have_count(1)
+                        chooser.locator(".role-model-choice").select_option(compact_value("claude", "project-model"))
                         chooser.locator(".role-effort").select_option("low")
                         expect(page.locator("#transition")).to_have_text("Send to Claude Code")
                         # The one-time choice is for implementation; step 3 still writes the Plan.
@@ -336,7 +355,7 @@ for line in sys.stdin:
                         page.locator("#run-completion").click()
                         page.wait_for_function("() => runActive?.run === 'fake-active'")
                         self.assertEqual(run_calls[-1]["config"]["roles"]["implementation"]["tool"], "claude")
-                        expect(chooser.locator(".role-tool")).to_have_value("codex")
+                        expect(chooser.locator(".role-model-choice")).to_have_value(compact_value("codex"))
                         expect(page.locator("#transition")).to_have_text("Send to Codex")
                         expect(page.locator("#destination")).to_have_value("Codex")
                         page.locator("#run-completion").click()
@@ -350,9 +369,9 @@ for line in sys.stdin:
                         if evidence:
                             Path(evidence).mkdir(parents=True, exist_ok=True)
                             page.screenshot(path=str(Path(evidence) / "consumed-implementation-choice-reset.png"))
-                        chooser.locator(".role-tool").select_option("claude")
-                        expect(chooser.locator('.role-model option[value="project-model"]')).to_have_count(1)
-                        chooser.locator(".role-model").select_option("project-model")
+                        chooser.locator(".role-model-choice").select_option(compact_value("claude"))
+                        expect(chooser.locator(".role-model-choice option").filter(has_text="Claude Code · project-model")).to_have_count(1)
+                        chooser.locator(".role-model-choice").select_option(compact_value("claude", "project-model"))
                         chooser.locator(".role-effort").select_option("low")
                         page.locator("#message").fill("  Keep my exact words.  \n")
                         page.locator("#transition").click()
@@ -380,7 +399,7 @@ for line in sys.stdin:
                         page.locator("#configure-path").click()
                         page.locator("#settings-best-guess").uncheck()
                         page.locator("#settings-hide-advisory").uncheck()
-                        page.locator('#settings-roles [data-role="planning_second_opinion"] .role-tool').select_option("")
+                        page.locator('#settings-roles [data-role="planning_second_opinion"] .role-model-choice').select_option("")
                         page.locator("#project-settings-save").click()
                         expect(page.locator("#settings-panel")).to_be_hidden()
                         saved = request("project", {"id": first})["configuration"]
@@ -394,12 +413,12 @@ for line in sys.stdin:
                         expect(page.locator("#transition")).to_have_text("Send to Claude Code")
                         # Settings must show the same saved project values as Configure Path.
                         page.locator("#settings").click()
-                        expect(page.locator('#settings-roles [data-role="implementation"] .role-model')).to_have_value("project-model")
-                        expect(page.locator('#settings-roles [data-role="planning_second_opinion"] .role-tool')).to_have_value("")
+                        expect(page.locator('#settings-roles [data-role="implementation"] .role-model-choice')).to_have_value(compact_value("claude", "project-model"))
+                        expect(page.locator('#settings-roles [data-role="planning_second_opinion"] .role-model-choice')).to_have_value("")
                         expect(page.locator("#settings-best-guess")).not_to_be_checked()
                         expect(page.locator("#settings-hide-advisory")).not_to_be_checked()
                         if evidence: page.screenshot(path=str(Path(evidence) / "project-settings-reopened.png"))
-                        page.locator('#settings-roles [data-role="correction"] .role-tool').select_option("claude")
+                        page.locator('#settings-roles [data-role="correction"] .role-model-choice').select_option(compact_value("claude"))
                         page.locator("#project-settings-save").click()
                         expect(page.locator("#settings-panel")).to_be_hidden()
                         saved = request("project", {"id": first})["configuration"]
@@ -408,9 +427,9 @@ for line in sys.stdin:
                         self.assertFalse(saved["best_guess"])
                         self.assertFalse(saved["hide_advisory"])
                         # An explicit Use selected harness row keeps the deliberately chosen writer.
-                        page.locator("#destination").select_option("Claude Code")
+                        page.locator("#primary-choice .role-model-choice").select_option(compact_value("claude"))
                         page.locator("#configure-path").click()
-                        page.locator('#settings-roles [data-role="planning"] .role-tool').select_option("")
+                        page.locator('#settings-roles [data-role="planning"] .role-model-choice').select_option("")
                         page.locator("#settings-best-guess").check()
                         page.locator("#settings-hide-advisory").check()
                         page.locator("#configure-save").click()

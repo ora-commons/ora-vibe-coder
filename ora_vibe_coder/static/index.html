@@ -35,7 +35,7 @@
         <button id="stop-action" type="button" hidden>Stop Action</button>
       </div>
       <div id="workspace-head" class="workspace-head" hidden>
-        <div class="first-step step-card"><span class="step-number" aria-hidden="true">3</span><select id="destination" aria-label="Coding tool"></select></div>
+        <div class="first-step step-card"><span class="step-number" aria-hidden="true">3</span><select id="destination" aria-label="Coding tool" hidden></select><div id="primary-choice"></div></div>
         <h2 id="stage-title"></h2>
         <div class="head-actions">
           <button id="configure-path" type="button">Configure Path</button>
@@ -82,24 +82,23 @@
         <section class="pane pane-doc" id="pane-doc" aria-label="Document">
           <article class="result">
             <details id="result-step" class="step-card next-step" hidden>
-              <summary><span class="review-label"><span class="step-number" aria-hidden="true">5</span><span>Save the Programming Result</span></span><span id="result-status" class="assessment"></span></summary>
-              <div class="next-step-body"><p class="hint">Ask the implementation AI to record what it actually built, checked, landed, and still needs to do. If that work is in another AI chat, copy the request for that chat.</p><div id="result-status-note" class="status-explanation" hidden></div><div class="toolbar-row"><button id="request-result" class="primary" type="button">Request the Programming Result</button></div></div>
+              <summary><span class="review-label"><span class="step-number" aria-hidden="true">5</span><span>Implement and review</span></span><span id="result-status" class="assessment"></span></summary>
+              <div class="next-step-body"><p class="hint">Implement the Plan with the Programming Loop and a separate fresh reviewer, then save the Programming Result. Independent verification follows in step 6.</p><div id="build-implementation-choice"></div><div id="loop-review-choice"></div><div id="result-status-note" class="status-explanation" hidden></div><div class="toolbar-row"><button id="implement-review" class="primary" type="button">Run implementation and review</button><button id="request-result" type="button">Save a result from existing work</button></div></div>
             </details>
             <details id="review-step" class="step-card review-step">
               <summary><span class="review-label"><span id="review-step-number" class="step-number" aria-hidden="true">5</span><span id="review-step-title">Review this document</span></span><span id="assessment" class="assessment" role="button" tabindex="0" title=""></span></summary>
               <div class="review-step-body">
                 <p id="review-explain" class="hint"></p>
                 <div class="second-opinion" id="second-opinion" hidden>
-                  <label class="inline" for="step-reviewer">Reviewer</label><select id="step-reviewer"></select>
+                  <select id="step-reviewer" hidden></select><div id="document-review-choice"></div>
                   <label class="inline"><input type="checkbox" id="opinion-toggle">Second opinion</label>
-                  <label class="inline" for="reviewer" id="reviewer-label" hidden>Peer</label><select id="reviewer" hidden></select>
+                  <span id="reviewer-label" hidden></span><select id="reviewer" hidden></select><div id="peer-choice" hidden></div>
                   <label class="inline" id="iterate-label" hidden><input type="checkbox" id="iterate-toggle">Iterate to agreement</label>
                   <span id="opinion-note" class="hint"></span>
                   <p id="reviewer-unavailable" class="hint" hidden></p>
                 </div>
                 <div id="verification-choice" hidden>
-                  <label class="label" for="verification-verifier">Independent verifier</label>
-                  <select id="verification-verifier"></select>
+                  <select id="verification-verifier" hidden></select><div id="verifier-choice"></div>
                   <p class="hint">Choose who should verify the implementation, or ask the coordinator to show you the available choices. The verifier must use a fresh session separate from the implementation agent; a tool name alone does not establish a different AI provider.</p>
                 </div>
                 <div class="toolbar-row"><button id="review" class="primary" type="button">Run review</button><button id="approve-plan" type="button" hidden title="Approving saves Status: APPROVED in the Plan"></button></div>
