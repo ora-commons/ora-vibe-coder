@@ -42,7 +42,7 @@ let conversationNeedsLatest = true;
 // when the observed run moved, so the conversation can reload the completed
 // replies from the retained records.
 let conversationRunMark = "";
-let reviewerChosen = false, stepReviewerChosen = false, stepReviewerInitialized = false, readinessChain = 0, contactLost = false;
+let readinessChain = 0, contactLost = false;
 // The acknowledged submissions of running turns, kept per originating project
 // and turn until that turn's outcome is known: a failed or capability-rejected
 // turn restores its own project's text and images to the composer, and another
@@ -266,7 +266,7 @@ async function initialize() {
   $("version").textContent = data.version || "";
   $("destination").replaceChildren(new Option("Choose a coding tool", ""), ...hostChoices.map(h => new Option(h.name, h.name)));
   $("verification-verifier").replaceChildren(new Option("Ask coordinator to show choices", ""),
-    ...hostChoices.map(h => new Option(h.name, h.name)));
+    ...hostChoices.map(h => new Option(h.name, h.id)));
   $("setup-hosts").replaceChildren(...hostChoices.map(h => {
     const p = document.createElement(data.installation ? "label" : "p");
     p.append(`${h.name}: ${h.detected ? "command found — account access not checked" : "not found"}`);
@@ -994,6 +994,7 @@ async function chooseWorkspace(next) {
   readerView = null;  // Any older document read no longer owns this stage.
   const reveal = positionRails(!!previous && previous !== next);
   readerAnchor = null;  // Each workspace starts from its own default document.
+  invalidateModelChoices();
   const config = workspaces[workspace];
   const d = draft();
   // The coding tool belongs to the project, while each stage keeps its own
@@ -1290,6 +1291,7 @@ $("copy-request").onclick = local(() => {
   if (workspace === "build") return buildStepDialog(buildNextAction());
   return deliverStep(config.forward, "copy");
 });
+$("implement-review").onclick = local(() => deliverStep("implement-plan"));
 $("request-result").onclick = local(() => buildStepDialog("result"));
 $("build-reply-stage").onchange = () => { buildReplyStages.set(currentId, $("build-reply-stage").value); composerGeneration += 1; applyManualConfiguration(); renderReadiness(); updateSendState(); };
 $("add-message-files").onclick = guard(() => openMaterialPicker("message"));
@@ -2140,7 +2142,7 @@ function updateOperation(operation) {
 // start the worker; the chain's own polls just read the report, so the chain
 // ends when checking turns false instead of restarting the worker forever.
 async function refreshReadiness(recheck = false) {
-  if (recheck) modelInventories.clear();
+  if (recheck) invalidateModelChoices();
   if (!currentId || stopped) return;
   const id = currentId, chain = ++readinessChain;
   let data;
@@ -2234,10 +2236,9 @@ function renderReadiness() {
   info.hidden = !info.textContent;
 }
 
-// Step 5's own Reviewer picker is independent of the step 3 coding tool: it
-// starts out matching it, and afterwards changing either changes only itself.
-// An unavailable saved selection is preserved — greyed as a disabled option
-// with its reason under the picker — never silently switched or erased.
+// An unset document Reviewer follows the stage harness's native defaults.
+// An explicit role choice remains independent, including an unavailable saved
+// choice; route readiness explains why it cannot currently assess in-app.
 function reviewerOptions() {
   const peers = readinessState.peers;
   if (peers) {
@@ -2252,54 +2253,17 @@ function reviewerOptions() {
                                    reason: host.conversation === false ? `${host.name} has no in-app conversation route.` : ""}));
 }
 function renderReviewerChoices() {
+  const role = workspace === "plan" ? "planning" : "specification";
   const entries = reviewerOptions();
-  const heldReason = id => entries.find(entry => entry.id === id && !entry.capable)?.reason || "";
-  const fill = (select, entryList) => {
-    select.replaceChildren(...entryList.map(entry => {
-      const option = new Option(entry.label, entry.id);
-      option.disabled = !entry.capable;
-      return option;
-    }));
+  const set = (id, tool) => {
+    $(id).replaceChildren(new Option("", ""), ...entries.map(entry => new Option(entry.label, entry.id)));
+    retainedOption($(id), tool);
   };
-  const capable = entries.filter(entry => entry.capable);
-  const stepSelect = $("step-reviewer");
-  const held = stepSelect.value;
-  // With no work-capable route at all, a held choice keeps its own (disabled)
-  // option — staying selected and greyed with its reason — so a later Recheck
-  // restores exactly what was chosen instead of resetting to defaults; only a
-  // picker holding no recognizable choice shows the placeholder.
-  if (!capable.length && !entries.some(entry => entry.id === held)) {
-    stepSelect.replaceChildren(new Option("No work-capable harness found", ""));
-  } else {
-    fill(stepSelect, entries);
-  }
-  const tool = selectedToolId();
-  const preferred = (capable.find(entry => entry.id === tool) || capable[0] || {}).id || "";
-  // The picker starts out matching the step-3 tool; afterwards changing
-  // either one changes only itself, so the held choice survives — including
-  // an unavailable one, which stays selected and greyed with its reason.
-  const heldKnown = entries.some(entry => entry.id === held) ? held : "";
-  stepSelect.value = heldKnown || preferred;
-  stepReviewerInitialized = true;
-  const select = $("reviewer");
-  const peerHeld = select.value;
-  // The explicitly chosen peer is retained the same way: it stays among its
-  // own disabled options while every route is down, and recovery restores it.
-  if (!capable.length && !(reviewerChosen && entries.some(entry => entry.id === peerHeld))) {
-    select.replaceChildren(new Option("No work-capable harness found", ""));
-  } else {
-    fill(select, entries);
-  }
-  // The second-opinion peer defaults to a different HARNESS — an honest,
-  // checkable fact. Whether that is a different lab is confirmed only by what
-  // the run's own passes report. An explicitly chosen peer is kept even when
-  // it has become unavailable, greyed with its reason.
-  const stepReviewer = stepSelect.value;
-  const peerPreferred = (capable.find(entry => entry.id !== stepReviewer) || capable[0] || {}).id || "";
-  const peerHeldKnown = entries.some(entry => entry.id === peerHeld) ? peerHeld : "";
-  select.value = reviewerChosen && peerHeldKnown ? peerHeldKnown : peerPreferred;
-  updateOpinionNote();
-  unavailableReviewerNote(heldReason(stepSelect.value), heldReason(select.value));
+  set("step-reviewer", effectiveChoice(`${role}_review`).tool || selectedToolId());
+  set("reviewer", effectiveChoice(`${role}_second_opinion`).tool || "");
+  const reason = tool => entries.find(entry => entry.id === tool && !entry.capable)?.reason || "";
+  unavailableReviewerNote(reason($("step-reviewer").value), reason($("reviewer").value));
+  renderMainChoices();
   updateSecondOpinion();
 }
 function unavailableReviewerNote(authorReason, reviewerReason) {
@@ -2321,16 +2285,14 @@ function updateOpinionNote() {
     "One second opinion costs 3 model calls; full iteration up to 7.",
   ].filter(Boolean).join(" · ");
 }
-$("step-reviewer").onchange = () => { stepReviewerChosen = true; renderReviewerChoices(); };
-$("reviewer").onchange = () => { reviewerChosen = true; updateOpinionNote(); };
+
 
 function updateSecondOpinion() {
   const available = workspace === "specification" || workspace === "plan";
   $("second-opinion").hidden = !available;
   $("verification-choice").hidden = workspace !== "build";
   const on = available && $("opinion-toggle").checked;
-  $("reviewer").hidden = !on;
-  $("reviewer-label").hidden = !on;
+  $("peer-choice").hidden = !on;
   $("iterate-label").hidden = !on;
   $("reviewer").disabled = !on;
   $("iterate-toggle").disabled = !on;
@@ -2351,7 +2313,11 @@ function updateSecondOpinion() {
   }
   updateOpinionNote();
 }
-$("opinion-toggle").onchange = updateSecondOpinion;
+$("opinion-toggle").onchange = () => {
+  const role = `${workspace === "plan" ? "planning" : "specification"}_second_opinion`;
+  const tool = $("opinion-toggle").checked ? (reviewerOptions().find(entry => entry.capable && entry.id !== $("step-reviewer").value)?.id || selectedToolId()) : "";
+  setManualChoice(role, {tool, model: "", effort: ""});
+};
 $("iterate-toggle").onchange = updateSecondOpinion;
 
 async function runReview() {
@@ -2451,7 +2417,7 @@ function updateBuildNextStep() {
 // Terminal for Hermes and Qwen Code, which have no in-app conversation.
 function deliveryTool(step) {
   const role = {"create-plan": "planning", "implement-plan": "implementation", result: "implementation", verification: "verification", correction: "correction"}[step];
-  return effectiveChoice(role).tool || selectedToolId();
+  return resolvedDisplayChoice(role).tool || selectedToolId();
 }
 function updateTransitionLabel(refreshChoice = true) {
   if (!workspace) return;
@@ -2624,7 +2590,7 @@ async function deliverStep(step, action = null, note = "") {
   if (workspace === "build") {
     buildReplyStages.set(id, replyStage);
     $("build-reply-stage").value = replyStage;
-    renderReadiness();
+    applyManualConfiguration();
   }
   try { await loadConversation(); if (id === currentId) updateOperation(result.operation); }
   catch (error) {
@@ -2975,18 +2941,51 @@ function savedChoices() {
 function stageChoice(role) { return savedChoices()[role] || {}; }
 function effectiveChoice(role) { return pendingRunConfig?.roles?.[role] || stageChoice(role); }
 function oneTimeRoles() { return pendingRunConfig?.roles || {}; }
+// All visible choices use the same existing role records. The hidden legacy
+// destination selects remain routing labels for portable Desktop/Terminal paths.
+function setManualChoice(role, choice) {
+  pendingRunConfig = {...(pendingRunConfig || {}), roles: {...oneTimeRoles(), [role]: choice}};
+  applyManualConfiguration();
+  remember();
+}
+function resolvedDisplayChoice(role) {
+  const choice = effectiveChoice(role);
+  if (choice.tool) return choice;
+  if (["review", "correction"].includes(role)) return resolvedDisplayChoice("implementation");
+  return {tool: selectedToolId(), model: "", effort: ""};
+}
+function renderMainChoices() {
+  if (!workspace) return;
+  const put = (id, role, label) => {
+    const holder = $(id);
+    holder.replaceChildren(roleRow(role, label, effectiveChoice(role), choice => setManualChoice(role, choice)));
+  };
+  put("primary-choice", configurationRole(), "Work with");
+  if (workspace === "build") {
+    put("build-implementation-choice", "implementation", "Implement with");
+    put("loop-review-choice", "review", "Loop reviewer");
+    put("verifier-choice", "verification", "Independent verifier");
+  } else {
+    const role = workspace === "plan" ? "planning" : "specification";
+    put("document-review-choice", `${role}_review`, "Reviewer");
+    put("peer-choice", `${role}_second_opinion`, "Second opinion");
+  }
+}
 function renderImplementationChoice() {
   const holder = $("implementation-choice");
   holder.hidden = workspace !== "plan";
-  if (holder.hidden) return;
-  holder.replaceChildren(roleRow("implementation", "Implement with (this project, one time)", effectiveChoice("implementation"), choice => {
-    pendingRunConfig = {...(pendingRunConfig || {}), roles: {...oneTimeRoles(), implementation: choice}};
-    updateTransitionLabel(false);
-  }));
+  if (!holder.hidden) holder.replaceChildren(roleRow("implementation", "Implement with", effectiveChoice("implementation"), choice => setManualChoice("implementation", choice)));
+}
+function invalidateModelChoices() {
+  // A view/focus event refreshes completed metadata; an in-flight read is shared.
+  for (const [tool, pending] of modelInventories) if (!pending.reading) modelInventories.delete(tool);
 }
 function inventory(tool) {
   if (!modelInventories.has(tool)) {
-    modelInventories.set(tool, api("harness-models", {tool}).catch(() => ({models: [], reason: "Native choices could not be read. Use harness default follows the harness’s own model and effort. Saved choices are preserved."})));
+    const pending = api("harness-models", {tool}).catch(() => ({models: [], reason: "Native choices could not be read. Harness default follows its own settings; saved choices are preserved."}));
+    pending.reading = true;
+    pending.finally(() => { pending.reading = false; });
+    modelInventories.set(tool, pending);
   }
   return modelInventories.get(tool);
 }
@@ -2994,72 +2993,107 @@ function retainedOption(select, value, label) {
   if (value && ![...select.options].some(option => option.value === value)) select.add(new Option(label || `${value} — saved choice (not in current inventory)`, value));
   select.value = value || "";
 }
-function roleRow(role, label, choice, changed = null) {
+function choiceValue(tool, model = "") { return tool ? JSON.stringify([tool, model]) : ""; }
+function roleRow(role, label, initial, changed = null, resolve = resolvedDisplayChoice) {
+  let choice = {tool: initial.tool || "", model: initial.model || "", effort: initial.effort || ""};
+  let generation = 0, facts = {};
   const row = document.createElement("div"); row.className = "role-row"; row.dataset.role = role;
   const heading = document.createElement("label"); heading.textContent = label;
-  const tool = document.createElement("select"); tool.className = "role-tool"; tool.setAttribute("aria-label", `${label} harness`);
-  const model = document.createElement("select"); model.className = "role-model"; model.setAttribute("aria-label", `${label} model`);
+  const model = document.createElement("select"); model.className = "role-model-choice"; model.setAttribute("aria-label", `${label} harness and model`);
   const effort = document.createElement("select"); effort.className = "role-effort"; effort.setAttribute("aria-label", `${label} effort`);
   const note = document.createElement("small"); note.className = "role-origin";
+  const selection = document.createElement("small"); selection.className = "role-selected";
   row.append(heading);
-  for (const [title, select] of [["Harness", tool], ["Model", model], ["Effort", effort]]) {
+  for (const [title, select] of [["Harness and model", model], ["Effort", effort]]) {
     const field = document.createElement("div"); field.className = "role-choice";
     const fieldLabel = document.createElement("span"); fieldLabel.className = "role-field-label"; fieldLabel.textContent = title;
-    field.append(fieldLabel, select); row.append(field);
+    field.append(fieldLabel, select);
+    if (select === model) field.append(selection);
+    row.append(field);
   }
   row.append(note);
-  tool.replaceChildren(new Option(optionalRole(role) ? "Off" : "Use selected harness", ""), ...hostChoices.map(h => new Option(h.name + (h.detected ? "" : " — unavailable"), h.id)));
-  retainedOption(tool, choice.tool || "");
-  const notify = () => changed?.({tool: tool.value, model: tool.value ? model.value : "", effort: tool.value ? effort.value : ""});
-  const load = async (fresh = false) => {
-    const selected = tool.value;
-    const heldModel = fresh ? "" : choice.model || "", heldEffort = fresh ? "" : choice.effort || "";
-    model.replaceChildren(new Option("Use harness default", ""));
-    effort.replaceChildren(new Option("Use harness default", ""));
-    retainedOption(model, heldModel); retainedOption(effort, heldEffort);
-    model.disabled = effort.disabled = !selected;
-    note.textContent = selected ? "Reading native model choices…" : optionalRole(role) ? "No second opinion will run." : "Uses the harness selected for the active stage, with its own defaults.";
-    if (!selected) return;
-    const facts = await inventory(selected);
-    if (tool.value !== selected || !row.isConnected) return;
-    const models = facts.models || [];
-    const configured = facts.configured_model || "";
-    model.replaceChildren(new Option(`Use harness default${configured ? ` (${configured})` : ""}`, ""), ...models.map(m => new Option(m.label || m.id, m.id)));
-    retainedOption(model, fresh ? "" : heldModel);
-    const fillEfforts = value => {
-      const selectedModel = models.find(m => m.id === (model.value || configured));
-      const configuredEffort = facts.configured_effort || "";
-      effort.replaceChildren(new Option(`Use harness default${configuredEffort ? ` (${configuredEffort})` : ""}`, ""), ...(selectedModel?.efforts || []).map(e => new Option(e === selectedModel.default_effort ? `${e} — model recommendation` : e, e)));
-      retainedOption(effort, value);
-    };
-    fillEfforts(heldEffort);
-    model.onchange = () => { choice = {tool: tool.value, model: model.value, effort: ""}; fillEfforts(""); notify(); };
-    effort.onchange = notify;
-    note.textContent = facts.reason || "Native harness choices; saved choices remain available.";
+  const inherited = () => resolve(role);
+  const selected = () => choice.tool ? choice : optionalRole(role) ? {} : inherited();
+  const fillEfforts = () => {
+    const value = selected(), native = facts[value.tool] || {};
+    const currentModel = (native.models || []).find(item => item.id === (value.model || native.configured_model));
+    effort.replaceChildren(new Option(`Use harness default${native.configured_effort ? ` (${native.configured_effort})` : ""}`, ""),
+      ...(currentModel?.efforts || []).map(e => new Option(e === currentModel.default_effort ? `${e} — model recommendation` : e, e)));
+    retainedOption(effort, choice.effort);
+    effort.disabled = !choice.tool;
+    if (!choice.tool && ["review", "correction"].includes(role)) {
+      effort.replaceChildren(new Option(`Same as implementation${value.effort || native.configured_effort ? ` (${value.effort || native.configured_effort})` : " · harness default"}`, ""));
+    }
+    const explanation = native.reason || "Requested choices; actual model is shown only when reported.";
+    note.textContent = !choice.tool && optionalRole(role) ? "No second opinion will run."
+      : !choice.tool && role === "review" ? "Separate fresh reviewer context using the implementation's harness, model and effort."
+      : !choice.tool && role === "correction" ? "Uses the implementation's harness, model and effort for repairs." : explanation;
+    model.title = model.selectedOptions[0]?.text || "";
+    selection.textContent = model.title;
   };
-  tool.onchange = () => { choice = {tool: tool.value}; load(true); notify(); };
-  // Run after the row has been attached; discovery is optional and cannot block Save.
-  queueMicrotask(() => load());
+  const fill = () => {
+    const fallback = inherited(), native = facts[fallback.tool] || {};
+    const name = hostChoices.find(host => host.id === fallback.tool)?.name || fallback.tool;
+    const detail = name ? ` — ${name}${fallback.model || native.configured_model ? ` · ${fallback.model || native.configured_model}` : " · harness default"}` : "";
+    const blank = optionalRole(role) ? "Off" : role === "verification" && label === "Independent verifier" ? "Ask coordinator to show choices" : ["review", "correction"].includes(role) ? `Same as implementation${detail}` : `Use selected harness${detail}`;
+    model.replaceChildren(new Option(blank, ""));
+    for (const host of hostChoices) {
+      const native = facts[host.id] || {};
+      const group = document.createElement("optgroup"); group.label = host.name;
+      group.append(new Option(`${host.name} · Default${native.configured_model ? ` (${native.configured_model})` : ""}${host.detected ? "" : " — unavailable"}`, choiceValue(host.id)));
+      for (const item of native.models || []) group.append(new Option(`${host.name} · ${item.label || item.id}`, choiceValue(host.id, item.id)));
+      model.append(group);
+    }
+    const value = choiceValue(choice.tool, choice.model);
+    retainedOption(model, value, `${choice.tool} · ${choice.model || "Default"} — saved choice (not in current inventory)`);
+    fillEfforts();
+  };
+  row.readChoice = () => ({...choice});
+  row.renderChoice = fill;
+  row.refreshChoice = async () => {
+    const own = ++generation;
+    for (const host of hostChoices) {
+      const native = await inventory(host.id);
+      if (own !== generation || !row.isConnected) return;
+      facts[host.id] = native; fill();
+    }
+  };
+  const refresh = () => { invalidateModelChoices(); row.refreshChoice(); };
+  model.addEventListener("pointerdown", refresh);
+  model.addEventListener("focus", refresh);
+  model.onchange = () => {
+    const [tool, selectedModel] = model.value ? JSON.parse(model.value) : ["", ""];
+    choice = {tool, model: selectedModel, effort: ""}; fillEfforts(); changed?.({...choice});
+  };
+  effort.onchange = () => { choice.effort = effort.value; changed?.({...choice}); };
+  fill(); queueMicrotask(() => row.refreshChoice());
   return row;
+}
+function refreshModelChoices() {
+  invalidateModelChoices();
+  for (const row of document.querySelectorAll(".role-row[data-role]")) row.refreshChoice?.();
 }
 function renderRoleRows(holder, values) {
   holder.replaceChildren();
   const header = document.createElement("div"); header.className = "role-row role-header";
-  for (const title of ["Role", "Harness", "Model", "Effort"]) { const cell = document.createElement("strong"); cell.textContent = title; header.append(cell); }
+  for (const title of ["Role", "Harness and model", "Effort"]) { const cell = document.createElement("strong"); cell.textContent = title; header.append(cell); }
   holder.append(header);
-  for (const [role, label] of CONFIG_ROLES) holder.append(roleRow(role, label, values?.[role] || {}));
+  const resolve = role => {
+    const value = holder.querySelector(`[data-role="${role}"]`)?.readChoice() || values?.[role] || {};
+    if (value.tool) return value;
+    if (["review", "correction"].includes(role)) return resolve("implementation");
+    return {tool: selectedToolId(), model: "", effort: ""};
+  };
+  const changed = () => { for (const row of holder.querySelectorAll("[data-role]")) row.renderChoice(); };
+  for (const [role, label] of CONFIG_ROLES) holder.append(roleRow(role, label, values?.[role] || {}, changed, resolve));
 }
 function readRoleRows(holder) {
-  const values = {};
-  for (const row of holder.querySelectorAll(".role-row[data-role]")) {
-    const tool = row.querySelector(".role-tool").value;
-    values[row.dataset.role] = {tool, model: tool ? row.querySelector(".role-model").value : "", effort: tool ? row.querySelector(".role-effort").value : ""};
-  }
-  return values;
+  return Object.fromEntries([...holder.querySelectorAll(".role-row[data-role]")].map(row => [row.dataset.role, row.readChoice()]));
 }
 function openConfiguration(forRun = false) {
-  const config = forRun ? runActive?.config || pendingRunConfig || {} : {};
-  const values = forRun && runActive ? runActive.effective_roles : {...savedChoices(), ...(config.roles || {})};
+  invalidateModelChoices();
+  const config = forRun && runActive ? runActive.config : pendingRunConfig || {};
+  const values = forRun && runActive ? (runActive.role_choices || runActive.effective_roles) : {...savedChoices(), ...(config.roles || {})};
   renderRoleRows($("settings-roles"), values);
   $("settings-best-guess").checked = config.best_guess ?? project?.configuration?.best_guess ?? appSettings.best_guess ?? false;
   $("settings-hide-advisory").checked = config.hide_advisory ?? savedHideAdvisory();
@@ -3089,15 +3123,13 @@ $("settings-save").onclick = guard(async () => {
 });
 function applyManualConfiguration() {
   const writer = effectiveChoice(configurationRole());
-  if (writer.tool) $("destination").value = hostChoices.find(h => h.id === writer.tool)?.name || "";
-  renderReviewerChoices();
+  if (writer.tool) {
+    const name = hostChoices.find(h => h.id === writer.tool)?.name || writer.tool;
+    retainedOption($("destination"), name, name);
+  }
   const role = workspace === "plan" ? "planning" : "specification";
-  const reviewer = effectiveChoice(`${role}_review`), peer = effectiveChoice(`${role}_second_opinion`);
-  $("step-reviewer").value = reviewer.tool || selectedToolId(); stepReviewerChosen = !!reviewer.tool;
-  $("opinion-toggle").checked = !!peer.tool;
-  if (peer.tool) { $("reviewer").value = peer.tool; reviewerChosen = true; }
-  const verification = effectiveChoice("verification");
-  if (verification.tool) $("verification-verifier").value = verification.tool;
+  $("opinion-toggle").checked = !!effectiveChoice(`${role}_second_opinion`).tool;
+  $("verification-verifier").value = effectiveChoice("verification").tool || "";
   updateHost();
 }
 $("project-settings-save").onclick = guard(async () => {
@@ -3346,6 +3378,7 @@ async function refreshChanged(changed, {silent = false} = {}) {
 }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") pollTick(); });
 window.addEventListener("focus", () => {
+  refreshModelChoices();
   if (currentId && !stopped && document.visibilityState === "visible" && !readinessState.checking) refreshReadiness(true);
 });
 $("refresh").onclick = guard(async () => {

@@ -470,11 +470,13 @@ class Handler(BaseHTTPRequestHandler):
             defaults.update(saved.get("roles") or {})
         return defaults
 
-    def role_choice(self, role, tool="", *, project=None, roles=None):
+    def role_choice(self, role, tool="", *, project=None, roles=None, fallback=None):
         """One-time choices, project defaults, global defaults, then native defaults."""
         choices = self.role_defaults(project)
         choices.update(validated_roles(roles or {}))
         choice = choices.get(role) or {}
+        if role in {"review", "correction"} and not choice.get("tool"):
+            return fallback or self.role_choice("implementation", tool, project=project, roles=roles)
         selected = tool or choice.get("tool") or ""
         if selected == choice.get("tool"):
             return selected, choice.get("model", ""), choice.get("effort", "")
@@ -785,7 +787,7 @@ class Handler(BaseHTTPRequestHandler):
             tool, model, effort = self.role_choice(run_module.STAGE_ROLE.get(data["stage"], "implementation"), data["tool"], project=project, roles=data.get("roles"))
             application_instructions = ""
             if data["stage"] == "programming":
-                reviewer, r_model, r_effort = self.role_choice("review", project=project, roles=data.get("roles"))
+                reviewer, r_model, r_effort = self.role_choice("review", project=project, roles=data.get("roles"), fallback=(tool, model, effort))
                 application_instructions = run_module.implementation_direction(tool, model, effort, reviewer or tool, r_model, r_effort, conditional=True)
             handle = conversation.start_turn(self.server.conversation, project, tool, data["stage"],
                                              data["text"], data["images"], data.get("files", []), model=model, effort=effort,
@@ -981,11 +983,16 @@ class Handler(BaseHTTPRequestHandler):
             images = data.get("images", [])
             if not isinstance(images, list):
                 raise ProjectError("Invalid image attachments.")
+            verifier = data.get("verifier", "")
+            if data["step"] == "verification" and verifier:
+                verifier_tool = next((key for key, (label, _) in TOOL_LABELS.items() if verifier in {key, label}), verifier)
+                v_tool, v_model, v_effort = self.role_choice("verification", verifier_tool, project=project, roles=data.get("roles"))
+                verifier = {"tool": v_tool, "model": v_model, "effort": v_effort}
             purpose = "implement-plan" if data["step"] == "implement-plan" else None
             destination = TOOL_LABELS[data["tool"]][0] if data["tool"] in TOOL_LABELS else data["tool"] or "External AI chat"
             extra = []
             if data["action"] != "copy" and data["step"] in {"implement-plan", "correction"}:
-                reviewer, r_model, r_effort = self.role_choice("review", project=project, roles=data.get("roles"))
+                reviewer, r_model, r_effort = self.role_choice("review", project=project, roles=data.get("roles"), fallback=(tool, model, effort))
                 extra.append(run_module.implementation_direction(tool, model, effort, reviewer or tool, r_model, r_effort))
             if data["step"] == "correction":
                 report = project.material("Verification Report")
@@ -1008,7 +1015,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ProjectError("Invalid displayed upstream document.")
             supplied_documents = project.approve_transition(data["step"], data.get("upstream"))
             packet = run_module.step_request(project, data["step"], data["text"], destination, files,
-                                             data.get("verifier", ""), extra, supplied_documents=supplied_documents,
+                                             verifier, extra, supplied_documents=supplied_documents,
                                              model=model, effort=effort, portable=data["action"] == "copy")
             # A new one-click delivery deliberately replaces the prior saved
             # request of the same kind; a change between reading and writing
@@ -1024,7 +1031,7 @@ class Handler(BaseHTTPRequestHandler):
             handle = conversation.start_turn(self.server.conversation, project, data["tool"],
                                              run_module.STEP_STAGE[data["step"]],
                                              run_module.build_input(data["step"], project, data["text"],
-                                                                    data.get("verifier", ""), extra),
+                                                                    verifier, extra),
                                              images, files, model=model, effort=effort, supplied_documents=supplied_documents,
                                              activity={"create-plan": "Creating" if not project.material("Plan")["text"] or not_started(project.material("Plan")["text"]) else "Updating",
                                                        "implement-plan": "Coding", "result": "Recording", "verification": "Reviewing", "correction": "Correcting"}[data["step"]])
@@ -1172,7 +1179,7 @@ class Handler(BaseHTTPRequestHandler):
         tool, model, effort = self.role_choice(role, selected, project=project, roles=data.get("roles")) if role and selected and not portable else ("", "", "")
         application_instructions = ""
         if not portable and data["stage"] == "programming":
-            reviewer, r_model, r_effort = self.role_choice("review", project=project, roles=data.get("roles"))
+            reviewer, r_model, r_effort = self.role_choice("review", project=project, roles=data.get("roles"), fallback=(tool, model, effort))
             application_instructions = run_module.implementation_direction(
                 tool or data["destination"], model, effort, reviewer or tool or data["destination"],
                 r_model, r_effort, conditional=True)

@@ -58,7 +58,9 @@ STEP_TITLES = {"specification": "Specification", "planning": "Plan", "build": "B
 
 DEFAULT_INPUTS = {
     "create-plan": "Create the Plan from the current Specification.",
-    "implement-plan": "Implement the current Plan, using the Specification to judge the intended behavior.",
+    "implement-plan": ("Implement the current Plan, using the Specification to judge the intended behavior. "
+                       "Use the Programming Loop with a separate fresh reviewer, then save the one current "
+                       "Programming Result from the actual work, checks, review, delivery and remaining work."),
     "specification": ("Work toward a complete, implementation-neutral Specification from the available "
                       "material, questions and the run brief below. Revise the one current Specification "
                       "in place; do not start the Plan or implementation."),
@@ -87,7 +89,14 @@ def verifier_direction(verifier):
         return ("No independent verifier has been selected. Show the user the available qualified "
                 "reviewers and ask them to choose before commissioning one. Do not silently select "
                 "a reviewer.")
-    return (f"The user selected {verifier} as the independent verifier. Commission a fresh {verifier} "
+    if isinstance(verifier, dict):
+        tool = verifier.get("tool", "")
+        requested = model_label(tool, verifier.get("model", ""), verifier.get("effort", ""))
+        verifier = TOOL_LABELS.get(tool, (tool,))[0]
+        direction = f"Requested independent verifier choices (not verified): {requested}. Carry these choices into the fresh verifier assignment. "
+    else:
+        direction = ""
+    return (direction + f"The user selected {verifier} as the independent verifier. Commission a fresh {verifier} "
             "session that did not implement this work. If this chat cannot launch that session, explain "
             "how the user can start it with this complete request. If the verifier is unavailable or "
             "cannot be separated from the implementation agent, report that and ask before substituting.")
@@ -162,10 +171,14 @@ def resolve_assignment(role, config, entry, step3_tool, defaults):
     if isinstance(override, dict):
         if override.get("tool") or role in OPTIONAL_ROLES:
             return override.get("tool", ""), override.get("model", ""), override.get("effort", ""), "run override"
+        if role in {"review", "correction"}:
+            return resolve_assignment("implementation", config, entry, step3_tool, defaults)
         return step3_tool or "", "", "", "run override"
     default = (defaults or {}).get(role) or {}
     if default.get("tool") or role in OPTIONAL_ROLES:
         return default.get("tool", ""), default.get("model", ""), default.get("effort", ""), "saved default"
+    if role in {"review", "correction"}:
+        return resolve_assignment("implementation", config, entry, step3_tool, defaults)
     return step3_tool or "", "", "", "selected harness"
 
 
@@ -526,9 +539,12 @@ class RunDriver:
         verifier = None
         if self.step in {"build", "correction"}:
             reviewer, r_model, r_effort, _origin = self._assignment_for("review")
+            review_choice = self.config.get("roles", {}).get("review", self.defaults.get("review", {}))
+            if not review_choice.get("tool"):
+                reviewer, r_model, r_effort = tool, model, effort
             extra.append(implementation_direction(tool, model, effort, reviewer, r_model, r_effort))
         if self.step == "verification":
-            verifier = TOOL_LABELS.get(tool, (tool,))[0]
+            verifier = {"tool": tool, "model": model, "effort": effort}
             if self.best_report is not None:
                 extra.append(progress_contract())
                 extra.append("## The best verified state — quoted data\n\n" + quoted(self.best_report))
@@ -811,7 +827,8 @@ class RunDriver:
                 "activity": operation.get("activity", "") if operation else "",
                 "operation": operation, "stopped": self.stop_requested,
                 "last_contact_seconds": operation.get("last_contact_seconds") if live else None,
-                "config": config, "effective_roles": effective_roles}
+                "config": config, "effective_roles": effective_roles,
+                "role_choices": {**self.defaults, **config.get("roles", {})}}
 
 
 class RunRegistry:

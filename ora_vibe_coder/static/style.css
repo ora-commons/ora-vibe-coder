@@ -218,7 +218,7 @@ button.small { min-height: 28px; padding: 3px 9px; font-size: .8rem; }
 /* Run to Completion banner under the stage header. */
 
 /* Shared configuration form. */
-.role-row { display: grid; grid-template-columns: 190px minmax(155px, 1fr) minmax(225px, 1.25fr) minmax(245px, 1.1fr); gap: 4px 8px; align-items: center; margin: 6px 0; }
+.role-row { display: grid; grid-template-columns: 190px minmax(330px, 1fr) minmax(245px, .65fr); gap: 4px 8px; align-items: center; margin: 6px 0; }
 .role-row label { margin: 0; font-size: .85rem; }
 .role-row select { width: 100%; min-width: 0; }
 .role-choice { min-width: 0; }
@@ -314,10 +314,27 @@ details { margin: 10px 0; } summary { cursor: pointer; padding: 5px 0; } fieldse
   .rail { min-height: 300px; }
 }
 
-#implementation-choice .role-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.next-step-body .role-row, .review-step-body .role-row { grid-template-columns: minmax(0, 1fr) minmax(145px, .55fr); }
+.next-step-body .role-row > label, .review-step-body .role-row > label { grid-column: 1 / -1; }
 #implementation-choice .role-row > label, #implementation-choice .role-origin { grid-column: 1 / -1; }
 @media (max-width: 980px) {
   #implementation-choice .role-row { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 760px) { .status-row { flex-wrap: wrap; } #status-bar { flex-basis: calc(100% - 125px); white-space: normal; border-radius: 12px; } #waiting-actions { margin-left: auto; } }
+
+#primary-choice { flex: 1; min-width: 0; }
+#primary-choice .role-row { grid-template-columns: minmax(0, 1fr) 125px; margin: 0; }
+#primary-choice .role-row > label, #primary-choice .role-origin { display: none; }
+#primary-choice select { padding: 5px; font-size: .83rem; }
+#second-opinion { display: block; }
+#primary-choice .role-field-label { display: none; }
+@media (max-width: 700px) {
+  #primary-choice .role-row { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .next-step-body .role-row, .review-step-body .role-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+.role-selected { display: none; }
+@media (max-width: 700px) {
+  .role-selected { display: block; color: var(--ovc-muted); font-size: .8rem; white-space: normal; overflow-wrap: anywhere; margin-top: 3px; }
+}
