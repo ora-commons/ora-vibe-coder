@@ -31,6 +31,7 @@ let splitMode = "chat", splitFraction = 0.42;
 let conversationTurns = [], reviewRuns = [], attachments = [], conversationLoaded = false;
 let statusNotice = "", statusNoticeKind = "";
 let lastOperation = null, lastFiles = null, pollTimer = null, readinessState = {checking: false, peers: null};
+let documentRefreshPending = false;
 // The live operation state the last conversation render was drawn under, so
 // a poll redraws an unfinished turn's message only when that state changed.
 let conversationLiveMark = "";
@@ -121,6 +122,10 @@ function renderStatusActivity() {
   bar.classList.toggle("active", !!active && !contactLost && !stopped);
   bar.classList.toggle("waiting", !!needsAttention && !contactLost && !stopped);
   $("stop-action").hidden = !currentId || !(runActive || (!run && ["starting", "running"].includes(lastOperation?.state))) || stopped;
+  const activity = bar.classList.contains("warning") ? "🔴 Problem" : bar.classList.contains("waiting") ? "🟡 Waiting"
+    : bar.classList.contains("active") ? "🟢 Working" : "";
+  document.title = activity ? `${activity} — ${project?.name || "Vibe Coder"}`
+    : project ? `${project.name} — Vibe Coder` : "Vibe Coder";
 }
 
 function render(element, text) { element.innerHTML = md.render(text || "Not supplied yet."); }
@@ -663,9 +668,9 @@ function renderReader() {
 }
 async function refreshProject() {
   if (!currentId) return;
-  const id = currentId;
+  const id = currentId, opening = projectOpeningGeneration;
   const refreshed = await api("project", {id});
-  if (id !== currentId) return;
+  if (id !== currentId || opening !== projectOpeningGeneration) return;
   project = refreshed;
   compareChangedDocuments();
   renderProjectOptions();
@@ -690,6 +695,7 @@ async function refreshProject() {
     // report that changed while the workspace was open moves it here too.
     if (workspace === "build") updateBuildNextStep();
   }
+  renderStatusActivity();
 }
 async function readFile(path, element, {background = false} = {}) {
   const held = readerView;
@@ -931,6 +937,7 @@ async function chooseProject(id) {
   composerGeneration += 1;  // The composer now holds another project's draft context.
   // undefined means unobserved; only a successful status read may report idle (null).
   stopPolling(); readinessChain += 1; lastOperation = undefined; lastFiles = null; contactLost = false; conversationLiveMark = ""; conversationRunMark = "";
+  documentRefreshPending = false;
   $("status-bar").dataset.operationKey = "";
   status("");
   renderRunBanner();
@@ -1831,6 +1838,7 @@ async function loadConversation() {
   conversationLoaded = true;
   conversationTurns = data.turns || [];
   reviewRuns = data.runs || [];
+  renderStatusActivity();
   updateMessageSuggestion();
   resolvePendingDraft(null);
   renderConversation();
@@ -3171,7 +3179,7 @@ function stopPolling() {
   lastFiles = null;
 }
 async function pollTick() {
-  if (!currentId || stopped || document.visibilityState === "hidden") return;
+  if (!currentId || stopped) return;
   const id = currentId, opening = projectOpeningGeneration;
   let state;
   try { state = await api("turn-state", {id}); }
@@ -3262,18 +3270,23 @@ async function pollTick() {
       renderConversation();
     }
   }
-  if (lastFiles === null) { lastFiles = state.files; return; }
+  // Background tabs still follow work and saved questions. Defer document
+  // panes until visible, keeping their old file baseline for that catch-up.
+  if (lastFiles === null) lastFiles = state.files;
+  if (document.visibilityState === "hidden") return;
   const changed = changedPaths(lastFiles, state.files);
   lastFiles = state.files;
-  if (changed.length) await refreshChanged(changed, {});
+  if (documentRefreshPending || changed.length) await refreshChanged(changed, {silent: documentRefreshPending});
 }
 async function refreshChanged(changed, {silent = false} = {}) {
-  const id = currentId;
+  if (document.visibilityState === "hidden") { documentRefreshPending = true; return; }
+  const id = currentId, opening = projectOpeningGeneration;
   const space = workspace;
   const view = readerView;
   const anchor = readerAnchor;
   await refreshProject();
-  if (id !== currentId) return;  // The switch owns the view: this project's changed-file notice and its saved document selection never apply to the displayed project.
+  if (id !== currentId || opening !== projectOpeningGeneration) return;  // The switch owns the view: this project's changed-file notice and its saved document selection never apply to the displayed project.
+  documentRefreshPending = false;
   // One place names which files changed: the status bar.
   const bar = $("status-bar");
   if (!silent && changed.length && (!bar.textContent || bar.textContent.startsWith("Changed on disk:")))

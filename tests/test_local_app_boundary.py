@@ -291,6 +291,7 @@ class LocalBoundary(unittest.TestCase):
                 page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
                 page.evaluate("() => stopPolling()")
                 bar = page.locator("#status-bar")
+                expect(page).to_have_title("One — Vibe Coder")
                 for removed in ("#more", "#readiness", "#recheck", "#run-banner", "#stop"):
                     expect(page.locator(removed)).to_have_count(0)
                 # Returning from the tool, or observing a newly dispatched
@@ -324,6 +325,7 @@ class LocalBoundary(unittest.TestCase):
                     page.evaluate("op => updateOperation(op)", state)
                     expect(bar).to_have_text("Specification · Updating · 5:30")
                     expect(bar).to_have_class("active")
+                    expect(page).to_have_title("🟢 Working — One")
                     styles[theme] = bar.evaluate("el => getComputedStyle(el).backgroundColor")
                     # Viewing another workspace never renames dispatched work.
                     page.locator('.rail[data-stage="plan"]').click()
@@ -331,6 +333,7 @@ class LocalBoundary(unittest.TestCase):
                     page.evaluate("op => updateOperation(op)", dict(state, state="finished", elapsed_seconds=331))
                     expect(bar).to_have_text("Specification · Finished · 5:31")
                     expect(bar).not_to_have_class("active")
+                    expect(page).to_have_title("One — Vibe Coder")
                     self.assertNotEqual(styles[theme], bar.evaluate("el => getComputedStyle(el).backgroundColor"))
                 # Every dispatched activity has an explicit, stable label.
                 for stage, activity in (("specification", "Discussing"), ("planning", "Creating"),
@@ -348,6 +351,7 @@ class LocalBoundary(unittest.TestCase):
                     page.evaluate("() => status('One work turn per project at a time.', 'warning')")
                     expect(bar).to_have_text(f"Implementation · {activity} · 5:30 — One work turn per project at a time.")
                     expect(bar).to_have_class(re.compile(r"(?=.*\bnotice\b)(?=.*\bactive\b).*"))
+                    expect(page).to_have_title("🟢 Working — One")
                     self.assertEqual(styles["light"], bar.evaluate("el => getComputedStyle(el).backgroundColor"))
                     expect(page.locator("#stop-action")).to_be_visible()
                     page.evaluate("op => updateOperation(op)", dict(state, turn=activity,
@@ -361,6 +365,7 @@ class LocalBoundary(unittest.TestCase):
                     expect(bar).to_have_text("Specification · Finished · 5:30 — " + notice)
                     page.evaluate("() => updateOperation(null)")
                     expect(bar).to_have_text(notice)
+                    expect(page).to_have_title("One — Vibe Coder")
                 page.evaluate("op => updateOperation(op)", dict(state, turn="new-action"))
                 expect(bar).to_have_text("Specification · Updating · 5:30")
                 # Unchanged warnings stay actionable; routine diagnostics do
@@ -371,6 +376,7 @@ class LocalBoundary(unittest.TestCase):
                                visible_warnings=["The outcome note could not be recorded: disk is full."])
                 page.evaluate("op => updateOperation(op)", warning)
                 expect(bar).to_have_class("waiting")
+                expect(page).to_have_title("🟡 Waiting — One")
                 for notice in ("Registry changed", "outcome note could not be recorded", "Other warning."):
                     expect(bar).to_contain_text(notice)
                 expect(bar).not_to_contain_text("Connector version is old.")
@@ -412,16 +418,19 @@ class LocalBoundary(unittest.TestCase):
                     page.wait_for_function("id => currentId === id && !!project && workspace === 'specification' && lastFiles !== null", arg=selected)
                     expect(page.locator("#message-label")).to_have_text("What should the AI change or explain in the Specification?")
                     expect(bar).not_to_contain_text("previous project")
+                    expect(page).to_have_title(f"{'Two' if selected == second_id else 'One'} — Vibe Coder")
                 page.evaluate("() => stopPolling()")
                 page.locator('.rail[data-stage="plan"]').click()
                 page.wait_for_function("() => workspace === 'plan' && workspaceReveal === null")
                 active = dict(state, stage="programming", activity="Coding", elapsed_seconds=1508)
                 page.evaluate("op => updateOperation(op)", active)
                 expect(bar).to_be_visible()
+                expect(page).to_have_title("🟢 Working — One")
                 page.screenshot(path=str(evidence / "desktop-active.png"))
                 waiting = dict(active, state="failed", reason="Sign in to the selected tool, then inspect saved work.")
                 page.evaluate("op => updateOperation(op)", waiting)
                 expect(bar).to_have_class("waiting")
+                expect(page).to_have_title("🟡 Waiting — One")
                 expect(bar).to_contain_text("Implementation · Waiting · 25:08")
                 self.assertNotEqual(styles["light"], bar.evaluate("el => getComputedStyle(el).backgroundColor"))
                 page.screenshot(path=str(evidence / "desktop-waiting.png"))
@@ -432,6 +441,7 @@ class LocalBoundary(unittest.TestCase):
                 expect(bar).to_have_text("Implementation · Stopped · 25:08")
                 expect(bar).not_to_have_class("active")
                 expect(bar).not_to_have_class("waiting")
+                expect(page).to_have_title("One — Vibe Coder")
                 page.screenshot(path=str(evidence / "desktop-endpoint.png"))
                 page.set_viewport_size({"width": 430, "height": 900})
                 page.evaluate("op => updateOperation(op)", active)
@@ -441,12 +451,181 @@ class LocalBoundary(unittest.TestCase):
                 page.evaluate("() => lostContact()")
                 expect(bar).to_contain_text("Lost contact")
                 expect(bar).not_to_have_class("active")
+                expect(page).to_have_title("🔴 Problem — One")
                 page.evaluate("() => { contactRestored(); updateOperation(lastOperation); }")
                 expect(bar).to_contain_text("Coding")
+                expect(page).to_have_title("🟢 Working — One")
+                run = {"run": "tab-run", "step": "build", "state": "running", "operation": active}
+                page.evaluate("run => updateRunState({active: run, last: null})", run)
+                expect(page).to_have_title("🟢 Working — One")
+                page.evaluate("run => updateRunState({active: run, last: null})", dict(run, state="paused-question"))
+                expect(page).to_have_title("🟡 Waiting — One")
+                for endpoint in ("complete", "unfinished", "open"):
+                    page.evaluate("run => updateRunState({active: null, last: run})",
+                                  dict(run, state=endpoint, steps=[{"turn": active["turn"]}]))
+                    expect(page).to_have_title("One — Vibe Coder")
+                page.evaluate("() => { updateRunState({active: null, last: null}); updateOperation(null); status('A warning needs attention.', 'warning'); }")
+                expect(page).to_have_title("🔴 Problem — One")
+                page.evaluate("() => status('')")
+                expect(page).to_have_title("One — Vibe Coder")
                 # Keep reusable, synthetic API evidence for installed-source comparison.
                 (evidence / "ui-fixture.json").write_text(json.dumps({"responses": responses,
                     "project_id": project_id, "active": active, "waiting": waiting, "endpoint": stopped}), encoding="utf-8")
                 self.assertEqual(errors, [])
+            finally:
+                browser.close()
+
+    def test_tab_activity_updates_while_hidden_and_stays_with_its_project(self):
+        from playwright.sync_api import expect, sync_playwright
+        projects = {name: self.request("/api/create", {"directory": name, "name": name,
+                    "description": "", "goals": ""})[1]["id"] for name in ("Background One", "Background Two")}
+        first, second = projects.values()
+        states = {id: self.request("/api/turn-state", {"id": id})[1] for id in projects.values()}
+        records = {id: {"turns": [], "runs": []} for id in projects.values()}
+        requests, errors, pending = [], [], {}
+        holds, disconnected = set(), set()
+
+        def ready(peer, **kwargs):
+            return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
+
+        with mock.patch.object(conversation, "bridge_check", side_effect=ready), \
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            context = browser.new_context(viewport={"width": 1440, "height": 1000}, reduced_motion="reduce")
+            context.add_init_script("""window.tabVisibility = 'visible';
+                Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => tabVisibility});""")
+            try:
+                def route_api(route):
+                    endpoint = urlsplit(route.request.url).path.rsplit("/", 1)[-1]
+                    id = route.request.post_data_json.get("id")
+                    requests.append((endpoint, id))
+                    if endpoint == "turn-state" and id in disconnected:
+                        route.abort("connectionrefused")
+                        return
+                    data = states.get(id) if endpoint == "turn-state" else records.get(id) if endpoint == "conversation" else None
+                    if data is None:
+                        route.continue_()
+                        return
+                    body = json.dumps(data)
+                    key = (endpoint, id)
+                    if key in holds:
+                        holds.remove(key)
+                        pending[key] = (route, body)
+                    else:
+                        route.fulfill(content_type="application/json", body=body)
+
+                context.route("**/api/**", route_api)
+                pages = []
+                for id in (first, second):
+                    page = context.new_page()
+                    pages.append(page)
+                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    page.goto(self.server.url)
+                    if id == first:
+                        page.evaluate("() => { tabVisibility = 'hidden'; document.dispatchEvent(new Event('visibilitychange')); }")
+                    self.select_project(page, id)
+                    page.wait_for_function("id => currentId === id && conversationLoaded && pollTimer !== null && lastFiles !== null", arg=id)
+                    if id == second:
+                        page.evaluate("() => stopPolling()")
+                background, other = pages
+                background.locator("#message").fill("Keep this background draft.")
+                other.locator("#message").fill("Keep the other tab's draft.")
+                expect(background).to_have_title("Background One — Vibe Coder")
+                expect(other).to_have_title("Background Two — Vibe Coder")
+                background.evaluate("() => { tabVisibility = 'hidden'; document.dispatchEvent(new Event('visibilitychange')); }")
+                reads_before = [item for item in requests if item[0] in ("project", "read-file")]
+
+                operation = {"project": str(self.home / "Background One"), "turn": "background-turn",
+                             "tool": "codex", "stage": "specification", "state": "running", "activity": "Discussing",
+                             "elapsed_seconds": 4, "outcome_recorded": True, "warnings": [], "visible_warnings": []}
+                states[first]["operation"] = operation
+                background.evaluate("() => pollTick()")
+                expect(background).to_have_title("🟢 Working — Background One")
+                expect(other).to_have_title("Background Two — Vibe Coder")
+                # The next scheduled poll, without opening the background tab,
+                # must read the saved questions and replace green with yellow.
+                document = self.home / "Background One" / "Specification.md"
+                document.write_text("# Specification\n\nA document changed while the tab was hidden.\n", encoding="utf-8")
+                states[first]["files"] = self.request("/api/turn-state", {"id": first})[1]["files"]
+                records[first]["turns"] = [{"turn": operation["turn"], "tool": "codex", "stage": "specification",
+                    "purpose": "work", "state": "complete", "text": "A saved request.", "images": [], "files": [],
+                    "reply": "Questions for you\n- Which option should I use?", "questions": ["Which option should I use?"],
+                    "outcome_recorded": True, "maintenance": None, "artifact": None, "bridge_diagnostics": []}]
+                operation["state"] = "finished"
+                expect(background).to_have_title("🟡 Waiting — Background One")
+                background.evaluate("() => { clearInterval(pollTimer); pollTimer = null; }")
+                expect(background.locator("#status-bar")).to_contain_text("Answer the questions")
+                self.assertEqual([item for item in requests if item[0] in ("project", "read-file")], reads_before)
+                expect(background.locator("#message")).to_have_value("Keep this background draft.")
+
+                states[second]["operation"] = dict(operation, project=str(self.home / "Background Two"),
+                                                   turn="other-turn", state="running")
+                other.evaluate("() => pollTick()")
+                expect(other).to_have_title("🟢 Working — Background Two")
+                expect(background).to_have_title("🟡 Waiting — Background One")
+                expect(other.locator("#message")).to_have_value("Keep the other tab's draft.")
+
+                # Foreground recovery updates the deferred document pane.
+                background.evaluate("async () => { tabVisibility = 'visible'; await pollTick(); }")
+                expect(background.locator("#reader")).to_contain_text("A document changed while the tab was hidden.")
+                expect(background).to_have_title("🟡 Waiting — Background One")
+                self.assertEqual([item for item in requests if item[0] in ("project", "read-file")][len(reads_before):],
+                                 [("project", first), ("read-file", first)])
+                background.evaluate("() => { tabVisibility = 'hidden'; document.dispatchEvent(new Event('visibilitychange')); }")
+                operation.update(state="failed", reason="The selected tool needs attention.")
+                background.evaluate("() => pollTick()")
+                expect(background).to_have_title("🟡 Waiting — Background One")
+                disconnected.add(first)
+                background.evaluate("() => pollTick()")
+                expect(background).to_have_title("🔴 Problem — Background One")
+                expect(background.locator("#status-bar")).to_contain_text("Lost contact")
+                disconnected.remove(first)
+                background.evaluate("() => pollTick()")
+                expect(background).to_have_title("🟡 Waiting — Background One")
+                states[first]["operation"] = None
+                background.evaluate("() => pollTick()")
+                expect(background).to_have_title("Background One — Vibe Coder")
+
+                # A delayed status response from the former project cannot
+                # recolor this tab after the user switches projects.
+                states[first]["operation"] = dict(operation, state="running")
+                holds.add(("turn-state", first))
+                with background.expect_request("**/api/turn-state"):
+                    background.evaluate("() => { window.pendingPoll = pollTick(); }")
+                states[second]["operation"] = None
+                self.select_project(background, second)
+                background.wait_for_function("id => currentId === id && project?.name === 'Background Two' && conversationLoaded && pollTimer !== null", arg=second)
+                background.evaluate("() => stopPolling()")
+                expect(background).to_have_title("Background Two — Vibe Coder")
+                route, body = pending.pop(("turn-state", first))
+                route.fulfill(content_type="application/json", body=body)
+                background.evaluate("() => pendingPoll")
+                expect(background).to_have_title("Background Two — Vibe Coder")
+                expect(other).to_have_title("🟢 Working — Background Two")
+
+                # Saved questions have the same origin guard as live status.
+                states[first]["operation"] = None
+                self.select_project(background, first)
+                background.wait_for_function("id => currentId === id && project?.name === 'Background One' && conversationLoaded && pollTimer !== null", arg=first)
+                background.evaluate("() => stopPolling()")
+                expect(background.locator("#message")).to_have_value("Keep this background draft.")
+                states[first]["operation"] = dict(operation, state="finished")
+                records[first]["turns"][0]["questions"] = ["A late question from the previous project?"]
+                background.evaluate("() => { conversationTurns = []; }")
+                holds.add(("conversation", first))
+                with background.expect_request("**/api/conversation"):
+                    background.evaluate("() => { window.pendingHistory = pollTick(); }")
+                self.select_project(background, second)
+                background.wait_for_function("id => currentId === id && project?.name === 'Background Two' && conversationLoaded && pollTimer !== null", arg=second)
+                background.evaluate("() => stopPolling()")
+                route, body = pending.pop(("conversation", first))
+                route.fulfill(content_type="application/json", body=body)
+                background.evaluate("() => pendingHistory")
+                expect(background).to_have_title("Background Two — Vibe Coder")
+                expect(background.locator("#conversation")).not_to_contain_text("A late question from the previous project?")
+                expect(other.locator("#message")).to_have_value("Keep the other tab's draft.")
+                self.assertEqual(errors, [])
+                self.assertEqual(pending, {})
             finally:
                 browser.close()
 
