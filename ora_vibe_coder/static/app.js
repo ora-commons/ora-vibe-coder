@@ -48,6 +48,7 @@ let reviewerChosen = false, stepReviewerChosen = false, stepReviewerInitialized 
 // turn restores its own project's text and images to the composer, and another
 // project's send never displaces that recovery.
 const pendingDrafts = new Map();
+const pendingInputs = new Set();
 // The composer's draft identity: bumped on every user edit, project switch, or
 // restored draft. An acknowledgement consumes the composer only while this is
 // still the draft that was submitted — never merely because the text now shown
@@ -1681,8 +1682,41 @@ function originLabel(id) {
 }
 async function send() {
   if (!currentId || !project) { status("Choose or create a project first."); return; }
-  // During a run the composer cannot start a separate turn or add to the
-  // running brief; it can only answer a pause.
+  const operation = runActive?.operation || lastOperation;
+  if (operation && ["starting", "running"].includes(operation.state) && runActive?.state !== "paused-question") {
+    if (!operation.input_target || operation.tool !== "codex") { status("The working agent cannot receive a live message. Your draft is retained."); return; }
+    if (attachments.length || messageFiles().length) { status("Mid-run messages accept text only. Your attachments are retained."); return; }
+    const id = currentId, generation = composerGeneration, text = $("message").value;
+    if (pendingInputs.has(id)) return;
+    if (!text.trim()) { status("Write the message for the working Codex agent first."); return; }
+    pendingInputs.add(id);
+    $("send").disabled = true;
+    try {
+      let result = await api("turn-input", {id, turn: operation.turn, run: operation.run || "", target: {...operation.input_target}, text});
+      const identifier = result.id;
+      while (result.status === "pending") {
+        await new Promise(resolve => setTimeout(resolve, 250));
+        const state = await api("turn-state", {id});
+        result = state.operation?.turn === operation.turn
+          ? state.operation.input_results?.find(item => item.id === identifier) : null;
+        if (!result || result.status === "unknown") {
+          const saved = await api("conversation", {id});
+          const recorded = saved.turns.find(turn => turn.turn === operation.turn)?.inputs?.find(item => item.id === identifier);
+          result = recorded && recorded.status !== "pending" ? recorded : result || {status: "unknown"};
+        }
+      }
+      if (result.status === "accepted" && currentId === id && composerGeneration === generation) {
+        $("message").value = ""; composerGeneration += 1; syncVisibleInput();
+      }
+      status(`${currentId === id ? "" : originLabel(id) + ": "}${result.status === "accepted"
+        ? "Codex accepted the message for its active turn. Acceptance does not prove it followed the instruction."
+        : (result.reason || "Delivery was not acknowledged.") + " Your draft is retained."}`, result.status === "accepted" ? "" : "warning");
+      if (currentId === id) await loadConversation();
+    } catch (error) {
+      status(`${error.message} Delivery was not acknowledged; your draft is retained.`, "warning");
+    } finally { pendingInputs.delete(id); updateSendState(); }
+    return;
+  }
   if (runActive) {
     if (runActive.state !== "paused-question") { status("A Run to Completion is active; the composer can only answer its pause, or stop the run."); return; }
     const answer = $("message").value.trim();
@@ -1804,23 +1838,25 @@ function updateSendState() {
                 && !lastOperation.stage?.startsWith("materiality-"))
     || (runActive && ["starting", "running"].includes(runActive.state));
   if (runActive) {
-    $("send").disabled = runActive.state !== "paused-question";
+    const liveInput = runActive.operation?.tool === "codex" && runActive.operation?.input_target;
+    $("send").disabled = pendingInputs.has(currentId) || (runActive.state !== "paused-question" && !liveInput);
     $("send").textContent = runActive.state === "paused-question"
       ? "Send the answer into the run"
-      : "Run active — the composer answers pauses";
+      : liveInput ? "Send message to working Codex" : "Run active — live messages unavailable";
     return;
   }
   $("message-label").textContent = workspace === "build"
     ? (messageStage() === "verification" ? "Reply to the verification coordinator" : "What should the AI change or explain in the implementation?")
     : `What should the AI change or explain in the ${workspaces[workspace]?.title || "current stage"}?`;
   const blocked = routeBlock(selectedToolId());
-  $("send").disabled = !currentId || !selectedToolId() || busy || !!blocked;
+  const liveInput = busy && lastOperation?.tool === "codex" && lastOperation?.input_target;
+  $("send").disabled = pendingInputs.has(currentId) || !currentId || (!selectedToolId() && !liveInput) || (busy && !liveInput) || (!liveInput && !!blocked);
   $("send").title = blocked
     ? `${blocked.reason}. ${blocked.remedy} Your draft, attachments and project stay as they are; nothing is switched.`
     : "";
-  $("send").textContent = blocked
+  $("send").textContent = liveInput ? "Send message to working Codex" : blocked
     ? "In-app turn unavailable for this tool"
-    : busy ? "AI is working — one turn at a time" : `Ask ${$("destination").value || "AI"} to work on ${workspace === "build" ? (messageStage() === "verification" ? "independent verification" : "the implementation") : `the ${workspaces[workspace]?.title || "current stage"}`}`;
+    : busy ? "AI is working — live messages unavailable" : `Ask ${$("destination").value || "AI"} to work on ${workspace === "build" ? (messageStage() === "verification" ? "independent verification" : "the implementation") : `the ${workspaces[workspace]?.title || "current stage"}`}`;
 }
 
 // The saved conversation and the retained review runs, derived from records.
@@ -1907,6 +1943,14 @@ function messageCard(turn) {
       failed.append(recovery);
       card.append(failed);
     }
+  }
+  for (const input of turn.inputs || []) {
+    const message = document.createElement("div"); message.className = "msg user";
+    const text = document.createElement("div"); text.textContent = input.text;
+    const state = document.createElement("p");
+    state.textContent = input.status === "accepted" ? "Codex accepted this mid-run message; compliance is unconfirmed."
+      : input.status === "refused" ? `Codex refused this message: ${input.reason}` : "Delivery unconfirmed; inspect this turn before resending.";
+    message.append(text, state); card.append(message);
   }
   appendArtifactReadback(card, turn.artifact);
   // The turn's Bridge diagnostics are secondary detail: they appear only under

@@ -36,10 +36,10 @@ VENDORED_PATHS = (
 # import. The Bridge repository is public and authoritative in one place, so
 # the authoritative and public release repositories name the same source.
 BRIDGE_AUTHORITY = {
-    "authoritative_repository": "ora-commons/agent-bridge",
-    "public_release_repository": "ora-commons/agent-bridge",
-    "source_revision": "8d4449424341cc838262dd0aaf453187163ba7b3",
-    "source_tree": "0510c28e12eb029693150b64c2bae1dd32be1e40",
+    "authoritative_repository": "ora-commons/ora-agent-bridge",
+    "public_release_repository": "ora-commons/ora-agent-bridge",
+    "source_revision": "7955bbc4829cf07e2ba626d215a6df2af1a203cd",
+    "source_tree": "43d5b690dce5d25a518404c39593e54ee6a4ca19",
     "vendored_snapshot": "components/agent-bridge",
 }
 

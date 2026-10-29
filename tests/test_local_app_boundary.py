@@ -73,6 +73,67 @@ class LocalBoundary(unittest.TestCase):
     def select_project(self, page, project_id):
         page.locator("#project").select_option(project_id)
 
+    def test_mid_run_message_targets_origin_and_preserves_failed_draft(self):
+        from playwright.sync_api import expect, sync_playwright
+        first = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
+        second = self.request("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})[1]["id"]
+        project = self.server.store.projects[first]
+        handle = conversation.TurnOperation(project.root, "codex", "specification", {})
+        handle.turn, handle.run, handle.state = "0001-20261028-120000", "original-run", "running"
+        handle.input_target = {"thread_id": "owned-thread", "turn_id": "owned-turn"}
+        sent, delivered = [], threading.Event()
+        pipe = io.StringIO()
+        def write(line):
+            sent.append(json.loads(line))
+            delivered.set()
+        pipe.write = write
+        handle.input_process = mock.Mock(stdin=pipe)
+        self.server.conversation.by_project[str(project.root)] = handle
+        ready = {"ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
+        with mock.patch.object(conversation, "bridge_check", side_effect=lambda peer, **kwargs: {"peer": peer, **ready}), \
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.goto(self.server.url)
+                self.select_project(page, first)
+                expect(page.locator("#send")).to_have_text("Send message to working Codex")
+                expect(page.locator("#send")).to_be_enabled()
+                page.locator("#message").fill("Exact originating correction.")
+                page.locator("#send").click()
+                page.wait_for_function("() => document.querySelector('#send').disabled")
+                self.select_project(page, second)
+                page.wait_for_function("() => pollTimer !== null && lastOperation === null")
+                page.locator("#message").fill("Keep this other project's draft.")
+                self.assertTrue(delivered.wait(5), "The originating agent did not receive the message.")
+                self.assertEqual((sent[0]["thread_id"], sent[0]["turn_id"], sent[0]["text"]),
+                                 ("owned-thread", "owned-turn", "Exact originating correction."))
+                handle.observe({"event": "work_input", **sent[0], "status": "accepted"})
+                expect(page.locator("#status-bar")).to_contain_text("accepted the message")
+                expect(page.locator("#message")).to_have_value("Keep this other project's draft.")
+                self.select_project(page, first)
+                expect(page.locator("#send")).to_have_text("Send message to working Codex")
+                delivered.clear()
+                page.locator("#message").fill("Preserve this refused correction.")
+                page.locator("#send").click()
+                self.assertTrue(delivered.wait(5), "The refusal request did not reach the agent.")
+                handle.observe({"event": "work_input", **sent[1], "status": "refused", "reason": "active turn changed"})
+                expect(page.locator("#status-bar")).to_contain_text("active turn changed")
+                expect(page.locator("#message")).to_have_value("Preserve this refused correction.")
+                old = {"id": first, "turn": handle.turn, "run": handle.run, "target": dict(handle.input_target), "text": "stale"}
+                handle.turn = "0002-20261028-120001"
+                self.assertEqual(self.request("/api/turn-input", old)[0], 400)
+                handle.tool, handle.input_target = "zcode", None
+                page.evaluate("async () => {const data = await api('turn-state', {id: currentId}); updateOperation(data.operation);}")
+                expect(page.locator("#send")).to_be_disabled()
+                page.locator("#message").press("Enter")
+                expect(page.locator("#status-bar")).to_contain_text("cannot receive a live message")
+                expect(page.locator("#message")).to_have_value("Preserve this refused correction.")
+                self.assertEqual(len(sent), 2)
+            finally:
+                handle.close_input()
+                browser.close()
+
     def test_project_header_keeps_selection_and_details_on_one_row(self):
         try:
             from playwright.sync_api import expect, sync_playwright

@@ -516,6 +516,13 @@ class RunDriver:
                                 "Copy request beside Waiting can deliver this step manually.")
             return False
         extra = []
+        corrections = []
+        for folder in conversation.turn_folders(self.project):
+            prior = conversation.read_turn(folder)
+            if prior["fields"].get("Run") == self.run:
+                corrections.extend(item["text"] for item in prior["inputs"] if item.get("status") == "accepted")
+        if corrections:
+            extra.append("## Current user instructions received during this run\n\n" + "\n\n".join(corrections))
         verifier = None
         if self.step in {"build", "correction"}:
             reviewer, r_model, r_effort, _origin = self._assignment_for("review")

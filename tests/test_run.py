@@ -57,6 +57,7 @@ def main():
     runp.add_argument("--model")
     runp.add_argument("--effort")
     runp.add_argument("--events-jsonl", action="store_true")
+    runp.add_argument("--work-input-jsonl", action="store_true")
     runp.add_argument("--attachment", action="append")
     runp.add_argument("--note-ref")
     runp.add_argument("--purpose")
@@ -72,7 +73,7 @@ def main():
                           "model_switch": "-m" if args.peer == "codex" else None}))
         return 0
     session = pathlib.Path(args.session)
-    body = sys.stdin.read()
+    body = json.loads(sys.stdin.readline())["body"] if getattr(args, "work_input_jsonl", False) else sys.stdin.read()
     if args.command == "record":
         if os.environ.get("VIBE_FAKE_FAIL_RUN_NOTES") and "Note: run-start" in body:
             sys.stderr.write("NOTE_WRITE_FAILED\\n")
@@ -120,6 +121,15 @@ def main():
     request.write_text("\\n".join(headers) + "\\n\\n## Body\\n\\n" + body, encoding="utf-8")
     for name, text in (directive.get("writes") or {}).items():
         pathlib.Path(name).write_text(text, encoding="utf-8")
+    if directive.get("mid_input"):
+        emit({"event": "work_input_ready", "thread_id": "owned-thread", "turn_id": "owned-turn"})
+        for status in ("accepted", "refused"):
+            value = {**json.loads(sys.stdin.readline()), "status": status, "reason": "native refusal" if status == "refused" else ""}
+            number = next_sequence(session)
+            note = session / "messages" / ("%04d-initiator-record.md" % number)
+            note.write_text("# Message %04d\\nRecord: note\\nFrom: vibe-coder\\n\\n## Body\\n\\nWork-Input-JSON: " % number + json.dumps(value) + "\\n", encoding="utf-8")
+            emit({"event": "work_input", **value})
+        emit({"event": "work_input_closed"})
     if directive.get("delay"):
         time.sleep(float(directive["delay"]))
     if directive.get("fail"):
@@ -250,6 +260,34 @@ class RunCase(unittest.TestCase):
         return request.split("\n\n# Work-turn instructions", 1)[0]
 
     # -- the scenarios -------------------------------------------------------
+
+    def test_mid_run_instruction_reaches_later_steps(self):
+        self.addCleanup(self.registry.drain)
+        project = self.project()
+        root = project.root
+        self.directive(0, mid_input=True, reply="Specification saved.", writes={
+            str(root / "Specification.md"): "# Specification\n\nA useful product brief.\n"})
+        self.directive(1, reply="Plan saved.", writes={str(root / "Plan.md"): "# Plan\n\nAn executable approach.\n"})
+        self.directive(2, reply="Built.", writes={str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
+        self.directive(3, reply="Verified.", writes={str(root / "One — Verification Report.md"): report("PASSED")})
+        driver = self.start(project)
+        self.wait_for(lambda: driver.handle is not None and driver.handle.snapshot().get("input_target"))
+        handle = driver.handle
+        target = handle.snapshot()["input_target"]
+        correction = "Keep the supplied names.\nPreserve every existing note."
+        accepted = self.registry.send_input(project, handle.turn, driver.run, target, correction)
+        rejected = self.registry.send_input(project, handle.turn, driver.run, target, "DO NOT PROPAGATE THIS FAILED DRAFT")
+        self.assertEqual((accepted["status"], rejected["status"]), ("pending", "pending"))
+        self.settle(driver, lambda status: status["state"] == "complete")
+        saved = conversation.read_turn(root / ".vibe" / handle.turn)
+        self.assertEqual(saved["inputs"][0]["text"], correction)
+        self.assertEqual([item["status"] for item in saved["inputs"]], ["accepted", "refused"])
+        later = self.step_requests(project)[1:]
+        self.assertEqual(len(later), 3)
+        for request in later:
+            self.assertIn("Current user instructions received during this run", self.own_message(request))
+            self.assertIn(correction, self.own_message(request))
+            self.assertNotIn("DO NOT PROPAGATE", request)
 
     def test_run_from_specification_consumes_the_brief_once_and_completes(self):
         self.addCleanup(self.registry.drain)
