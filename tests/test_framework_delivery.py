@@ -397,6 +397,15 @@ class FrameworkDeliveryTests(unittest.TestCase):
                 ("stray-pyc", lambda copied: (
                     (copied / "stray.pyc").write_bytes(b"cache"),
                 )),
+                # A fast-forward across a component rename can leave a
+                # directory holding nothing but ignored caches (the old
+                # components/agent-bridge/bridge/ pattern): the exact-file
+                # check passes over it like the caches themselves.
+                ("cache-only-directory", lambda copied: (
+                    (copied / "leftover").mkdir(),
+                    (copied / "leftover" / "__pycache__").mkdir(),
+                    (copied / "leftover" / "__pycache__" / "cached.pyc").write_bytes(b"cache"),
+                )),
             )
             for name, mutate in cases:
                 with self.subTest(snapshot_item=name):
@@ -426,6 +435,12 @@ class FrameworkDeliveryTests(unittest.TestCase):
                 ), "non-cache file in __pycache__"),
                 ("unexpected-file", lambda copied: (
                     (copied / "extra.txt").write_bytes(b"extra"),
+                ), "exact 17 files"),
+                # The same leftover directory holding any real source still
+                # fails the exact check: cache tolerance hides no content.
+                ("non-cache-in-leftover-directory", lambda copied: (
+                    (copied / "leftover").mkdir(),
+                    (copied / "leftover" / "bridge.py").write_bytes(b"source"),
                 ), "exact 17 files"),
             )
             for name, mutate, message in failures:

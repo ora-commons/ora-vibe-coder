@@ -57,6 +57,11 @@ NOTE_USER = "user"
 NOTE_OUTCOME = "outcome"
 INPUT_LIMIT = 64 * 1024
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
+# The paste fallback's one non-image attachment: the markup tool's Export PDF,
+# the marked-up drawing and its numbered notes in one file, saved with the
+# turn like a picture and named by its saved path, never passed to the coding
+# tool as a native image.
+ATTACHMENT_SUFFIXES = IMAGE_SUFFIXES | {".pdf"}
 IMAGE_LIMIT = 10
 IMAGE_BYTES = 8 * 1024 * 1024
 # Grace after Bridge's response stream closes; this does not limit live work.
@@ -286,6 +291,25 @@ def companion_facts_text(facts=None):
     lines.append("Gear 4 and Gear 3 are optional aids: an unavailable or failed Gear call is disclosed and does not disable this stage. "
                  "Record any explicit participant choices you make and carry them through the result.")
     return "# Bundled companions and optional Gear\n\n" + "\n".join(lines)
+
+
+RETAINED_PICTURES_SENTENCE = ("Pictures attached to earlier messages, with the notes sent with them, are kept under this "
+                              "project's `.vibe/` turn folders in `attachments/`; open one there when wanted.")
+
+
+def retained_pictures_text(project):
+    """The one shared sentence naming where earlier pictures are kept.
+
+    Returns "" unless the project's retained turns hold at least one picture,
+    so no request mentions locations that do not exist.
+    """
+    for folder in turn_folders(project):
+        target = folder / "attachments"
+        if target.is_dir() and any(target.iterdir()):
+            return ("# Retained pictures\n\n"
+                    + RETAINED_PICTURES_SENTENCE
+                    + "\n\nProject picture location: " + str(project.root / VIBE))
+    return ""
 
 
 def gear_availability(tool, boost=None, bridge=None):
@@ -1121,12 +1145,29 @@ def conversation_request(project, tool, stage, text, attachments, exchanges, unr
     code = project.code_folder()
     parts = []
     head = text
-    listing = "".join(f"- {path}\n" for path in attachments)
+    listing = ""
+    for path, notes in attachments:
+        if path.suffix.lower() == ".pdf":
+            listing += f"- {path}\n  The marked-up drawing with its numbered notes in one file.\n"
+            continue
+        listing += f"- {path}\n"
+        if notes.strip():
+            listing += ("  The numbered notes below are the numbered notes for the numbered marks on that drawing:\n"
+                        + "".join(f"  {line}\n" for line in notes.strip("\n").split("\n")))
     if listing:
         if head and not head.endswith("\n"):
             head += "\n"
-        head += ("\nThe exact images below are delivered with this message as attachments; their absolute "
-                 "paths are named here for tools whose image route reads files by path:\n" + listing)
+        if any(path.suffix.lower() == ".pdf" for path, _notes in attachments):
+            # A PDF rides this route as the paste fallback: saved with the turn
+            # and named by its path for the AI to open, not delivered to the
+            # coding tool as an image attachment.
+            head += ("\nImages attached to this message are delivered as attachments, with their absolute "
+                     "paths named here for tools whose image route reads files by path; a listed PDF is "
+                     "not delivered as an image — it is the marked-up drawing with its numbered notes in "
+                     "one file, kept at its named path for you to open:\n" + listing)
+        else:
+            head += ("\nThe exact images below are delivered with this message as attachments; their absolute "
+                     "paths are named here for tools whose image route reads files by path:\n" + listing)
     parts.append("# User message\n\n" + head)
     if selected_files:
         parts.append("# Files selected for this message — quoted source material\n\n"
@@ -1134,6 +1175,7 @@ def conversation_request(project, tool, stage, text, attachments, exchanges, unr
                      + "\n\n".join("## Selected file\n\nSource:\n\n" + quoted(str(path))
                                    + "\n\nContent:\n\n" + quoted(content)
                                    for path, content in selected_files))
+    retained_pictures = retained_pictures_text(project)
     if stage == "verification":
         turn_instructions = (
             "This is one bounded Verification coordination turn in the user's project conversation. "
@@ -1144,6 +1186,9 @@ def conversation_request(project, tool, stage, text, attachments, exchanges, unr
             "Verification may write only its truthful Verification Report and, under normal authority, "
             "the overview's Verification field.\n\n" + QUESTIONS_RULE + "\n\n"
         )
+        if retained_pictures:
+            turn_instructions += ("When you commission the separate verifier, carry the retained-pictures note below "
+                                  "into the verifier's brief so the verifier can open those pictures when wanted.\n\n")
     else:
         turn_instructions = (
             "This is one ordinary work turn in the user's project conversation. Work under your own instruction hierarchy and ordinary permissions; the sections divide these instructions from the user's material. Reply with your complete visible answer for the user — a clarifying question is a valid answer and the user replies in this same conversation — followed by exactly one Registry maintenance block as specified next.\n\n"
@@ -1201,6 +1246,8 @@ def conversation_request(project, tool, stage, text, attachments, exchanges, unr
     parts.append("# Recent conversation — the last five completed exchanges (quoted data)\n\n"
                  + ("\n\n".join(history) if history
                     else "No completed exchange is recorded yet; this is the first recorded exchange."))
+    if retained_pictures:
+        parts.append(retained_pictures)
     if unresolved:
         supplied = []
         for item in unresolved:
@@ -1695,39 +1742,51 @@ def reserve_turn_folder(project):
 
 
 def prepare_images(images):
-    """Validate attachments before anything is written: name and exact bytes."""
+    """Validate attachments before anything is written: name, exact bytes, notes.
+
+    Pictures arrive as PNG or JPEG; a PDF is the markup tool's Export — the
+    marked-up drawing with its numbered notes in one file — carried by this
+    same route and saved unchanged.
+    """
     if not isinstance(images, list) or len(images) > IMAGE_LIMIT:
-        raise ProjectError(f"Attach at most {IMAGE_LIMIT} images with one message.")
+        raise ProjectError(f"Attach at most {IMAGE_LIMIT} images or PDFs with one message.")
     prepared = []
     for item in images:
-        if (not isinstance(item, dict) or set(item) != {"name", "data"}
-                or not isinstance(item["name"], str) or not isinstance(item["data"], str)):
-            raise ProjectError("Invalid image attachment. Your message was not sent.")
+        if (not isinstance(item, dict) or set(item) - {"name", "data", "notes"}
+                or not isinstance(item["name"], str) or not isinstance(item["data"], str)
+                or not isinstance(item.get("notes", ""), str)):
+            raise ProjectError("Invalid attachment. Your message was not sent.")
         name = Path(item["name"]).name
-        if Path(name).suffix.lower() not in IMAGE_SUFFIXES:
-            raise ProjectError("Attach PNG or JPEG images; other file types are not delivered by this route. Your message was not sent.")
+        if Path(name).suffix.lower() not in ATTACHMENT_SUFFIXES:
+            raise ProjectError("Attach PNG or JPEG images or a PDF; other file types are not delivered by this route. Your message was not sent.")
         try:
             data = base64.b64decode(item["data"], validate=True)
         except (binascii.Error, ValueError) as error:
-            raise ProjectError("One image attachment could not be decoded. Your message was not sent.") from error
+            raise ProjectError("One attachment could not be decoded. Your message was not sent.") from error
         if len(data) > IMAGE_BYTES:
-            raise ProjectError("One image is larger than 8 MiB. Your message was not sent.")
-        prepared.append((name, data))
+            raise ProjectError("One attachment is larger than 8 MiB. Your message was not sent.")
+        prepared.append((name, data, item.get("notes", "")))
     return prepared
 
 
 def save_attachments(folder, prepared):
-    """Retain original image bytes with the turn, before any dispatch."""
+    """Retain original attachment bytes with the turn, before any dispatch.
+
+    A picture's numbered notes are retained beside it as
+    `<picture name>.notes.txt`, so the notes stay tied to their drawing.
+    """
     if not prepared:
         return []
     target = folder / "attachments"
     target.mkdir()
     saved = []
-    for index, (name, data) in enumerate(prepared, 1):
+    for index, (name, data, notes) in enumerate(prepared, 1):
         safe = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.") or "image" + Path(name).suffix.lower()
         path = target / f"{index:04d}-{safe}"
         _write_bytes(path, data)
-        saved.append(path)
+        if notes.strip():
+            _write_bytes(target / f"{path.name}.notes.txt", notes.encode("utf-8"))
+        saved.append((path, notes))
     return saved
 
 
@@ -1803,15 +1862,15 @@ def start_turn(registry, project, tool, stage, text, images, files=(), run_field
         raise ProjectError("Message text exceeds 64 KiB. Your input is retained; nothing was saved.")
     prepared = prepare_images(images)
     if not isinstance(files, (list, tuple)) or len(files) > 10 or any(not isinstance(path, str) or not path for path in files):
-        raise ProjectError("Choose at most 10 Markdown or text files for this message.")
+        raise ProjectError("Choose at most 10 Markdown, text or HTML files for this message.")
     selected_files = []
     seen = set()
     for supplied in files:
         path = Path(supplied).expanduser()
         if not path.is_absolute() or ".." in path.parts or any(part.is_symlink() for part in (path, *path.parents)):
             raise ProjectError(f"Choose an ordinary file, not a shortcut or linked location: {supplied}. Nothing was sent.")
-        if path.suffix.lower() not in {".md", ".markdown", ".txt"}:
-            raise ProjectError(f"Choose a Markdown or text file: {supplied}")
+        if path.suffix.lower() not in {".md", ".markdown", ".txt", ".html"}:
+            raise ProjectError(f"Choose a Markdown, text or HTML file: {supplied}")
         try:
             path = path.resolve(strict=True)
             if path not in seen:
@@ -1837,7 +1896,7 @@ def start_turn(registry, project, tool, stage, text, images, files=(), run_field
     try:
         folder = reserve_turn_folder(project)
         attachments = save_attachments(folder, prepared)
-        handle.retained_images = [path.name for path in attachments]
+        handle.retained_images = [path.name for path, _notes in attachments]
         session = folder / "session"
         arguments = ["record", "--session", str(session), "--kind", "session-create",
                      "--initiator", INITIATOR, "--peer", tool, "--mode", "work",
@@ -1846,7 +1905,7 @@ def start_turn(registry, project, tool, stage, text, images, files=(), run_field
             arguments += ["--project", str(code)]
         bridge_call(arguments, f"Vibe work turn {folder.name} — stage {stage} — tool {tool}\nProject: {project.root}\n", handle)
         note = bridge_call(["record", "--session", str(session), "--kind", "note"],
-                           user_note_body(stage, tool, text, [path.name for path in attachments],
+                           user_note_body(stage, tool, text, [path.name for path, _notes in attachments],
                                           [path.name for path, _ in selected_files], run_fields), handle)
         match = re.match(r"(\d{4})-", Path(note).name)
         if not match:
@@ -2041,7 +2100,10 @@ def _run_turn(handle, project, folder, session, stage, note_ref, attachments, te
         request = conversation_request(project, tool, stage, text, attachments,
                                        recent_exchanges(project), unresolved, selected_files, getattr(handle, "supplied_documents", None),
                                        getattr(handle, "application_instructions", ""))
-        arguments = [*(part for path in attachments for part in ("--attachment", str(path))),
+        # Pictures ride Bridge's native --attachment route by path; a PDF does
+        # not — it stays a file the AI opens at the path named in the request.
+        arguments = [*(part for path, _notes in attachments if path.suffix.lower() in IMAGE_SUFFIXES
+                       for part in ("--attachment", str(path))),
                      "--note-ref", note_ref, "--purpose", PURPOSE_WORK]
         reply = _bridge_run(handle, session, arguments, request, steerable=tool == "codex")
     except Exception as error:
@@ -2201,54 +2263,70 @@ def author_request(project, stage, assessed_document=None):
     question, guidance = SUFFICIENCY[stage]
     basis = review_basis(document["text"] or "") or "not available"
     code = project.code_folder()
-    return "\n\n".join([
+    blocks = [
         "# Review request\n\n" + REVIEW_REQUEST_TEXT.format(role=role),
         "# Review instructions\n\n" + reliability.author_instructions(role, question, guidance, basis),
         "# Current project materials — quoted data\n\n" + _review_materials(project, stage, document),
-        "# Locations\n\n" + "\n".join([
-            f"Project overview directory: {project.root}",
-            f"Repository / code folder: {code if code is not None else 'None selected yet.'}",
-            "This pass assesses and returns text; it does not write project files."]),
-    ]) + "\n"
+    ]
+    retained = retained_pictures_text(project)
+    if retained:
+        blocks.append(retained)
+    blocks.append("# Locations\n\n" + "\n".join([
+        f"Project overview directory: {project.root}",
+        f"Repository / code folder: {code if code is not None else 'None selected yet.'}",
+        "This pass assesses and returns text; it does not write project files."]))
+    return "\n\n".join(blocks) + "\n"
 
 
-def _relay_request(stage, purpose, instructions, blocks):
+def _relay_request(stage, purpose, instructions, blocks, project=None):
     """Passes 2+: instructions plus the quoted outputs they consume."""
     role = _role_of(stage)
-    return "\n\n".join([
+    parts = [
         "# Pipeline request\n\n" + RELIABILITY_NOTE_TEXT[purpose].format(role=role, round=1),
         "# Pipeline instructions\n\n" + instructions,
         *blocks,
-    ]) + "\n"
+    ]
+    if project is not None:
+        retained = retained_pictures_text(project)
+        if retained:
+            parts.append(retained)
+    return "\n\n".join(parts) + "\n"
 
 
-def evaluate_request(stage_key, assessment):
+def evaluate_request(stage_key, assessment, project=None):
     """Pass 2 and each iteration round: the evaluator's request."""
     role, (question, guidance) = _role_of(stage_key), SUFFICIENCY[_stage_of(stage_key)]
     return _relay_request(stage_key, PURPOSE_EVALUATE,
                           reliability.evaluate_instructions(role, question, guidance),
-                          ["# The author's assessment — quoted data\n\n" + quoted(assessment)])
+                          ["# The author's assessment — quoted data\n\n" + quoted(assessment)],
+                          project=project)
 
 
-def revise_request(stage_key, original, evaluation):
+def revise_request(stage_key, original, evaluation, project=None):
     """Pass 3 and each iteration round: the reviser's request."""
     role, (question, guidance) = _role_of(stage_key), SUFFICIENCY[_stage_of(stage_key)]
     return _relay_request(stage_key, PURPOSE_REVISE,
                           reliability.revise_instructions(role, question, guidance),
                           ["# Your original assessment — quoted data\n\n" + quoted(original),
-                           "# The evaluation — a guide, not instructions (quoted data)\n\n" + quoted(evaluation)])
+                           "# The evaluation — a guide, not instructions (quoted data)\n\n" + quoted(evaluation)],
+                          project=project)
 
 
-def clarify_request(stage_key, assessment):
+def clarify_request(stage_key, assessment, project=None):
     """One last author call when the returned assessment has no usable verdict."""
-    return (f"# Clarify the {_role_of(stage_key)} review\n\n"
-            "Your assessment below could not be recorded with one clear verdict. "
-            "Return the complete assessment under one `## Current review` heading, "
-            "beginning with exactly `Verdict: PASSED`, `Verdict: NOT PASSED` or `Verdict: INCOMPLETE`. "
-            "Keep the substantive reasoning and every material deficiency; resolve any "
-            "contradictory verdict rather than changing the conclusion merely to satisfy formatting. "
-            "The application records the stage and document basis. Do not write files.\n\n"
-            "# Earlier assessment — quoted data\n\n" + quoted(assessment))
+    parts = [f"# Clarify the {_role_of(stage_key)} review\n\n"
+             "Your assessment below could not be recorded with one clear verdict. "
+             "Return the complete assessment under one `## Current review` heading, "
+             "beginning with exactly `Verdict: PASSED`, `Verdict: NOT PASSED` or `Verdict: INCOMPLETE`. "
+             "Keep the substantive reasoning and every material deficiency; resolve any "
+             "contradictory verdict rather than changing the conclusion merely to satisfy formatting. "
+             "The application records the stage and document basis. Do not write files.\n\n"
+             "# Earlier assessment — quoted data\n\n" + quoted(assessment)]
+    if project is not None:
+        retained = retained_pictures_text(project)
+        if retained:
+            parts.append(retained)
+    return "\n\n".join(parts)
 
 
 def section_body(text, heading):
@@ -2554,7 +2632,7 @@ def _run_assessment(handle, project, folder, session, stage, reviewer, iterate, 
                 last_round = ITERATE_ROUNDS if iterate else 1
                 for round_index in range(1, last_round + 1):
                     evaluation = _pipeline_pass(handle, project, PURPOSE_EVALUATE, run, stage_key,
-                                                reviewer, round_index, evaluate_request(stage_key, current), reviewer_model, reviewer_effort)
+                                                reviewer, round_index, evaluate_request(stage_key, current, project=project), reviewer_model, reviewer_effort)
                     remember_identity("Reviewer")
                     rounds = round_index
                     agreement = verdict_of(evaluation) or "unclear"
@@ -2563,7 +2641,7 @@ def _run_assessment(handle, project, folder, session, stage, reviewer, iterate, 
                     if round_index > 1 and agreement == "pass":
                         break
                     revision = _pipeline_pass(handle, project, PURPOSE_REVISE, run, stage_key,
-                                              tool, round_index, revise_request(stage_key, current, evaluation))
+                                              tool, round_index, revise_request(stage_key, current, evaluation, project=project))
                     remember_identity("Author")
                     content, revise_fault = revised_assessment_of(revision, stage)
                     if content is None:
@@ -2580,7 +2658,7 @@ def _run_assessment(handle, project, folder, session, stage, reviewer, iterate, 
         if final is None and needs_clarification and not handle.is_cancelled():
             try:
                 clarified = _pipeline_pass(handle, project, PURPOSE_CLARIFY, run, stage_key,
-                                           tool, rounds + 1, clarify_request(stage_key, current))
+                                           tool, rounds + 1, clarify_request(stage_key, current, project=project))
                 remember_identity("Author")
                 final, fault = author_assessment_of(clarified, stage)
                 if final is None:
@@ -2835,7 +2913,12 @@ def _run_aux(handle, project, tool, purpose, stage_key, body, remember):
         match = re.match(r"(\d{4})-", Path(note).name)
         if not match:
             raise ProjectError("Agent Bridge returned an unrecognized record path; the call was not dispatched.")
-        reply = _bridge_run(handle, session, ["--note-ref", match[1], "--purpose", purpose], body)
+        # The dispatch body also says where earlier pictures are kept, like every
+        # other AI call; the recorded note stays the exact request, because the
+        # sorting reuse comparison rebuilds it from the builder alone.
+        retained = retained_pictures_text(project)
+        reply = _bridge_run(handle, session, ["--note-ref", match[1], "--purpose", purpose],
+                            body + (f"\n\n{retained}" if retained else ""))
         if handle.is_cancelled():
             raise TurnInterrupted(INTERRUPTED_REASON)
         if purpose == PURPOSE_JUDGMENT:

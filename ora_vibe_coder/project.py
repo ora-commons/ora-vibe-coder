@@ -1176,7 +1176,9 @@ class ProjectStore:
                             return answer
                         break
                     if time.monotonic() >= deadline:
-                        error = "The filesystem did not respond; this read was stopped so other projects can be found. Retry with Refresh projects."
+                        error = ("The filesystem did not respond; this read was stopped so other projects can be found. "
+                                 "After an update, macOS can ask again for Vibe Coder's permission to your Documents folder: "
+                                 "allow the prompt if it appeared, then Retry with Refresh projects.")
                         end_reader()
                         break
                 else:

@@ -280,12 +280,17 @@ def prepare_request(project, stage, user_input, destination, material=None, supp
                 + ("Receiving AI: use your own native tools and settings." if portable else
                  f"Selected receiving harness (a label, not compatibility evidence): {destination}"))
     parts.append("# Locations, authority, and intended outputs\n\n" + quoted(location))
+    # The same retained-pictures note every other request builder carries, so
+    # a prepared packet also names where earlier pictures are kept. The late
+    # import keeps the module graph acyclic (conversation imports this module).
+    from . import conversation as _conversation
+    retained_pictures = _conversation.retained_pictures_text(project)
+    if retained_pictures:
+        parts.append(retained_pictures)
     if stage in COMPANION_STAGES:
         # The same bundled-companion facts the in-app turn carries: actual
         # versions, mandatory bundled paths, and the Gear roles currently
-        # usable. conversation owns the one builder; the late import keeps
-        # the module graph acyclic (conversation imports this module first).
-        from . import conversation as _conversation
+        # usable. conversation owns the one builder.
         parts.append(_conversation.companion_facts_text())
     responsibility = {
         "specification": "Executor using Ora Specification.",

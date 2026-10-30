@@ -928,7 +928,10 @@ async function chooseProject(id) {
   const opening = ++projectOpeningGeneration, generation = ++navigationGeneration;
   startupProject = null;
   remember(); rememberEditor();
-  if (id !== currentId) pendingRunConfig = null;
+  if (id !== currentId) {
+    pendingRunConfig = null;
+    abandonCaptureWaiting();  // Another project's Capture must not stay blocked.
+  }
   currentId = id; project = null; workspace = ""; conversationNeedsLatest = true;
   positionRails();
   renderProjectOptions();
@@ -1533,6 +1536,7 @@ function applySplit() {
 // step-3 card and the run actions, so neither ever covers it.
 function applyTitleShift() {
   const head = $("workspace-head"), title = $("stage-title");
+  head.classList.remove("title-below");
   document.documentElement.style.setProperty("--title-shift", "0px");
   if (head.hidden || !title.textContent.trim()) return;
   const headBox = head.getBoundingClientRect();
@@ -1550,7 +1554,8 @@ function applyTitleShift() {
   if (beside(first) || beside(actions)) {
     const half = textBox.width / 2 + 6;
     const low = first.right + half, high = actions.left - half;
-    center = low <= high ? Math.min(Math.max(center, low), high) : (low + high) / 2;
+    if (low <= high) center = Math.min(Math.max(center, low), high);
+    else { head.classList.add("title-below"); center = rowCenter; }
   }
   document.documentElement.style.setProperty("--title-shift", `${(center - rowCenter).toFixed(1)}px`);
 }
@@ -1624,19 +1629,30 @@ function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).slice(String(reader.result).indexOf(",") + 1));
-    reader.onerror = () => reject(new Error("The image could not be read."));
+    reader.onerror = () => reject(new Error("The attachment could not be read."));
     reader.readAsDataURL(file);
   });
 }
 async function addAttachment(file) {
-  if (attachments.length >= 10) { status("Attach at most 10 images with one message."); return; }
-  if (!/^image\/(png|jpeg)$/.test(file.type) && !/\.(png|jpe?g)$/i.test(file.name)) {
-    status("Attach PNG or JPEG images; other file types are not delivered by this route.");
+  if (attachments.length >= 10) { status("Attach at most 10 images or PDFs with one message."); return; }
+  // A PDF is the markup tool's Export PDF — the marked-up drawing with its
+  // numbered notes in one file — carried by this route for the AI to open at
+  // its saved path, so it has no picture preview in the composer.
+  const pdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+  if (!pdf && !/^image\/(png|jpeg)$/.test(file.type) && !/\.(png|jpe?g)$/i.test(file.name)) {
+    status("Attach PNG or JPEG images or a PDF; other file types are not delivered by this route.");
     return;
   }
-  if (file.size > 8 * 1024 * 1024) { status("One image is larger than 8 MiB and cannot be attached."); return; }
-  attachments.push({name: file.name || "image.png", data: await fileToBase64(file), url: URL.createObjectURL(file)});
+  if (file.size > 8 * 1024 * 1024) { status("One attachment is larger than 8 MiB and cannot be attached."); return; }
+  attachments.push({name: file.name || "image.png", data: await fileToBase64(file),
+                    ...(pdf ? {} : {url: URL.createObjectURL(file)})});
   renderAttachments();
+}
+// The wire shape every image route accepts: the picture's bytes, plus its
+// numbered notes when it has any, so the notes stay tied to the drawing.
+function attachmentWire(item) {
+  return item.notes ? {name: item.name, data: item.data, notes: item.notes}
+                    : {name: item.name, data: item.data};
 }
 function renderAttachments() {
   const bar = $("attachment-bar");
@@ -1644,15 +1660,22 @@ function renderAttachments() {
   bar.replaceChildren();
   for (const item of attachments) {
     const chip = document.createElement("div"); chip.className = "attachment";
-    const image = document.createElement("img"); image.src = item.url; image.alt = item.name;
+    // A PDF has no picture to show; its chip names the file instead.
+    if (item.url) {
+      const image = document.createElement("img"); image.src = item.url; image.alt = item.name;
+      chip.append(image);
+    } else {
+      const label = document.createElement("span"); label.textContent = item.name;
+      chip.append(label);
+    }
     const remove = document.createElement("button"); remove.type = "button";
     remove.textContent = "Remove"; remove.setAttribute("aria-label", `Remove ${item.name}`);
     remove.onclick = () => {
       attachments = attachments.filter(held => held !== item);
-      URL.revokeObjectURL(item.url);
+      if (item.url) URL.revokeObjectURL(item.url);
       renderAttachments();
     };
-    chip.append(image, remove);
+    chip.append(remove);
     bar.append(chip);
   }
   syncVisibleInput();
@@ -1662,6 +1685,87 @@ $("image-input").onchange = async () => {
   const files = [...$("image-input").files];
   $("image-input").value = "";
   for (const file of files) await addAttachment(file);
+};
+// --- Capture: the markup tool opens on a fresh capture; its marked-up
+// picture and numbered notes return as one attachment to this message. -----
+let captureWait = null;
+function stopCaptureWaiting() {
+  captureWait = null;
+  $("capture-waiting").hidden = true;
+}
+// The page itself stopped waiting — cancel pressed or another project chosen —
+// so the request's return folder is removed with it and a late Send from the
+// tool leaves nothing behind.
+function abandonCaptureWaiting() {
+  if (captureWait) api("capture", {id: currentId, cancel: captureWait}).catch(() => {});
+  stopCaptureWaiting();
+}
+// The page's security policy connects only to this server, so the returned
+// base64 picture is decoded into a Blob directly, never fetched as a data URL.
+function base64ToBlob(encoded) {
+  const binary = atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes], {type: "image/png"});
+}
+async function waitForCapture(identifier, id) {
+  while (captureWait === identifier && id === currentId) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (captureWait !== identifier || id !== currentId) return;
+    let result = null;
+    try {
+      const response = await fetch(`/api/capture?token=${encodeURIComponent(token)}&id=${identifier}`);
+      result = response.ok ? await response.json() : null;
+    } catch (_) { /* a dropped poll retries on the next tick */ }
+    // The poll awaited: a cancel or project switch during it settled this
+    // wait elsewhere, and a late result must not join another composer.
+    if (captureWait !== identifier || id !== currentId) return;
+    if (!result || result.state === "waiting") continue;
+    stopCaptureWaiting();
+    if (result.state === "cancelled") { status("Capture was cancelled in the markup tool; nothing was attached."); return; }
+    if (result.state === "complete") {
+      const blob = base64ToBlob(result.data);
+      attachments.push({name: result.name, data: result.data,
+                        ...(result.notes && result.notes.trim() ? {notes: result.notes} : {}),
+                        url: URL.createObjectURL(blob)});
+      renderAttachments();
+      status(attachments.length > 10
+        ? "The markup came back attached, but more than 10 images are now chosen; remove one before sending."
+        : "Marked-up picture attached with its numbered notes.");
+    }
+    return;
+  }
+}
+$("capture").onclick = guard(async () => {
+  if (!currentId) { status("Choose or create a project first."); return; }
+  if (captureWait) { status("A capture is already waiting for the markup tool."); return; }
+  const id = currentId;
+  // The launch is reserved before its request: a rapid second click waits
+  // instead of starting another tool whose return identifier would overwrite
+  // this one's. The placeholder is never a real 32-hex-character identifier.
+  captureWait = "launching";
+  let result;
+  try {
+    result = await api("capture", {id});
+  } catch (error) {
+    stopCaptureWaiting();
+    throw error;
+  }
+  // The launch awaited: a cancel or project switch during it settled this
+  // wait elsewhere, so this exact request's return folder is removed and the
+  // tool's late Send leaves nothing behind.
+  if (id !== currentId || captureWait !== "launching") {
+    api("capture", {id, cancel: result.capture}).catch(() => {});
+    return;
+  }
+  captureWait = result.capture;
+  $("capture-waiting").hidden = false;
+  status("The markup tool is open on a fresh capture; mark it up and choose Send to Vibe Coder.");
+  waitForCapture(result.capture, id);
+});
+$("capture-cancel").onclick = () => {
+  abandonCaptureWaiting();
+  status("Stopped waiting for the markup tool; its window stays yours to close.");
 };
 function selectedToolId() {
   // The dropdown shows display names; Bridge routes by the peer id.
@@ -1724,16 +1828,24 @@ async function send() {
     const answer = $("message").value.trim();
     if (!answer && !attachments.length && !messageFiles().length) { status("Write the answer to the run's questions first."); return; }
     const id = currentId;
+    const submitted = attachments.slice();
+    const submittedFiles = messageFiles().slice();
     $("send").disabled = true;
     try {
-      const result = await api("run-answer", {id, text: $("message").value});
+      // The answer carries its pictures (with notes) and files into the run,
+      // as an ordinary message would, instead of clearing them away.
+      const result = await api("run-answer", {id, text: $("message").value,
+                                              images: submitted.map(attachmentWire),
+                                              files: submittedFiles.map(item => item.path)});
       if (id !== currentId) return;
       updateRunState(result.run);
       $("message").value = ""; composerGeneration += 1;
-      attachments = []; renderAttachments();
-      for (const item of messageFiles().slice()) { const list = messageFiles(); const at = list.indexOf(item); if (at >= 0) list.splice(at, 1); }
-      renderMaterialChosen(); syncVisibleInput();
-      status("Answer sent into the run; it resumes the same step.");
+      attachments = attachments.filter(held => !submitted.includes(held));
+      for (const item of submitted) if (!attachments.includes(item) && item.url) URL.revokeObjectURL(item.url);
+      const list = messageFiles();
+      for (const item of submittedFiles) { const at = list.indexOf(item); if (at >= 0) list.splice(at, 1); }
+      renderAttachments(); renderMaterialChosen(); syncVisibleInput();
+      status("Answer sent into the run with its attachments; it resumes the same step.");
     } finally { if (id === currentId) updateSendState(); }
     return;
   }
@@ -1767,7 +1879,7 @@ async function send() {
       // The server saves the submission durably before dispatch and answers
       // only once the bounded worker has started.
       result = await api("converse", {id: originId, tool, stage, text, roles: oneTimeRoles(), files: submittedFiles.map(item => item.path),
-                                      images: submitted.map(item => ({name: item.name, data: item.data}))});
+                                      images: submitted.map(attachmentWire)});
     } catch (error) {
       // Pre-acknowledgement, in two distinct states. The server answered with
       // a rejection: nothing was dispatched. No answer at all: delivery is
@@ -1794,7 +1906,8 @@ async function send() {
     // identify the saved originals for same-origin redelivery.
     pendingDrafts.set(originId, {turn: result.turn, text, workspace: originWorkspace, files: submittedFiles,
                                  images: submitted.map((item, index) => (
-                                   {name: (result.images || [])[index] || item.name, data: item.data}))});
+                                   {name: (result.images || [])[index] || item.name, data: item.data,
+                                    ...(item.notes ? {notes: item.notes} : {})}))});
     // The dispatched attachments leave the composer by identity, whatever is
     // displayed — they were sent with this message. The text is consumed only
     // when the originating project is still displayed and this is still the
@@ -1803,7 +1916,7 @@ async function send() {
     attachments = attachments.filter(held => !submitted.includes(held));
     const originFiles = messageFilesFor(originId, originWorkspace);
     for (const item of submittedFiles) { const index = originFiles.indexOf(item); if (index >= 0) originFiles.splice(index, 1); }
-    for (const item of submitted) if (!attachments.includes(item)) URL.revokeObjectURL(item.url);
+    for (const item of submitted) if (!attachments.includes(item) && item.url) URL.revokeObjectURL(item.url);
     if (currentId === originId && composerGeneration === generation) $("message").value = "";
     renderAttachments();
     renderMaterialChosen();
@@ -1897,7 +2010,7 @@ function messageCard(turn) {
   if (turn.images?.length) {
     const images = document.createElement("p"); images.className = "msg-meta";
     images.style.whiteSpace = "normal";
-    images.textContent = `Images delivered with this message: ${turn.images.join(", ")}`;
+    images.textContent = `Attachments delivered with this message: ${turn.images.join(", ")}`;
     user.append(images);
   }
   if (turn.files?.length) {
@@ -2094,7 +2207,10 @@ function restorePendingDraft(draft, reason) {
   if (!$("message").value.trim()) { $("message").value = draft.text; composerGeneration += 1; }
   for (const image of draft.images) {
     if (!attachments.some(held => held.name === image.name && held.data === image.data))
-      attachments.push({name: image.name, data: image.data, url: attachmentUrl(draft.turn, image.name)});
+      attachments.push({name: image.name, data: image.data, ...(image.notes ? {notes: image.notes} : {}),
+                        // The attachment route serves picture originals only; a
+                        // PDF carries its own bytes and shows as a named chip.
+                        ...(/\.pdf$/i.test(image.name) ? {} : {url: attachmentUrl(draft.turn, image.name)})});
   }
   const selected = messageFilesFor(currentId, draft.workspace);
   for (const file of draft.files || []) if (!selected.some(item => item.path === file.path)) selected.push(file);
@@ -2292,7 +2408,8 @@ function updateSecondOpinion() {
   $("second-opinion").hidden = !available;
   $("verification-choice").hidden = workspace !== "build";
   const on = available && $("opinion-toggle").checked;
-  $("peer-choice").hidden = !on;
+  $("peer-choice").hidden = !available;
+  $("peer-choice").querySelector(".role-row")?.classList.toggle("opinion-off", !on);
   $("iterate-label").hidden = !on;
   $("reviewer").disabled = !on;
   $("iterate-toggle").disabled = !on;
@@ -2511,7 +2628,7 @@ async function deliverStep(step, action = null, note = "") {
   try {
     result = await api("deliver", {id, step, action, tool, text, roles: oneTimeRoles(),
       files: filePaths,
-      images: action === "send" ? submittedAttachments.map(item => ({name: item.name, data: item.data}))
+      images: action === "send" ? submittedAttachments.map(attachmentWire)
                                 : submittedAttachments.map(item => ({name: item.name})),
       verifier, upstream});
   } catch (error) {
@@ -2577,7 +2694,7 @@ async function deliverStep(step, action = null, note = "") {
     if (item) { const at = originFiles.indexOf(item); originFiles.splice(at, 1); }
   }
   attachments = attachments.filter(held => !submittedAttachments.includes(held));
-  for (const item of submittedAttachments) if (!attachments.includes(item)) URL.revokeObjectURL(item.url);
+  for (const item of submittedAttachments) if (!attachments.includes(item) && item.url) URL.revokeObjectURL(item.url);
   if (currentId === id && workspace === selectedWorkspace && $("message").value === text) {
     $("message").value = "";
     composerGeneration += 1;
@@ -2732,10 +2849,14 @@ function renderRepairsResult(trigger, result) {
         if (!tool) { status("Choose the coding tool in step 3 first."); return; }
         const blocked = routeBlock(tool);
         if (blocked) { status(`${blocked.reason}. ${blocked.remedy}`, "warning"); return; }
-        const result = await api("repair", {id: currentId, stage: trigger.stage, tool, roles: oneTimeRoles()});
+        // The originating project is captured before dispatch: a late reply is
+        // ignored once a different project is open, as an ordinary send's is.
+        const id = currentId;
+        const result = await api("repair", {id, stage: trigger.stage, tool, roles: oneTimeRoles()});
+        if (id !== currentId) return;
         updateOperation(result.operation);
         await loadConversation();
-        if (currentId) updateOperation(result.operation);
+        if (id === currentId) updateOperation(result.operation);
       });
       title.append(repair);
     }
@@ -2968,7 +3089,12 @@ function renderMainChoices() {
   } else {
     const role = workspace === "plan" ? "planning" : "specification";
     put("document-review-choice", `${role}_review`, "Reviewer");
-    put("peer-choice", `${role}_second_opinion`, "Second opinion");
+    // Move the original label/input, retaining its listener and checked state.
+    const opinionLabel = $("opinion-toggle").closest("label");
+    const peer = roleRow(`${role}_second_opinion`, "Second opinion", effectiveChoice(`${role}_second_opinion`), choice => setManualChoice(`${role}_second_opinion`, choice));
+    opinionLabel.classList.add("role-label");
+    peer.querySelector(".role-label").replaceWith(opinionLabel);
+    $("peer-choice").replaceChildren(peer);
   }
 }
 function renderImplementationChoice() {
@@ -2998,38 +3124,50 @@ function roleRow(role, label, initial, changed = null, resolve = resolvedDisplay
   let choice = {tool: initial.tool || "", model: initial.model || "", effort: initial.effort || ""};
   let generation = 0, facts = {};
   const row = document.createElement("div"); row.className = "role-row"; row.dataset.role = role;
-  const heading = document.createElement("label"); heading.textContent = label;
+  const heading = document.createElement("label"); heading.className = "role-label"; heading.textContent = label;
   const model = document.createElement("select"); model.className = "role-model-choice"; model.setAttribute("aria-label", `${label} harness and model`);
   const effort = document.createElement("select"); effort.className = "role-effort"; effort.setAttribute("aria-label", `${label} effort`);
   const note = document.createElement("small"); note.className = "role-origin";
-  const selection = document.createElement("small"); selection.className = "role-selected";
+  const selection = document.createElement("p"); selection.className = "role-selected";
+  const selectedEffort = document.createElement("p"); selectedEffort.className = "role-selected-effort";
+  const notice = document.createElement("small"); notice.className = "role-notice"; notice.hidden = true;
+  const help = document.createElement("button"); help.type = "button"; help.className = "role-help";
+  help.textContent = "ⓘ"; help.setAttribute("aria-label", `${label} choice details`); help.setAttribute("aria-expanded", "false");
+  const detail = document.createElement("div"); detail.className = "role-detail"; detail.hidden = true;
+  detail.append(selection, selectedEffort, note);
+  help.onclick = () => { detail.hidden = !detail.hidden; help.setAttribute("aria-expanded", String(!detail.hidden)); };
   row.append(heading);
   for (const [title, select] of [["Harness and model", model], ["Effort", effort]]) {
     const field = document.createElement("div"); field.className = "role-choice";
     const fieldLabel = document.createElement("span"); fieldLabel.className = "role-field-label"; fieldLabel.textContent = title;
     field.append(fieldLabel, select);
-    if (select === model) field.append(selection);
     row.append(field);
   }
-  row.append(note);
+  row.append(help, notice, detail);
   const inherited = () => resolve(role);
   const selected = () => choice.tool ? choice : optionalRole(role) ? {} : inherited();
   const fillEfforts = () => {
     const value = selected(), native = facts[value.tool] || {};
     const currentModel = (native.models || []).find(item => item.id === (value.model || native.configured_model));
-    effort.replaceChildren(new Option(`Use harness default${native.configured_effort ? ` (${native.configured_effort})` : ""}`, ""),
-      ...(currentModel?.efforts || []).map(e => new Option(e === currentModel.default_effort ? `${e} — model recommendation` : e, e)));
+    effort.replaceChildren(new Option(`Default${native.configured_effort ? ` (${native.configured_effort})` : ""}`, ""),
+      ...(currentModel?.efforts || []).map(e => new Option(e === currentModel.default_effort ? `${e} (recommended)` : e, e)));
     retainedOption(effort, choice.effort);
     effort.disabled = !choice.tool;
     if (!choice.tool && ["review", "correction"].includes(role)) {
-      effort.replaceChildren(new Option(`Same as implementation${value.effort || native.configured_effort ? ` (${value.effort || native.configured_effort})` : " · harness default"}`, ""));
+      effort.replaceChildren(new Option(`Same${value.effort || native.configured_effort ? ` (${value.effort || native.configured_effort})` : " · harness default"}`, ""));
     }
     const explanation = native.reason || "Requested choices; actual model is shown only when reported.";
     note.textContent = !choice.tool && optionalRole(role) ? "No second opinion will run."
-      : !choice.tool && role === "review" ? "Separate fresh reviewer context using the implementation's harness, model and effort."
-      : !choice.tool && role === "correction" ? "Uses the implementation's harness, model and effort for repairs." : explanation;
+      : !choice.tool && role === "review" ? `Separate fresh reviewer context using the implementation's harness, model and effort. ${explanation}`
+      : !choice.tool && role === "correction" ? `Uses the implementation's harness, model and effort for repairs. ${explanation}` : explanation;
     model.title = model.selectedOptions[0]?.text || "";
-    selection.textContent = model.title;
+    effort.title = effort.selectedOptions[0]?.text.replace(/^Default/, "Use harness default").replace(/^Same/, "Same as implementation") || "";
+    selection.textContent = `Harness and model: ${model.title}`;
+    selectedEffort.textContent = `Effort: ${effort.title}`;
+    // With no native choices, keep the reason visible as well as in full help.
+    // This uses the inventory itself; routine successful metadata stays in help.
+    notice.textContent = native.models?.length ? "" : (native.reason || "").split(/(?<=[.!?])\s/)[0];
+    notice.hidden = !notice.textContent || !choice.tool && optionalRole(role);
   };
   const fill = () => {
     const fallback = inherited(), native = facts[fallback.tool] || {};
@@ -3065,7 +3203,7 @@ function roleRow(role, label, initial, changed = null, resolve = resolvedDisplay
     const [tool, selectedModel] = model.value ? JSON.parse(model.value) : ["", ""];
     choice = {tool, model: selectedModel, effort: ""}; fillEfforts(); changed?.({...choice});
   };
-  effort.onchange = () => { choice.effort = effort.value; changed?.({...choice}); };
+  effort.onchange = () => { choice.effort = effort.value; fillEfforts(); changed?.({...choice}); };
   fill(); queueMicrotask(() => row.refreshChoice());
   return row;
 }
@@ -3075,9 +3213,6 @@ function refreshModelChoices() {
 }
 function renderRoleRows(holder, values) {
   holder.replaceChildren();
-  const header = document.createElement("div"); header.className = "role-row role-header";
-  for (const title of ["Role", "Harness and model", "Effort"]) { const cell = document.createElement("strong"); cell.textContent = title; header.append(cell); }
-  holder.append(header);
   const resolve = role => {
     const value = holder.querySelector(`[data-role="${role}"]`)?.readChoice() || values?.[role] || {};
     if (value.tool) return value;
@@ -3192,7 +3327,7 @@ $("run-completion").onclick = guard(async () => {
   }
   const brief = $("message").value;
   const files = messageFiles().slice().map(item => item.path);
-  const images = attachments.slice().map(item => ({name: item.name, data: item.data}));
+  const images = attachments.slice().map(attachmentWire);
   const tool = selectedToolId();
   if (!tool) { status("Choose the step-3 coding tool for the active stage before starting a run."); return; }
   const blocked = routeBlock(tool);

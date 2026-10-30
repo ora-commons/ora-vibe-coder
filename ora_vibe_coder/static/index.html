@@ -64,10 +64,12 @@
                 <p id="message-suggestion-note" class="hint" hidden>Suggested first message. Press Enter to use it, or type your own message to replace it.</p>
                 <div id="attachment-bar" class="attachment-bar" hidden></div>
                 <div id="message-files" class="attachment-bar" hidden></div>
+                <p id="capture-waiting" class="hint" hidden>Waiting for the markup tool. <button type="button" id="capture-cancel">Cancel</button></p>
                 <div class="toolbar-row">
                   <button id="attach" type="button">Attach images</button>
-                  <input id="image-input" type="file" accept="image/png,image/jpeg" multiple hidden>
+                  <input id="image-input" type="file" accept="image/png,image/jpeg,application/pdf" multiple hidden>
                   <button id="add-message-files" type="button">Add files</button>
+                  <button id="capture" type="button">Capture</button>
                   <button id="copy-current" class="push" type="button">Copy stage request for another AI</button>
                   <button id="send" class="primary" type="button">Ask AI to work on this stage</button>
                 </div>
@@ -91,18 +93,16 @@
                 <p id="review-explain" class="hint"></p>
                 <div class="second-opinion" id="second-opinion" hidden>
                   <select id="step-reviewer" hidden></select><div id="document-review-choice"></div>
-                  <label class="inline"><input type="checkbox" id="opinion-toggle">Second opinion</label>
+                  <label class="inline role-label"><input type="checkbox" id="opinion-toggle">Second opinion</label>
                   <span id="reviewer-label" hidden></span><select id="reviewer" hidden></select><div id="peer-choice" hidden></div>
-                  <label class="inline" id="iterate-label" hidden><input type="checkbox" id="iterate-toggle">Iterate to agreement</label>
-                  <span id="opinion-note" class="hint"></span>
+                  <div class="opinion-options"><label class="inline" id="iterate-label" hidden><input type="checkbox" id="iterate-toggle">Iterate to agreement</label><details class="opinion-help"><summary>3 calls · up to 7 with agreement</summary><p id="opinion-note" class="hint"></p></details></div>
                   <p id="reviewer-unavailable" class="hint" hidden></p>
                 </div>
                 <div id="verification-choice" hidden>
                   <select id="verification-verifier" hidden></select><div id="verifier-choice"></div>
                   <p class="hint">Choose who should verify the implementation, or ask the coordinator to show you the available choices. The verifier must use a fresh session separate from the implementation agent; a tool name alone does not establish a different AI provider.</p>
                 </div>
-                <div class="toolbar-row"><button id="review" class="primary" type="button">Run review</button><button id="approve-plan" type="button" hidden title="Approving saves Status: APPROVED in the Plan"></button></div>
-                <section id="external-review" hidden><h4>External review file</h4><p class="hint">Save a complete review request for another AI. Preparing this file does not run the review.</p><button id="prepare" type="button">Prepare external review file</button></section>
+                <div class="toolbar-row review-actions"><button id="review" class="primary" type="button">Run review</button><button id="approve-plan" type="button" hidden title="Approving saves Status: APPROVED in the Plan"></button><span id="external-review" hidden><button id="prepare" type="button" title="Save a complete review request for another AI. Preparing this file does not run the review.">Prepare external review file</button></span></div>
                 <div id="assessment-note" class="status-explanation"></div>
               </div>
             </details>

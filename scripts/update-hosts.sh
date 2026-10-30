@@ -19,7 +19,11 @@ install(hosts=tuple(sys.argv[1:]) or ("codex", "zcode", "minimax", "hermes", "qw
 PY
 
 echo "== Claude plugin (Claude Code updates only through its own CLI) =="
-claude plugin update ora-vibe-coder
+# The plugin name must be marketplace-qualified or claude reports it not found.
+# A failure here is reported but never skips the Loop install and verify steps.
+if ! claude plugin update ora-vibe-coder@ora-vibe-coder; then
+  echo "WARNING: the Claude plugin update failed; continuing with the remaining steps."
+fi
 
 echo "== Programming Loop -> installed hosts =="
 python3 - <<'PY'

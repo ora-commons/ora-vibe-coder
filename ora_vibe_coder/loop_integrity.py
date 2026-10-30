@@ -185,6 +185,26 @@ def cache_artifact(relative: PurePosixPath, *, directory: bool) -> bool:
     return relative.name == "__pycache__" if directory else relative.suffix == ".pyc"
 
 
+def _contains_only_cache(root: Path, directory: Path) -> bool:
+    """Whether a directory's whole subtree is generated cache content.
+
+    A checkout fast-forwarded across a vendored rename can leave a directory
+    holding nothing but ignored `__pycache__` caches (Git removes tracked
+    files but not ignored caches inside them). Such a directory is skipped
+    like the caches themselves; any real content keeps it unexpected.
+    """
+    for item in directory.iterdir():
+        if item.is_symlink():
+            return False
+        relative = item.relative_to(root)
+        if item.is_dir():
+            if not cache_artifact(relative, directory=True) and not _contains_only_cache(root, item):
+                return False
+        elif not cache_artifact(relative, directory=False):
+            return False
+    return True
+
+
 def read_snapshot(root: Path, *, allowed_extra: set[str] | None = None
                   ) -> tuple[dict[str, bytes], dict[str, str], str]:
     """Read the exact 17 Loop files: their bytes, Git modes, and tree ID."""
@@ -227,11 +247,14 @@ def _read_exact_snapshot(root: Path, vendored_paths: tuple[str, ...],
         # Generated Python caches are not shipped source: a vendored runtime
         # creates __pycache__ directories (and .pyc files) the moment it runs,
         # so both are excluded from the exact-file check by the shared rule in
-        # cache_artifact. Anything else inside a cache directory is unexpected
-        # content and still fails.
+        # cache_artifact. A directory holding nothing but those caches is
+        # skipped the same way. Anything else inside or beside them is
+        # unexpected content and still fails.
         if item.is_dir():
             if not cache_artifact(relative, directory=True):
-                actual_directories.add(relative.as_posix())
+                position = relative.as_posix()
+                if position in expected_directories or not _contains_only_cache(root, item):
+                    actual_directories.add(position)
             continue
         if not item.is_file():
             raise LoopIntegrityError(f"{component} snapshot contains a special file: {relative}")
