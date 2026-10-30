@@ -1,12 +1,15 @@
 """Loopback-only foreground HTTP utility; no generic file-serving route."""
 
+import base64
 import hmac
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 from pathlib import Path
 import re
 import secrets
+import shutil
 import ssl
+import subprocess
 import sys
 import threading
 import urllib.error
@@ -18,7 +21,7 @@ from . import run as run_module
 from .handoff import PLUGIN, STAGES, prepare_request, stated_code_location
 from .hosts import model_inventory
 from .hosts import HOSTS as TOOL_LABELS, continue_in, discover
-from .launcher import Settings, documents_location
+from .launcher import Settings, documents_location, settings_path
 from .project import Conflict, ProjectError, ProjectStore, ROLES, atomic_write, not_started, read_text, findings_key
 from .status import assessment_facts, metadata, review_basis, sections
 
@@ -35,6 +38,26 @@ WORKSPACES = ("specification", "plan", "build")
 RELEASE_LOOKUP_URL = "https://api.github.com/repos/ora-commons/ora-vibe-coder/releases/latest"
 UPDATE_STEPS = ("Download the new release, choose Quit Vibe in Settings, open the new release's setup, "
                 "and choose Install or update Vibe and selected entries.")
+MARKUP_APP = "Ora Screen Markup"
+
+
+def open_markup_capture(folder):
+    """Open the installed markup tool on one fresh capture, results to `folder`.
+
+    The tool is the copy installed on this Mac (ORA-299), started with its
+    return folder so a finished markup comes back as `picture.png` and
+    `notes.txt`; a missing tool is said in plain words instead of launching.
+    """
+    if not any(base.joinpath(f"{MARKUP_APP}.app").is_dir()
+               for base in (Path("/Applications"), Path.home() / "Applications")):
+        raise ProjectError("Ora Screen Markup is not installed on this Mac, so Capture cannot open it. "
+                           "Install the markup tool, then try again.")
+    try:
+        subprocess.run(["open", "-n", "-a", MARKUP_APP, "--args", "--return-folder", str(folder)],
+                       check=True, timeout=15, capture_output=True)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ProjectError(f"The markup tool could not be opened: {error}. "
+                           "Open it once by hand, then try Capture again.") from error
 
 
 def lookup_latest_release(url=RELEASE_LOOKUP_URL, timeout=5):
@@ -198,6 +221,21 @@ class LocalServer(HTTPServer):
     def remember_workspace(self, workspace):
         if self.settings and workspace in WORKSPACES:
             self.settings.update(last_workspace=workspace)
+
+    # -- the markup tool's return channel --------------------------------
+
+    def captures_root(self):
+        """The capture return folders, under Vibe's application-support folder."""
+        base = Path(self.settings.path).parent if self.settings else Path(settings_path()).parent
+        return base / "captures"
+
+    def new_capture_folder(self):
+        """One fresh request-local return folder for this capture."""
+        root = self.captures_root()
+        root.mkdir(parents=True, exist_ok=True)
+        folder = root / secrets.token_hex(16)
+        folder.mkdir()  # An existing folder is never reused.
+        return folder
 
     def readiness_refresh(self):
         """Start one background readiness sweep unless one is already running.
@@ -372,6 +410,9 @@ class Handler(BaseHTTPRequestHandler):
             if urllib.parse.urlsplit(self.path).path == "/api/attachment":
                 self.attachment()
                 return
+            if urllib.parse.urlsplit(self.path).path == "/api/capture":
+                self.capture_status()
+                return
             if self.path not in ASSETS:
                 self.reply(404, {"error": "No such page."})
                 return
@@ -429,6 +470,43 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(404, {"error": "No retained attachment matches this request."})
             return
         self.reply(200, data, kinds[Path(name).suffix.lower()])
+
+    def capture_status(self):
+        """One poll of a markup capture's return folder.
+
+        The page asks once a second while the tool is open. A finished picture
+        and its notes are returned whole and the folder removed; a `cancelled`
+        marker ends the wait the same way. Like the attachment route, an image
+        fetch cannot carry the token header, so the identical token is accepted
+        from the query string with the boundary otherwise unchanged.
+        """
+        parsed = urllib.parse.urlsplit(self.path)
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        if (set(query) != {"token", "id"} or any(len(values) != 1 for values in query.values())
+                or not re.fullmatch(r"[0-9a-f]{32}", query["id"][0])):
+            self.reply(400, {"error": "Malformed capture request."})
+            return
+        if not hmac.compare_digest(query["token"][0], self.server.token):
+            raise PermissionError("Open the launch URL from the local terminal to authorize this tab.")
+        folder = self.server.captures_root() / query["id"][0]
+        try:
+            if (folder / "cancelled").is_file():
+                shutil.rmtree(folder, ignore_errors=True)
+                self.reply(200, {"state": "cancelled"})
+                return
+            picture, notes = folder / "picture.png", folder / "notes.txt"
+            if picture.is_file() and notes.is_file():
+                payload = base64.b64encode(picture.read_bytes()).decode("ascii")
+                note_text = notes.read_text(encoding="utf-8")
+                shutil.rmtree(folder, ignore_errors=True)
+                self.reply(200, {"state": "complete",
+                                 "name": f"capture-{query['id'][0][:8]}.png",
+                                 "data": payload, "notes": note_text})
+                return
+        except OSError as error:
+            self.reply(400, {"error": f"The capture result could not be read: {error}"})
+            return
+        self.reply(200, {"state": "waiting"})
 
     def do_POST(self):
         try:
@@ -557,7 +635,7 @@ class Handler(BaseHTTPRequestHandler):
             entries = [{"name": p.name, "path": str(p), "directory": p.is_dir()}
                        for p in children[:500]
                        if not p.name.startswith(".") and not p.is_symlink()
-                       and (p.is_dir() or (p.is_file() and p.suffix.lower() in {".md", ".markdown", ".txt"}))]
+                       and (p.is_dir() or (p.is_file() and p.suffix.lower() in {".md", ".markdown", ".txt", ".html"}))]
             return {"path": str(folder), "parent": str(parent), "entries": entries, "limited": len(children) > 500}
         if path == "/api/create-folder":
             shape(data, ["parent", "name"])
@@ -694,7 +772,8 @@ class Handler(BaseHTTPRequestHandler):
         allowed = {"/api/project", "/api/save", "/api/read", "/api/read-file", "/api/approve-reference", "/api/prepare", "/api/preview", "/api/handoff", "/api/copy", "/api/continue",
                    "/api/converse", "/api/turn-input", "/api/turn-state", "/api/conversation", "/api/review",
                    "/api/judgment", "/api/sort-findings", "/api/approve-plan", "/api/approve-document", "/api/materiality", "/api/repair", "/api/deliver",
-                   "/api/project-settings", "/api/run-start", "/api/run-stop", "/api/run-answer", "/api/run-resume", "/api/run-configure", "/api/run-copy", "/api/action-stop"}
+                   "/api/project-settings", "/api/run-start", "/api/run-stop", "/api/run-answer", "/api/run-resume", "/api/run-configure", "/api/run-copy", "/api/action-stop",
+                   "/api/capture"}
         if path not in allowed:
             raise ProjectError("No such operation; arbitrary file access is not supported.")
         if not isinstance(data, dict) or not isinstance(data.get("id"), str):
@@ -1038,6 +1117,29 @@ class Handler(BaseHTTPRequestHandler):
             return {"turn": handle.turn, "operation": handle.snapshot(),
                     "images": list(handle.retained_images), "file_state": conversation.document_fingerprint(project),
                     "text": packet, "path": str(project.packet_path(purpose))}
+        if path == "/api/capture":
+            # Capture: open the installed markup tool on a fresh capture whose
+            # result returns through a request-local folder; the page polls
+            # GET /api/capture for the picture and its notes.
+            shape(data, ["id"], ["cancel"])
+            if "cancel" in data:
+                # The page stopped waiting on its own — cancel pressed or
+                # another project chosen — so exactly that request's folder is
+                # removed and the tool's late Send leaves nothing behind.
+                strings(data, ["cancel"])
+                if not re.fullmatch(r"[0-9a-f]{32}", data["cancel"]):
+                    raise ProjectError("Malformed capture request.")
+                shutil.rmtree(self.server.captures_root() / data["cancel"], ignore_errors=True)
+                return {"abandoned": data["cancel"]}
+            if self.server.stopping:
+                raise ProjectError("Vibe is closing; no capture was started.")
+            folder = self.server.new_capture_folder()
+            try:
+                open_markup_capture(folder)
+            except ProjectError:
+                shutil.rmtree(folder, ignore_errors=True)  # A failed launch leaves no folder behind.
+                raise
+            return {"capture": folder.name}
         if path == "/api/run-start":
             shape(data, ["id", "entry", "text", "images", "files"], ["config", "tool"])
             strings(data, ["entry", "text"])
@@ -1098,14 +1200,20 @@ class Handler(BaseHTTPRequestHandler):
             driver.done.wait(20)
             return {"run": self.server.run_report(project)}
         if path == "/api/run-answer":
-            shape(data, ["id", "text"])
+            # An answered pause carries pictures (with notes) and files the
+            # same way /api/converse does; they ride the resumed step.
+            shape(data, ["id", "text"], ["images", "files"])
             strings(data, ["text"])
+            if not isinstance(data.get("images", []), list):
+                raise ProjectError("Invalid image attachments.")
+            if not isinstance(data.get("files", []), list):
+                raise ProjectError("Invalid selected files.")
             driver = self.server.runs.find(project)
             if driver is None:
                 raise ProjectError("No run is active in this project.")
             if driver.status()["state"] != "paused-question":
                 raise ProjectError("The run is not paused for a question.")
-            driver.receive_answer(data["text"])
+            driver.receive_answer(data["text"], data.get("images", []), data.get("files", []))
             return {"run": driver.status()}
         if path == "/api/run-resume":
             shape(data, ["id"])
@@ -1145,16 +1253,28 @@ class Handler(BaseHTTPRequestHandler):
             # copy — it names each one as not included instead of silently
             # dropping it, and the response carries the names for the banner.
             pictures = driver.pending_pictures()
-            extra = ([f"Brief pictures not included: {', '.join(pictures)}. A copy cannot carry pictures; "
-                      "supply them through a route that can, if the work needs them."] if pictures else [])
+            # A step paused while an answer still owes its AI carries that
+            # answer's text and selected files in the packet too, and names
+            # its pictures as not included the same way; their originals stay
+            # retained in the project's run record.
+            answer, answer_pictures, answer_files = driver.pending_answer()
+            extra = []
+            if pictures:
+                extra.append(f"Brief pictures not included: {', '.join(pictures)}. A copy cannot carry pictures; "
+                             "supply them through a route that can, if the work needs them.")
+            if answer:
+                extra.append("## The user's answer to your paused questions\n\n" + answer)
+            if answer_pictures:
+                extra.append(f"Answer pictures not included: {', '.join(answer_pictures)}. A copy cannot carry pictures; "
+                             "supply them through a route that can, if the work needs them.")
             supplied_documents = project.approve_transition(driver.step)
             packet = run_module.step_request(project, driver.step, driver.pending_brief(), destination,
-                                             driver.pending_files(), extra=extra,
+                                             driver.pending_files() + answer_files, extra=extra,
                                              supplied_documents=supplied_documents, portable=True)
             purpose = "implement-plan" if driver.step == "build" else None
             project.save_packet(packet, purpose, expected=project.handoff_text(purpose))
             return {"text": packet, "path": str(project.packet_path("implement-plan" if driver.step == "build" else None)),
-                    "pictures": pictures, "purpose": "implement-plan" if driver.step == "build" else driver.step,
+                    "pictures": pictures + answer_pictures, "purpose": "implement-plan" if driver.step == "build" else driver.step,
                     "destination": destination}
         fields = ["id", "stage", "input", "destination", "context"]
         shape(data, fields, ["expected", "upstream", "roles"])

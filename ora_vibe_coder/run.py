@@ -84,7 +84,7 @@ DEFAULT_INPUTS = {
 }
 
 
-def verifier_direction(verifier):
+def verifier_direction(verifier, project=None):
     if not verifier:
         return ("No independent verifier has been selected. Show the user the available qualified "
                 "reviewers and ask them to choose before commissioning one. Do not silently select "
@@ -96,10 +96,14 @@ def verifier_direction(verifier):
         direction = f"Requested independent verifier choices (not verified): {requested}. Carry these choices into the fresh verifier assignment. "
     else:
         direction = ""
-    return (direction + f"The user selected {verifier} as the independent verifier. Commission a fresh {verifier} "
-            "session that did not implement this work. If this chat cannot launch that session, explain "
-            "how the user can start it with this complete request. If the verifier is unavailable or "
-            "cannot be separated from the implementation agent, report that and ask before substituting.")
+    direction += (f"The user selected {verifier} as the independent verifier. Commission a fresh {verifier} "
+                  "session that did not implement this work. If this chat cannot launch that session, explain "
+                  "how the user can start it with this complete request. If the verifier is unavailable or "
+                  "cannot be separated from the implementation agent, report that and ask before substituting.")
+    if project is not None and conversation.retained_pictures_text(project):
+        direction += (" The request names where pictures attached to earlier messages are kept; carry that "
+                      "retained-pictures note into the verifier's brief so the verifier can open them when wanted.")
+    return direction
 
 
 def result_direction(project):
@@ -140,7 +144,7 @@ def build_input(step, project, user_text="", verifier=None, extra=()):
     if text.strip():
         parts.append("The user's brief for this work, preserved as context for the intended outcome:\n\n" + text)
     if step == "verification":
-        parts.append(verifier_direction(verifier or ""))
+        parts.append(verifier_direction(verifier or "", project))
         parts.append(result_direction(project))
         parts.append("Record the verifier's actual tool and model/provider when reported; a different "
                      "harness name alone does not prove a different AI provider. Honor any cross-vendor "
@@ -257,6 +261,7 @@ def questions_paused(driver_status):
 
 PURPOSE_RUN = "run"
 RUN_START = "run-start"
+RUN_ANSWER = "run-answer"
 RUN_OUTCOME = "run-outcome"
 RUN_EVIDENCE = "run-evidence"
 
@@ -364,6 +369,10 @@ class RunDriver:
         self.verdicts = []
         self.stop_requested = False
         self.resume_answer = ""
+        # A paused-question answer can carry pictures (with notes) and files,
+        # held in the wire shape start_turn accepts until its step dispatches.
+        self.resume_images = []
+        self.resume_files = []
         self.handle = None
         self.action_step = ""
         self.action_elapsed = 0
@@ -397,7 +406,7 @@ class RunDriver:
         conversation.save_attachments(folder, prepared)
         fields = {"Brief": self.brief or "(no text)",
                   "Brief-Files-JSON": json.dumps(self.brief_files, ensure_ascii=True),
-                  "Brief-Images": "; ".join(name for name, _data in prepared),
+                  "Brief-Images": "; ".join(name for name, _data, _notes in prepared),
                   "Entry": self.entry,
                   "Config-JSON": json.dumps(self.config, ensure_ascii=True)}
         _record_run_note(self.project, folder, RUN_START, self.run, fields)
@@ -409,10 +418,34 @@ class RunDriver:
         if handle is not None:
             handle.cancel()
 
-    def receive_answer(self, text):
-        """One answered pause: the count resets and the same step resumes."""
+    def receive_answer(self, text, images=(), files=()):
+        """One answered pause: the count resets and the same step resumes.
+
+        The answer's pictures (each with its notes) and selected files ride
+        the resumed step, as `/api/converse` would carry them. Their
+        originals are retained in the run record before the pause clears,
+        so a failure ahead of the resumed step's dispatch — or stopping the
+        run — cannot lose an accepted answer the page has already cleared.
+        """
+        prepared = conversation.prepare_images(list(images))  # Validates before the pause clears.
+        if (not isinstance(files, (list, tuple)) or len(files) > 10
+                or any(not isinstance(path, str) or not path for path in files)):
+            raise ProjectError("Choose at most 10 Markdown, text or HTML files for this answer.")
+        # The retained answer record is written before the in-memory answer
+        # exists, so a reader that sees the accepted answer can also read its
+        # originals; the resumed step re-supplies them unchanged, exactly
+        # like the brief's pictures at run start.
+        answer = (text or "").strip()
+        folder = conversation.reserve_turn_folder(self.project)
+        conversation.save_attachments(folder, prepared)
+        _record_run_note(self.project, folder, RUN_ANSWER, self.run,
+                         {"Answer-Images": "; ".join(name for name, _data, _notes in prepared),
+                          "Answer-Files-JSON": json.dumps(list(files), ensure_ascii=True)},
+                         ("\n# The user's answer to this run's paused questions\n\n" + quoted(answer)) if answer else None)
         with self.lock:
-            self.resume_answer = (text or "").strip()
+            self.resume_answer = answer
+            self.resume_images = list(images)
+            self.resume_files = list(files)
             self.no_progress = 0
             self.attempt_note = ""
             if self.state == "paused-question":
@@ -460,6 +493,20 @@ class RunDriver:
     def pending_files(self):
         """Selected brief files still owed to the entry step's first dispatch."""
         return list(self.brief_files) if self._brief_pending() else []
+
+    def pending_answer(self):
+        """The answer a paused step still owes its AI: (text, picture names, files).
+
+        An answer is consumed by the first dispatched attempt that carries
+        it, so this is empty once that attempt left; a newer answer that
+        arrived meanwhile stays. A copy cannot carry pictures, so the
+        manual fallback names each one as not included instead of silently
+        dropping it; the originals stay retained in this project's run record.
+        """
+        with self.lock:
+            return (self.resume_answer,
+                    [item.get("name", "") for item in self.resume_images],
+                    list(self.resume_files))
 
     # -- the fixed route ----------------------------------------------------
 
@@ -556,14 +603,19 @@ class RunDriver:
                          "Do not ask the user.")
         user_text = self.pending_brief()
         answer = ""
+        answer_images = []
+        answer_files = []
         with self.lock:
             answer = self.resume_answer
+            answer_images, answer_files = self.resume_images, self.resume_files
         if answer:
             extra.append("## The user's answer to your paused questions\n\n" + answer)
         extra.append(f"This step runs on {model_label(tool, model, effort)} ({origin} for this run).")
         text = build_input(self.step, self.project, user_text, verifier, extra)
-        images = self.brief_images if self._brief_pending() else []
-        files = self.pending_files()
+        # The entry step's brief pictures ride its first dispatch; an answer's
+        # pictures and files ride the resumed step it answered.
+        images = (self.brief_images if self._brief_pending() else []) + list(answer_images)
+        files = self.pending_files() + list(answer_files)
         self.step_requested = model_label(tool, model, effort)
         try:
             # Stop and dispatch share the lock: a stop already requested wins.
@@ -590,7 +642,11 @@ class RunDriver:
             if self.handle.dispatched:
                 self.brief_used = True
                 if self.resume_answer == answer:
+                    # The dispatched answer is consumed with its pictures and
+                    # files; a newer answer that arrived meanwhile stays.
                     self.resume_answer = ""
+                    self.resume_images = []
+                    self.resume_files = []
             self.reported_model = model_reported
         return self._decide()
 

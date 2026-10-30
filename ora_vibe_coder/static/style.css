@@ -63,7 +63,7 @@ body:has(.modal:not([hidden])) #status-bar { position: fixed; z-index: 60; inset
 #waiting-actions { flex: none; }
 #status-bar.waiting, body:has(.modal:not([hidden])) #status-bar.waiting { background: color-mix(in srgb, var(--ovc-amber) 25%, var(--ovc-panel-2)); border: 2px solid var(--ovc-amber); white-space: normal; max-height: 7em; overflow-y: auto; }
 #saved-request { padding: 7px 10px; border: 1px solid var(--ovc-border); border-radius: 8px; margin-bottom: 7px; }
-#saved-request h4, #external-review h4 { margin: 3px 0; }
+#saved-request h4 { margin: 3px 0; }
 #saved-request input { min-width: 0; }
 #tool-problem { margin: 0 12px 6px; }
 /* Header row 3 shares the work area's column template above 1200px, so the
@@ -75,8 +75,9 @@ body:has(.modal:not([hidden])) #status-bar { position: fixed; z-index: 60; inset
    the free space so the step-3 card and the run actions never cover it; on a
    narrow window the title takes its own row below them instead. */
 .workspace-head h2 { grid-column: 1 / -1; grid-row: 1; margin: 0; font-size: 1.5rem; font-weight: 650; text-align: center; white-space: nowrap; position: relative; left: calc(var(--title-shift, 0px)); pointer-events: none; }
+.workspace-head.title-below h2 { grid-row: 2; }
 .workspace-head select { min-width: 150px; width: auto; flex: none; padding: 5px 8px; }
-.first-step { grid-column: 1; grid-row: 1; min-width: 0; max-width: 100%; justify-self: start; display: grid; grid-template-columns: auto minmax(150px, 1fr); align-items: center; gap: 5px; padding: 4px 6px 4px 9px; white-space: nowrap; z-index: 1; background: inherit; }
+.first-step { grid-column: 1; grid-row: 1; min-width: 0; max-width: min(100%, 650px); justify-self: stretch; display: grid; grid-template-columns: auto minmax(150px, 1fr); align-items: center; gap: 5px; padding: 4px 6px 4px 9px; white-space: nowrap; z-index: 1; background: inherit; }
 .workspace-head .first-step select { min-width: 0; width: 100%; }
 .first-step #recheck { flex: none; font-size: .75rem; white-space: nowrap; }
 .recheck-short, .recheck-icon, .readiness-short { display: none; }
@@ -193,10 +194,17 @@ button.pending::after { content: "·"; margin-left: 2px; color: var(--ovc-muted)
 .attachment-bar { display: flex; gap: 8px; flex-wrap: wrap; }
 .attachment { display: flex; gap: 6px; align-items: center; background: var(--ovc-panel-2); border: 1px solid var(--ovc-border); border-radius: 7px; padding: 4px 6px; }
 .attachment img { height: 40px; width: 40px; object-fit: cover; border-radius: 4px; display: block; }
+.attachment span { font-size: .75rem; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment button { min-height: 24px; padding: 2px 8px; font-size: .75rem; }
-.second-opinion { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-top: 1px dashed var(--ovc-border); padding-top: 6px; }
-.second-opinion .inline { display: inline-flex; gap: 5px; align-items: center; margin: 0; font-size: .82rem; white-space: nowrap; }
-.second-opinion select { min-width: 130px; width: auto; padding: 4px 7px; }
+.second-opinion { display: grid; gap: 4px; }
+.second-opinion .inline { display: inline-flex; gap: 5px; align-items: center; margin: 0; font-size: .85rem; }
+.second-opinion input { margin: 0; }
+.opinion-options { display: flex; gap: 6px 14px; align-items: baseline; flex-wrap: wrap; }
+.opinion-help { margin: 0; color: var(--ovc-muted); font-size: .85rem; }
+.opinion-help summary { padding: 0; }
+.opinion-help p { margin: 4px 0; }
+.review-actions { gap: 6px; }
+.review-actions button { padding: 5px 9px; }
 .run-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: .85rem; margin: 0; }
 .run-head .run-tag { color: var(--ovc-muted); font-size: .78rem; }
 .run-summary { font-size: .82rem; margin: 0; }
@@ -217,21 +225,31 @@ button.small { min-height: 28px; padding: 3px 9px; font-size: .8rem; }
 
 /* Run to Completion banner under the stage header. */
 
-/* Shared configuration form. */
-.role-row { display: grid; grid-template-columns: 190px minmax(330px, 1fr) minmax(245px, .65fr); gap: 4px 8px; align-items: center; margin: 6px 0; }
-.role-row label { margin: 0; font-size: .85rem; }
-.role-row select { width: 100%; min-width: 0; }
+/* One shared row for every stage and Configuration. Each holder responds to
+   its pane width, including a narrow document pane in a wide desktop window. */
+#primary-choice, #implementation-choice, #build-implementation-choice,
+#loop-review-choice, #verifier-choice, #document-review-choice, #peer-choice,
+#settings-roles { container-type: inline-size; min-width: 0; }
+.role-row { display: grid; grid-template-columns: 9rem minmax(0, 1fr) 9rem 28px; gap: 4px 7px; align-items: center; margin: 4px 0; }
+.role-row .role-label { margin: 0; font-size: .85rem; overflow-wrap: anywhere; }
+.role-row select { width: 100%; min-width: 0; padding: 5px 7px; font-size: inherit; }
 .role-choice { min-width: 0; }
 .role-field-label { display: none; }
-.role-row .role-origin { grid-column: 2 / -1; font-size: .75rem; color: var(--ovc-muted); overflow-wrap: anywhere; }
-.role-header { border-bottom: 1px solid var(--ovc-border); padding-bottom: 6px; }
-@media (max-width: 980px) {
-  .role-row { grid-template-columns: 1fr 1fr; }
-  .role-row label { grid-column: 1 / -1; font-weight: 600; }
-  .role-row .role-choice:first-of-type { grid-column: 1 / -1; }
-  .role-field-label { display: block; font-size: .75rem; color: var(--ovc-muted); }
-  .role-row .role-origin { grid-column: 1 / -1; }
-  .role-header { display: none; }
+.role-help { min-height: 28px; width: 28px; padding: 0; font-size: 1rem; background: transparent; }
+.role-detail, .role-notice { grid-column: 1 / -1; color: var(--ovc-muted); font-size: .85rem; white-space: normal; overflow-wrap: anywhere; }
+.role-detail { border-left: 2px solid var(--ovc-border); padding: 3px 8px; }
+.role-detail p { margin: 0 0 3px; }
+.role-detail .role-origin { font-size: inherit; }
+.role-notice { color: var(--ovc-amber); }
+.role-row.opinion-off > :not(.role-label) { display: none; }
+@container (max-width: 540px) {
+  .role-row { grid-template-columns: 7.5rem minmax(0, 1fr) 7.5rem 28px; gap: 4px; }
+}
+@container (max-width: 430px) {
+  .role-row { grid-template-columns: minmax(0, 1fr) 8rem 28px; }
+  .role-row > .role-label { grid-column: 1 / 3; }
+  .role-row > .role-choice { grid-row: 2; }
+  .role-row > .role-help { grid-column: 3; grid-row: 1 / 3; }
 }
 #settings-panel { top: 3dvh; width: min(1280px, 96vw); max-height: 94dvh; padding: 18px; overflow-wrap: anywhere; }
 #settings-panel h2 { margin-bottom: 10px; }
@@ -314,27 +332,21 @@ details { margin: 10px 0; } summary { cursor: pointer; padding: 5px 0; } fieldse
   .rail { min-height: 300px; }
 }
 
-.next-step-body .role-row, .review-step-body .role-row { grid-template-columns: minmax(0, 1fr) minmax(145px, .55fr); }
-.next-step-body .role-row > label, .review-step-body .role-row > label { grid-column: 1 / -1; }
-#implementation-choice .role-row > label, #implementation-choice .role-origin { grid-column: 1 / -1; }
-@media (max-width: 980px) {
-  #implementation-choice .role-row { grid-template-columns: minmax(0, 1fr); }
-}
-
 @media (max-width: 760px) { .status-row { flex-wrap: wrap; } #status-bar { flex-basis: calc(100% - 125px); white-space: normal; border-radius: 12px; } #waiting-actions { margin-left: auto; } }
 
 #primary-choice { flex: 1; min-width: 0; }
-#primary-choice .role-row { grid-template-columns: minmax(0, 1fr) 125px; margin: 0; }
-#primary-choice .role-row > label, #primary-choice .role-origin { display: none; }
-#primary-choice select { padding: 5px; font-size: .83rem; }
-#second-opinion { display: block; }
-#primary-choice .role-field-label { display: none; }
-@media (max-width: 700px) {
-  #primary-choice .role-row { grid-template-columns: minmax(0, 1fr); gap: 3px; }
-  .next-step-body .role-row, .review-step-body .role-row { grid-template-columns: minmax(0, 1fr); }
-}
-
-.role-selected { display: none; }
-@media (max-width: 700px) {
-  .role-selected { display: block; color: var(--ovc-muted); font-size: .8rem; white-space: normal; overflow-wrap: anywhere; margin-top: 3px; }
+#primary-choice .role-row { grid-template-columns: minmax(0, 1fr) 7.5rem 28px; margin: 0; }
+#primary-choice .role-label { display: none; }
+#primary-choice select { font-size: .83rem; }
+#primary-choice .role-choice { grid-row: 1; }
+#primary-choice .role-help { grid-row: 1; grid-column: 3; }
+@container (max-width: 300px) {
+  .role-row { grid-template-columns: minmax(0, 1fr) 28px; }
+  .role-row > .role-label { grid-column: 1; }
+  .role-row > .role-choice { grid-column: 1; }
+  .role-row > .role-choice:nth-of-type(2) { grid-row: 3; }
+  .role-row > .role-help { grid-column: 2; grid-row: 1 / 4; }
+  #primary-choice .role-row { grid-template-columns: minmax(0, 1fr) 28px; }
+  #primary-choice .role-choice:nth-of-type(2) { grid-column: 1; grid-row: 2; }
+  #primary-choice .role-help { grid-column: 2; grid-row: 1 / 3; }
 }

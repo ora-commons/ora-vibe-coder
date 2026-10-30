@@ -749,7 +749,22 @@ class RunCase(unittest.TestCase):
             str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
         self.directive(2, reply=reply_with_questions("Who signs off the release checklist?"))
         driver = self.runs.find(project)
-        driver.receive_answer("Use SQLite everywhere.")
+        # The answer carries a marked-up picture with its numbered notes, as a
+        # composed message would; both ride the resumed step.
+        payload = b"tiny png payload for the run answer"
+        answer_picture = {"name": "answer shot.png",
+                          "data": base64.b64encode(payload).decode("ascii"),
+                          "notes": "1. Callout\nUse SQLite for the marked area"}
+        driver.receive_answer("Use SQLite everywhere.", [answer_picture], [])
+        # The accepted answer's picture is retained the moment it is accepted —
+        # before the resumed step dispatches — so a failure ahead of that
+        # dispatch, or stopping the run, cannot lose the captured original.
+        retained = [folder for folder in conversation.turn_folders(project)
+                    if (folder / "attachments" / "0001-answer-shot.png").is_file()]
+        self.assertGreaterEqual(len(retained), 1)
+        self.assertEqual((retained[0] / "attachments" / "0001-answer-shot.png").read_bytes(), payload)
+        self.assertEqual((retained[0] / "attachments" / "0001-answer-shot.png.notes.txt").read_text(encoding="utf-8"),
+                         "1. Callout\nUse SQLite for the marked area")
         paused_verification = self.settle(driver, lambda status: status["state"] == "paused-question" and status["step"] == "verification")
         self.assertEqual(paused_verification["step"], "verification")
         self.directive(3, reply="Verified.\n", writes={str(root / "One — Verification Report.md"): report("PASSED")})
@@ -758,6 +773,20 @@ class RunCase(unittest.TestCase):
         requests = self.step_requests(project)
         self.assertIn("Use SQLite everywhere.", requests[1])
         self.assertIn("Lawrence signs off.", requests[3])
+        # The answer's picture rode the resumed build step too, its notes tied
+        # to it, and was consumed there: the verification step carries no copy
+        # of it. Its original stays retained from acceptance onward, beside
+        # the copy the dispatched step saved.
+        carried = [folder for folder in conversation.turn_folders(project)
+                   if (folder / "attachments").is_dir()]
+        self.assertEqual(len(carried), 2)
+        for record in carried:
+            self.assertEqual((record / "attachments" / "0001-answer-shot.png").read_bytes(), payload)
+            self.assertEqual((record / "attachments" / "0001-answer-shot.png.notes.txt").read_text(encoding="utf-8"),
+                             "1. Callout\nUse SQLite for the marked area")
+        self.assertLess(requests[1].index("0001-answer-shot.png"),
+                        requests[1].index("Use SQLite for the marked area"))
+        self.assertNotIn("0001-answer-shot.png", requests[3])
         # The answer resets the no-progress count and the same step resumed.
         self.assertEqual(driver.status()["no_progress"], 0)
 

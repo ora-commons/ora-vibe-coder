@@ -2376,7 +2376,7 @@ elif skill.exists():
                 mock.patch.object(conversation, "start_assessment", side_effect=assess), sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
-                page = browser.new_page(viewport={"width": 1440, "height": 1050})
+                page = browser.new_page(viewport={"width": 1440, "height": 1050}, reduced_motion="reduce")
                 errors = []; page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(self.server.url); self.select_project(page, project_id)
                 page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
@@ -2408,9 +2408,23 @@ elif skill.exists():
                     page.locator("#review-step").evaluate("element => element.open = true")
                     page.locator("#document-review-choice .role-model-choice").select_option(compact_value("claude", "named"))
                     page.locator("#document-review-choice .role-effort").select_option("low")
+                    page.evaluate("() => window.originalOpinionToggle = document.querySelector('#opinion-toggle')")
                     page.locator("#opinion-toggle").check()
+                    self.assertTrue(page.evaluate("() => document.querySelector('#opinion-toggle') === window.originalOpinionToggle"))
+                    expect(page.locator("#peer-choice .role-label")).to_have_text("Second opinion")
                     page.locator("#peer-choice .role-model-choice").select_option(compact_value("codex", "named"))
                     page.locator("#peer-choice .role-effort").select_option("high")
+                    self.assertTrue(page.evaluate("() => document.querySelector('#opinion-toggle') === window.originalOpinionToggle"))
+                    expect(page.locator("#opinion-toggle")).to_be_checked()
+                    reviewer = page.locator("#document-review-choice .role-row")
+                    expect(reviewer.locator(".role-detail")).to_be_hidden()
+                    reviewer.locator(".role-help").focus(); page.keyboard.press("Enter")
+                    expect(reviewer.locator(".role-selected")).to_contain_text("Claude Code · Named model")
+                    expect(reviewer.locator(".role-selected-effort")).to_have_text("Effort: low (recommended)")
+                    page.keyboard.press("Space")
+                    expect(reviewer.locator(".role-detail")).to_be_hidden()
+                    # Both review rows stay inline in the actual desktop pane.
+                    self.assertLess(reviewer.bounding_box()["height"], 42)
                     page.locator("#review").click()
                     page.wait_for_function("() => !document.querySelector('#review').disabled")
                     self.assertEqual(assessments[-1], {"tool": "claude", "stage": role, "reviewer": "codex", "model": "named", "effort": "low", "reviewer_model": "named", "reviewer_effort": "high"})
@@ -2432,7 +2446,7 @@ elif skill.exists():
                 expect(primary).to_have_value(compact_value("codex", "named"))
                 loop = page.locator("#loop-review-choice .role-model-choice")
                 expect(loop.locator("option:checked")).to_contain_text("Same as implementation")
-                expect(page.locator("#loop-review-choice .role-effort option:checked")).to_have_text("Same as implementation (high)")
+                expect(page.locator("#loop-review-choice .role-effort option:checked")).to_have_text("Same (high)")
                 with page.expect_response("**/api/deliver"):
                     page.locator("#implement-review").click()
                     page.locator("#implementation-proceed").click()
@@ -2473,7 +2487,7 @@ elif skill.exists():
                 config_primary.select_option(compact_value("claude", "named"))
                 page.locator('#settings-roles [data-role="implementation"] .role-effort').select_option("low")
                 expect(page.locator('#settings-roles [data-role="review"] .role-model-choice option:checked')).to_contain_text("Claude Code · named")
-                expect(page.locator('#settings-roles [data-role="review"] .role-effort option:checked')).to_have_text("Same as implementation (low)")
+                expect(page.locator('#settings-roles [data-role="review"] .role-effort option:checked')).to_have_text("Same (low)")
                 native.update(configured_model="native-before")
                 page.evaluate("() => window.dispatchEvent(new Event('focus'))")
                 expect(config_primary).to_have_value(compact_value("claude", "named"))
@@ -2487,9 +2501,14 @@ elif skill.exists():
                     page.set_viewport_size({"width": width, "height": height})
                     if width < 700:
                         page.get_by_role("button", name="Show document", exact=True).click()
-                        expect(page.locator("#build-implementation-choice .role-selected")).to_be_visible()
-                        expect(page.locator("#build-implementation-choice .role-selected")).to_have_text("Codex · Named model")
-                        expect(page.locator("#loop-review-choice .role-selected")).to_have_text("Claude Code · Named model")
+                        page.locator("#build-implementation-choice .role-help").click()
+                        expect(page.locator("#build-implementation-choice .role-selected")).to_have_text("Harness and model: Codex · Named model")
+                        expect(page.locator("#build-implementation-choice .role-selected-effort")).to_have_text("Effort: high")
+                        page.locator("#build-implementation-choice .role-help").click()
+                        page.locator("#loop-review-choice .role-help").click()
+                        expect(page.locator("#loop-review-choice .role-selected")).to_have_text("Harness and model: Claude Code · Named model")
+                        expect(page.locator("#loop-review-choice .role-selected-effort")).to_have_text("Effort: low (recommended)")
+                        page.locator("#loop-review-choice .role-help").click()
                     page.locator("#result-step").scroll_into_view_if_needed()
                     self.assertTrue(page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"))
                     for control in page.locator("#result-step select:visible").all():
@@ -2527,6 +2546,38 @@ elif skill.exists():
                 finally:
                     self.server.runs.by_project.pop(str(active_project.root), None)
                     page.evaluate("() => updateRunState({active: null})")
+                # Resizing either pane must leave the complete stage title clear
+                # of both the coding-tool card and the run buttons.
+                for stage, title in (("specification", "Specification"), ("plan", "Plan"), ("build", "Build & Verify")):
+                    page.locator(f'[data-stage="{stage}"]').click()
+                    expect(page.locator("#stage-title")).to_have_text(title)
+                    page.wait_for_function("stage => workspace === stage && workspaceReveal === null", arg=stage)
+                    for width in (1440, 1024):
+                        page.set_viewport_size({"width": width, "height": 1050})
+                        for fraction in (.42, .8):
+                            split = page.locator("#split").bounding_box()
+                            spine = page.locator("#spine").bounding_box()
+                            page.mouse.move(spine["x"] + spine["width"] / 2, spine["y"] + 100)
+                            page.mouse.down()
+                            page.mouse.move(split["x"] + split["width"] * fraction, spine["y"] + 100)
+                            page.mouse.up()
+                            layout = page.evaluate("""() => {
+                                const box = selector => document.querySelector(selector).getBoundingClientRect().toJSON();
+                                const range = document.createRange(); range.selectNodeContents(document.querySelector('#stage-title'));
+                                return {title: range.getBoundingClientRect().toJSON(), head: box('#workspace-head'),
+                                    tool: box('.first-step'), actions: box('.head-actions'),
+                                    controls: [...document.querySelectorAll('#primary-choice select, #primary-choice .role-help')]
+                                        .map(element => element.getBoundingClientRect().toJSON())};
+                            }""")
+                            text = layout["title"]
+                            self.assertGreaterEqual(text["left"], layout["head"]["left"])
+                            self.assertLessEqual(text["right"], layout["head"]["right"])
+                            for obstacle in (layout["tool"], layout["actions"]):
+                                self.assertTrue(text["right"] <= obstacle["left"] or text["left"] >= obstacle["right"]
+                                                or text["bottom"] <= obstacle["top"] or text["top"] >= obstacle["bottom"], layout)
+                            for control in layout["controls"]:
+                                self.assertGreaterEqual(control["left"], layout["tool"]["left"])
+                                self.assertLessEqual(control["right"], layout["tool"]["right"])
                 self.assertEqual(errors, [])
             finally:
                 browser.close()
@@ -2550,7 +2601,7 @@ elif skill.exists():
         other = request("/api/create", {"directory": "SampleTwo", "name": "Sample Two", "description": "Another sample", "goals": "A working sample"})
         request("/api/settings", {"role_defaults": {
             "specification": {"tool": "codex", "model": "configured-model", "effort": "high"},
-            "planning": {"tool": "claude", "model": "saved-unavailable-model", "effort": "high"},
+            "planning": {"tool": "claude", "model": "saved-unavailable-model-with-a-long-name", "effort": "saved-unavailable-effort-with-a-long-name"},
             "implementation": {"tool": "codex", "model": "configured-model", "effort": "high"},
             "specification_review": {"tool": "claude", "model": "review-model", "effort": "low"},
             "planning_review": {"tool": "codex", "model": "review-model", "effort": "high"},
@@ -2582,15 +2633,21 @@ elif skill.exists():
                 self.assertEqual(page.locator('#settings-panel input:not([type="checkbox"])').count(), 0)
                 self.assertEqual(page.locator("#interview-panel, #configure-panel, #settings-spending").count(), 0)
                 planning = page.locator('#settings-roles .role-row[data-role="planning"]')
-                expect(planning.locator(".role-model-choice")).to_have_value(compact_value("claude", "saved-unavailable-model"))
-                expect(planning.locator(".role-effort")).to_have_value("high")
+                expect(planning.locator(".role-model-choice")).to_have_value(compact_value("claude", "saved-unavailable-model-with-a-long-name"))
+                expect(planning.locator(".role-effort")).to_have_value("saved-unavailable-effort-with-a-long-name")
+                planning.locator(".role-help").focus(); page.keyboard.press("Enter")
+                expect(planning.locator(".role-selected")).to_contain_text("saved-unavailable-model-with-a-long-name")
+                expect(planning.locator(".role-selected-effort")).to_have_text("Effort: saved-unavailable-effort-with-a-long-name — saved choice (not in current inventory)")
+                expect(planning.locator(".role-origin")).to_have_text(native_reasons["claude"])
+                page.keyboard.press("Space")
+                expect(planning.locator(".role-detail")).to_be_hidden()
                 expect(page.locator('#settings-roles [data-role="review"] .role-model-choice')).to_have_value(compact_value("hermes"))
                 expect(page.locator('#settings-roles [data-role="specification_second_opinion"] .role-model-choice')).to_have_value("")
                 specification = page.locator('#settings-roles .role-row[data-role="specification"]')
                 expect(specification.locator(".role-model-choice option").filter(has_text="Codex · Other model")).to_have_count(1)
                 specification.locator(".role-model-choice").select_option(compact_value("codex", "other-model"))
                 expect(specification.locator(".role-effort")).to_have_value("")
-                self.assertEqual(specification.locator(".role-effort option").all_text_contents(), ["Use harness default (xhigh)", "low — model recommendation"])
+                self.assertEqual(specification.locator(".role-effort option").all_text_contents(), ["Default (xhigh)", "low (recommended)"])
                 # Every option lives on this first screen, and one save persists them all.
                 self.assertEqual(page.locator("#settings-warn").count(), 0)
                 page.locator("#settings-best-guess").check()
@@ -2637,7 +2694,10 @@ elif skill.exists():
                                     && Math.abs(spans[0].getBoundingClientRect().bottom - spans[1].getBoundingClientRect().bottom) < 5;
                             }),
                             dividers: rows.filter(row => parseFloat(getComputedStyle(row).borderBottomWidth) > 0).map(row => ({role: row.dataset.role, width: getComputedStyle(row).borderBottomWidth, style: getComputedStyle(row).borderBottomStyle})),
-                            descriptions: rows.map(row => row.querySelector('.role-origin').textContent)};
+                            rowHeights: rows.map(row => row.getBoundingClientRect().height),
+                            descriptions: rows.map(row => row.querySelector('.role-origin').textContent),
+                            routineDetailsHidden: rows.every(row => row.querySelector('.role-detail').hidden),
+                            selectFont: getComputedStyle(first.querySelector('select')).fontSize};
                     }""")
                     layout_evidence.append({"theme": theme, **metrics})
                     if evidence:
@@ -2651,8 +2711,10 @@ elif skill.exists():
                         self.assertLessEqual(metrics["scrollHeight"], metrics["clientHeight"], metrics)
                         self.assertTrue(metrics["allRowsInside"] and metrics["actionsInside"], metrics)
                         self.assertLessEqual(metrics["roleWidth"], 200, metrics)
-                        self.assertGreaterEqual(metrics["effortWidth"], 245, metrics)
-                        self.assertTrue(metrics["defaultLabelsFit"], metrics)
+                        self.assertGreaterEqual(metrics["effortWidth"], 120, metrics)
+                        self.assertLessEqual(max(metrics["rowHeights"]), 60, metrics)
+                        self.assertTrue(metrics["routineDetailsHidden"], metrics)
+                        self.assertEqual(metrics["selectFont"], "14px", metrics)
                         self.assertTrue(metrics["optionsSingleLine"], metrics)
                     else:
                         expect(page.get_by_label("Specification harness and model", exact=True)).to_be_visible()
@@ -2660,6 +2722,18 @@ elif skill.exists():
                         page.locator("#settings-close").focus()
                         expect(page.locator("#settings-close")).to_be_focused()
                         if evidence: page.screenshot(path=str(Path(evidence) / f"configuration-{theme}-{width}-options.png"))
+                # A failed native read keeps a visible notice, with complete
+                # detail available without a mouse or a clipped select label.
+                native.update(models=[])
+                native_reasons["codex"] = "Codex native model metadata is inaccessible or unsupported. Use harness default keeps Codex's configured model and effort. Saved named choices are preserved."
+                page.evaluate("() => window.dispatchEvent(new Event('focus'))")
+                expect(specification.locator(".role-notice")).to_be_visible()
+                expect(specification.locator(".role-notice")).to_have_text("Codex native model metadata is inaccessible or unsupported.")
+                specification.locator(".role-help").click()
+                expect(specification.locator(".role-origin")).to_have_text(native_reasons["codex"])
+                specification.locator(".role-help").click()
+                native.update(models=[{"id": "configured-model", "label": "Configured model", "efforts": ["low", "high"], "default_effort": "low"},
+                                      {"id": "other-model", "label": "Other model", "efforts": ["low"], "default_effort": "low"}])
                 # Discard the unsaved layout fixture, then make the original
                 # changes for the persistence and run-only behavior checks.
                 page.locator("#settings-close").click()
@@ -2681,7 +2755,7 @@ elif skill.exists():
                     request("/api/converse", {"id": created["id"], "tool": "codex", "stage": "specification", "text": "Work on the sample.", "images": []})
                     self.assertEqual(turn.call_args.kwargs["model"], "other-model")
                     self.assertEqual(turn.call_args.kwargs["effort"], "")
-                self.assertEqual(saved["role_defaults"]["planning"], {"tool": "claude", "model": "saved-unavailable-model", "effort": "high"})
+                self.assertEqual(saved["role_defaults"]["planning"], {"tool": "claude", "model": "saved-unavailable-model-with-a-long-name", "effort": "saved-unavailable-effort-with-a-long-name"})
                 # Recreate the settings reader, reload the app, then open another project.
                 server.settings = Settings(settings.path)
                 page.reload()
