@@ -368,12 +368,12 @@
     {
       "executable": false,
       "path": "docs/Technical Documentation.md",
-      "sha256": "80de300065b4d8818ddd5ac75cb7146dbea41b590eaa784be88bd4794ba89232"
+      "sha256": "d88143167310a0d46eca56cdd2761891b0ad0ab476b1b68628659102123ce301"
     },
     {
       "executable": false,
       "path": "docs/User Guide.md",
-      "sha256": "b82cb38053a50fb42edeaf93c0f2105d1ddaaecbfd449cacf0ff0cc60b62ea8e"
+      "sha256": "038b4369bc85fbc606966f7b00f28f055cabdb2221a040c4cbe374ffa9de0ade"
     },
     {
       "executable": false,
