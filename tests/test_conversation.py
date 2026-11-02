@@ -1807,6 +1807,7 @@ class Reliability(ConversationCase):
                 run = conversation.read_reliability_runs(project)[0]
                 self.assertEqual((run["reviewer"], run["assessment"], run["output"]),
                                  ("", "applied", answer.split("\n\n", 1)[1].strip()))
+                self.assertEqual(run["passes"], [])  # One model: no evaluation pass settles anything.
                 facts = assessment_facts(stage, document.read_text(encoding="utf-8"))
                 self.assertEqual((facts["verdict"], facts["applies"]), ("PASSED", "current"))
 
@@ -2167,6 +2168,10 @@ class Reliability(ConversationCase):
         run = conversation.read_reliability_runs(project)[0]
         self.assertEqual(run["stage"], "review-plan")              # One stage key in records and display.
         self.assertEqual((run["state"], run["assessment"]), ("complete", "applied"))
+        # The round settles after one evaluation and one revision: the
+        # reviser's recorded dispositions end it without another evaluation.
+        self.assertEqual([item["purpose"] for item in run["passes"]], ["evaluate", "revise"])
+        self.assertEqual(run["rounds"], 1)
         self.assertIn("## Current review", (project.root / "Plan.md").read_text(encoding="utf-8"))
 
     def test_iteration_is_bounded_at_three_rounds_and_reports_disagreement(self):
@@ -2174,6 +2179,9 @@ class Reliability(ConversationCase):
         handle = self.second_opinion(project, iterate=True, evaluate=("fail", "fail", "fail"))
         self.assertEqual(handle.snapshot()["state"], "finished")
         passes = [self.pass_facts(folder) for folder in conversation.turn_folders(project)]
+        # The user's Iterate selection adds the optional rounds; without it one
+        # evaluation and one revision settle the round. Residual disagreement
+        # after the bound is reported, never smoothed over.
         self.assertEqual([item["purpose"] for item in passes],
                          ["author", "evaluate", "revise", "evaluate", "revise", "evaluate", "revise"])  # Seven calls at most.
         self.assertEqual([item["peer"] for item in passes],

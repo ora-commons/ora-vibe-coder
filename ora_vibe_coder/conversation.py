@@ -44,6 +44,8 @@ RELIABILITY_PURPOSES = (PURPOSE_AUTHOR, PURPOSE_EVALUATE, PURPOSE_REVISE, PURPOS
 # vocabulary), so the Plan route uses one consistent mapping end to end.
 REVIEW_STAGES = {"specification": "Specification", "planning": "Plan"}
 REVIEW_KEYS = {"specification": "review-specification", "planning": "review-plan"}
+# The user-selected Iterate option's round bound; without the selection the
+# second opinion runs exactly one evaluate-revise round.
 ITERATE_ROUNDS = 3
 CHECK_TIMEOUT = 120
 # Live readiness probes, so a coordinated stop ends even these owned processes.
@@ -281,7 +283,7 @@ def companion_facts_text(facts=None):
         primary = ", ".join(TOOL_LABELS[tool][0] for tool in (boost.get("analytical_roles") or {}).get("primary") or ())
         peer = ", ".join(TOOL_LABELS[tool][0] for tool in (boost.get("analytical_roles") or {}).get("peer") or ())
         native = ", ".join(TOOL_LABELS[tool][0] for tool in boost.get("native_adapter_engines") or ())
-        lines.append(f"- Ora AI Boost {boost['version']} at {boost['path']} (commands ora-gear-3, ora-gear-4, ora-validator), "
+        lines.append(f"- Ora AI Boost {boost['version']} at {boost['path']} (commands ora-gear-3, ora-gear-4), "
                      "bound to the bundled Agent Bridge above — never a global Bridge or Boost.")
         lines.append(f"- Gear analytical roles currently usable — primary: {primary or 'none'}; peer: {peer or 'none'}. "
                      f"Native adapters: {native or 'none'}; the other engines travel as text-only analytical calls.")
@@ -666,6 +668,15 @@ def read_conversation(project):
         if turn["reply"] is not None:
             view["reply"] = split_maintenance(turn["reply"])[0]
             view["questions"] = questions_in(turn["reply"])
+            # A run-owned verification or correction reply carries the detailed
+            # review body. The conversation feed shows a neutral note instead;
+            # the saved Verification Report and Programming Result in the
+            # project, and this run's retained Bridge records, remain the
+            # readable sources for the exact exchange.
+            if turn["fields"].get("Run") and turn["fields"].get("Run-Step") in {"verification", "correction"}:
+                view["reply"] = ("Review body suppressed from the conversation feed. Read the saved "
+                                 "Verification Report and Programming Result in the project; the exact "
+                                 "exchange remains in this run's retained Bridge records.")
         if turn["outcome"] is not None:
             outcome = turn["outcome"]
             view["artifact"] = outcome["artifact"]
@@ -2583,13 +2594,16 @@ def start_assessment(registry, project, tool, stage, reviewer, iterate, model=""
 
 
 def _run_assessment(handle, project, folder, session, stage, reviewer, iterate, note_ref, assessed_document, reviewer_model="", reviewer_effort=""):
-    """The bounded worker: author, then evaluate/revise rounds, then save.
+    """The bounded worker: author, then evaluate-revise rounds, then save.
 
-    Rounds: with iteration off, exactly one evaluate then one revise (three
-    calls). With iteration on, up to three evaluate→revise rounds; a passing
-    evaluation from round 2 on verifies the previous revision and stops the
-    run early. Every pass is its own retained turn record; nothing here is a
-    real exchange, and nothing replays or retries a failed pass.
+    One evaluation followed by one revision that fixes or rejects every
+    recommendation with reasons settles the exchange; no further evaluation
+    round is forced after that builder decision. The user's Iterate selection
+    adds optional rounds the user chose: up to ITERATE_ROUNDS evaluate-revise
+    rounds, stopping early once an evaluation passes from round 2 on; the
+    selection never lets a reviewer force rounds the user did not choose.
+    Every pass is its own retained turn record; nothing here is a real
+    exchange, and nothing replays or retries a failed pass.
     """
     tool = handle.tool
     run = folder.name
@@ -2636,8 +2650,9 @@ def _run_assessment(handle, project, folder, session, stage, reviewer, iterate, 
                     remember_identity("Reviewer")
                     rounds = round_index
                     agreement = verdict_of(evaluation) or "unclear"
-                    # A passing evaluation from round 2 on verifies the previous
-                    # revision; with iteration off the single revision always runs.
+                    # A passing evaluation from round 2 on verifies the
+                    # previous revision; without iteration the single
+                    # revision always runs and settles the round.
                     if round_index > 1 and agreement == "pass":
                         break
                     revision = _pipeline_pass(handle, project, PURPOSE_REVISE, run, stage_key,

@@ -1,8 +1,8 @@
 # Review of the consolidated answer
 
 Review the complete consolidated answer as the exact deliverable the user will
-receive. Apply the common material-defect and overlooked-consideration
-questions, and also ask whether consolidation:
+receive. Apply the common finding and overlooked-consideration questions, and
+also ask whether consolidation:
 
 - lost distinct supported material from either lane;
 - injected an unsupported claim or treated agreement as proof;

@@ -1,7 +1,7 @@
 """Run to Completion: one fixed route driven only by what was actually saved.
 
 The route is rote — Specification, Plan, Build (the Programming Loop),
-independent verification, then Correction and back to verification — entered
+independent verification, then Correction, which settles in place — entered
 at the active stage. Every step is one ordinary work turn through the existing
 turn machinery, so the existing saved-file readback decides what each step
 achieved; the driver never replays a step, never substitutes a tool, and never
@@ -23,9 +23,11 @@ from . import conversation
 from .handoff import prepare_request, quoted
 from .hosts import HOSTS as TOOL_LABELS
 from .project import ProjectError, not_started, read_text
-from .status import reported_status, review_basis, canonical_verdict
+from .status import (canonical_verdict, correction_dispositions, reported_status,
+                     review_basis, review_disposition, verification_finding_labels)
 
-# The route, in order. "correction" returns to "verification".
+# The route, in order. Correction settles in place: a settled correction
+# completes the run; an unsettled one is retried as correction.
 ROUTE = ("specification", "planning", "build", "verification")
 CORRECTION = "correction"
 # The peers that can exchange turns in-app; Hermes and Qwen Code have no
@@ -73,14 +75,32 @@ DEFAULT_INPUTS = {
     "verification": ("Coordinate a fresh, independent Ora Verification review of the current implementation "
                      "against the Specification and Plan. The implementation agent must not be its own "
                      "verifier. Save or update one truthful Verification Report, including findings and "
-                     "any incomplete checks, and return the result to the user."),
-    "correction": ("Correct the in-scope material findings in the current Verification Report using the "
-                   "approved Specification and Plan. Perform the normal checks and implementation review "
-                   "needed for those corrections, then update the one current Programming Result with what "
-                   "changed, what was checked, and anything still outstanding. Stop there. Do not run or "
-                   "commission a new Ora Verification review or update the Verification Report in this "
-                   "turn; fresh independent verification follows separately. If no report exists, explain "
-                   "what evidence is missing before changing code."),
+                     "any incomplete checks, and return the result to the user. The report states its "
+                     "verdict (PASSED, NOT PASSED or INCOMPLETE) and carries exactly one current "
+                     "`Review disposition:` line — SETTLED, CORRECTION, SEVERE, INCOMPLETE or ASK USER — "
+                     "outside quotations and examples. Enumerate every finding on its own line with a "
+                     "stable label the correction can cite — `- R1 — <finding>`, `- R2 — …`, and `S1`, "
+                     "`S2` … for severe findings. Identify every severe finding: unrecoverable data "
+                     "loss, security exposure, and unauthorized or erroneous spending, sending or "
+                     "publishing; a traced path from an actual permitted input to the harm is sufficient. "
+                     "A previously recorded severe finding settles only on a recorded fix with evidence "
+                     "that its harmful path was removed."),
+    "correction": ("Correct the findings recorded in the current Verification Report using the approved "
+                   "Specification and Plan. Fix each one the smallest way or reject it with a concrete "
+                   "recorded reason — a reasoned rejection settles a non-severe finding; a severe finding "
+                   "settles only through a recorded fix with evidence that its harmful path was removed. "
+                   "Perform the normal checks and implementation review needed for those corrections, then "
+                   "update the one current Programming Result with what changed, what was checked, the "
+                   "disposition of every finding, and anything still outstanding. Record the disposition "
+                   "of every finding on its own line in the Programming Result, citing each finding by "
+                   "the stable label the Verification Report gave it: "
+                   "`- <label> — FIXED — <what changed and the evidence>` "
+                   "or `- <label> — REJECTED — <concrete reason>`. Its final line is "
+                   "exactly one current `Review disposition:` line — SETTLED, SEVERE, INCOMPLETE or ASK "
+                   "USER — outside quotations and examples. Stop there. Do not run or commission a new "
+                   "Ora Verification review or update the Verification Report in this turn; a settled "
+                   "correction completes the work as completed after correction. If no report exists, "
+                   "explain what evidence is missing before changing code."),
 }
 
 
@@ -114,18 +134,6 @@ def result_direction(project):
     return (f"The Programming Result was found at {saved['path']}. Its displayed status is "
             f"{reported_status('programming', saved['text'] or '', saved['path'], field='Status')['label']}; "
             "read the report and actual candidate directly rather than treating the badge as proof.")
-
-
-def progress_contract():
-    """The verifier's Progress section, from the second verification onward."""
-    return ("## Progress against the best verified state\n\n"
-            "The best verified state's report is quoted below. Your new report must carry a section "
-            "headed exactly `Progress` whose first line is exactly `Improved` or `Not improved`, "
-            "followed by one `- ` bullet per piece of evidence. Each bullet names either a concrete "
-            "reduction in affected behavior — what failed in the best verified state, what fails now, "
-            "and the check that shows it — or a cause newly confirmed, with the evidence that confirms "
-            "it. None of these is improvement: rewording, splitting or merging findings, fixing one "
-            "defect while another of equal effect appears, or returning to an earlier state.")
 
 
 def build_input(step, project, user_text="", verifier=None, extra=()):
@@ -234,24 +242,6 @@ def verification_verdict(text):
     return ""
 
 
-def progress_of(text):
-    """Whether a NOT PASSED report's Progress section shows evidenced improvement."""
-    body = conversation.section_body(text, "Progress")
-    if body is None:
-        return False, "its Progress section is missing"
-    lines = [line for line in body.split("\n") if line.strip()]
-    if not lines:
-        return False, "its Progress section is empty"
-    first = lines[0].strip().strip("*`_")
-    if first == "Not improved":
-        return False, "it says Not improved"
-    if first != "Improved":
-        return False, "its Progress section does not begin with Improved or Not improved"
-    if not any(line.strip().startswith("- ") and line.strip()[2:].strip() for line in lines[1:]):
-        return False, "it says Improved with no evidence bullet"
-    return True, ""
-
-
 def questions_paused(driver_status):
     """The pause questions a run is waiting on, for the composer's answer box."""
     return list(driver_status.get("questions") or []) if driver_status.get("state") == "paused-question" else []
@@ -263,7 +253,6 @@ PURPOSE_RUN = "run"
 RUN_START = "run-start"
 RUN_ANSWER = "run-answer"
 RUN_OUTCOME = "run-outcome"
-RUN_EVIDENCE = "run-evidence"
 
 
 def run_note_body(kind, run, fields):
@@ -327,8 +316,6 @@ def read_runs(project):
                 outcome = fields.get("Run-Outcome", "")
                 entry["state"] = outcome if outcome in {"complete", "unfinished"} else "open"
                 entry["reason"] = fields.get("Reason", "")
-            elif kind == RUN_EVIDENCE:
-                entry["best_verified"] = True
         turn = conversation.read_turn(folder)
         if turn["purpose"] == conversation.PURPOSE_WORK and turn["fields"].get("Run"):
             run = turn["fields"]["Run"]
@@ -363,9 +350,6 @@ class RunDriver:
         self.observation = ""
         self.no_progress = 0
         self.attempt_note = ""
-        self.repeat_best_guess = False
-        self.best_report = None
-        self.not_passed_seen = False
         self.verdicts = []
         self.stop_requested = False
         self.resume_answer = ""
@@ -592,9 +576,6 @@ class RunDriver:
             extra.append(implementation_direction(tool, model, effort, reviewer, r_model, r_effort))
         if self.step == "verification":
             verifier = {"tool": tool, "model": model, "effort": effort}
-            if self.best_report is not None:
-                extra.append(progress_contract())
-                extra.append("## The best verified state — quoted data\n\n" + quoted(self.best_report))
         if self.attempt_note:
             extra.append("## Changed approach required\n\n" + self.attempt_note)
         if self.config.get("best_guess"):
@@ -717,20 +698,96 @@ class RunDriver:
         if step in {"build", "correction"}:
             ok = changed and artifact.get("role") == "Programming Result"
             if ok:
-                self.observation = "Programming Result saved."
                 if step == "build":
+                    self.observation = "Programming Result saved."
                     self._advance()
-                else:
-                    # A correction's own saved result neither raises nor resets
-                    # the count; the verification that follows judges it.
-                    self.step = "verification"
-                return True
+                    return True
+                return self._decide_correction_result()
             self._no_result("the step did not save the Programming Result during this step")
             return True
         if step == "verification":
             return self._decide_verification(handle, artifact)
         self._no_result("the step produced nothing the run can read")
         return True
+
+    def _decide_correction_result(self):
+        """A correction settles through its saved Programming Result.
+
+        Settlement is more than a success word: the result must record at
+        least one fix or reasoned rejection, and a severe (S) finding settles
+        only through its own recorded fix with evidence. Decisions for
+        non-severe findings are recorded per the correction instructions, not
+        enforced label by label. The route never selects verification again
+        after correction: a settled correction completes the work as completed
+        after correction, and the only recoveries are a genuinely unsettled
+        result (retried here) and the owner-decision pauses.
+        """
+        saved = self.project.material("Programming Result")
+        disposition = review_disposition(saved["text"] or "")
+        if disposition == "SETTLED":
+            entries = correction_dispositions(saved["text"] or "")
+            pending = self.project.material("Verification Report")
+            pending_text = pending["text"] or ""
+            severe_pending = review_disposition(pending_text) == "SEVERE"
+            if not entries:
+                self._correction_not_settled(
+                    "its Programming Result declared SETTLED but recorded no fix or "
+                    "reasoned rejection of any finding")
+                return True
+            # A severe (S) finding settles only through its own recorded fix;
+            # every other decision is recorded, not mechanically enforced.
+            supplied = verification_finding_labels(pending_text)
+            recorded = {}
+            for label, decision, _reason in entries:
+                recorded.setdefault(label, decision)
+            unfixed_severe = [label for label in supplied
+                              if label.startswith("S") and recorded.get(label) != "FIXED"]
+            if unfixed_severe:
+                self._correction_not_settled(
+                    f"the severe finding(s) {', '.join(unfixed_severe)} settle only "
+                    "through their own recorded fix with evidence — a rejection or "
+                    "an unrelated fix cannot settle them")
+                return True
+            if severe_pending and not any(item[1] == "FIXED" for item in entries):
+                self._correction_not_settled(
+                    "the Verification Report recorded a severe finding, which settles "
+                    "only through a recorded fix with evidence — a rejection alone "
+                    "cannot settle it")
+                return True
+            self.observation = "Programming Result: settled correction."
+            self._end("complete",
+                      "Correction settled every finding with recorded reasons — completed after "
+                      "correction, without another verification pass.")
+            return False
+        if disposition == "SEVERE":
+            self._pause_for_owner(
+                "The correction's Programming Result records an unresolved severe finding. A severe "
+                "finding settles only through a recorded fix with evidence that its harmful path was "
+                "removed; a rejection does not stand. Answer to guide the correction, or stop the run.")
+            return False
+        if disposition == "ASK USER":
+            self._pause_for_owner(
+                "The correction's Programming Result records a decision only you can make (ASK USER). "
+                "Answer it to continue the correction, or stop the run.")
+            return False
+        self._correction_not_settled(
+            "its Programming Result did not carry one current settled `Review disposition: "
+            "SETTLED` line recording every finding fixed or rejected with reasons"
+            if not disposition else
+            f"its Programming Result declared `{disposition}`, so the correction is not settled")
+        return True
+
+    def _correction_not_settled(self, reason):
+        self.no_progress += 1
+        self.attempt_note = (f"The previous correction did not settle its findings: {reason}. "
+                             "Actually resolve every recorded finding — fix it the smallest way or "
+                             "reject it with a concrete reason — then save the one current Programming "
+                             "Result with that disposition of every finding and a final "
+                             "`Review disposition: SETTLED` line. A saved success word alone is not a "
+                             "settled correction.")
+        self.observation = "Correction not settled."
+        if self.no_progress >= NO_PROGRESS_LIMIT:
+            self._end_unfinished_no_progress(reason)
 
     def _decide_verification(self, handle, artifact):
         report = self.project.material("Verification Report")
@@ -743,68 +800,84 @@ class RunDriver:
             self.no_progress += 1
             self.attempt_note = (f"The previous verification attempt failed: {reason}. "
                                  "Investigate the cause and change the approach, then save or update the one current "
-                                 "Verification Report in this step, with a readable verdict.")
+                                 "Verification Report in this step, with a readable verdict and disposition.")
             self.observation = "Verification Report: not a result of this run."
             if self.no_progress >= NO_PROGRESS_LIMIT:
                 self._end_unfinished_no_progress(reason)
             return True
         verdict = verification_verdict(report["text"])
-        if not verdict:
+        disposition = review_disposition(report["text"])
+        if not verdict or not disposition:
+            missing = ("no readable verdict" if not verdict else
+                       "no single current `Review disposition:` line — missing, duplicated, unknown or "
+                       "contradictory declarations read as incomplete")
             self.no_progress += 1
-            self.attempt_note = ("The previous verification saved a report whose verdict cannot be read. "
-                                 "Investigate the cause and change the approach, then save one current Verification "
-                                 "Report whose verdict line states PASSED or NOT PASSED.")
-            self.observation = "Verification Report: verdict unreadable."
+            self.attempt_note = (f"The previous verification saved a report with {missing}. "
+                                 "Investigate the cause and change the approach, then save one current "
+                                 "Verification Report whose verdict line states PASSED or NOT PASSED and "
+                                 "which carries exactly one `Review disposition:` line (SETTLED, "
+                                 "CORRECTION, SEVERE, INCOMPLETE or ASK USER).")
+            self.observation = f"Verification Report: {missing}."
             if self.no_progress >= NO_PROGRESS_LIMIT:
-                self._end_unfinished_no_progress("the saved Verification Report has no readable verdict")
+                self._end_unfinished_no_progress(f"the saved Verification Report has {missing}")
+            return True
+        contradictory = (
+            (verdict == "PASSED" and disposition != "SETTLED")
+            or (verdict == "NOT PASSED" and disposition == "SETTLED")
+            or (verdict == "REVIEW INCOMPLETE" and disposition in {"SETTLED", "CORRECTION"})
+        )
+        if contradictory:
+            self.no_progress += 1
+            self.attempt_note = (f"The previous verification's verdict ({verdict}) contradicts its "
+                                 f"`Review disposition: {disposition}` line. Resolve the contradiction "
+                                 "and save one current Verification Report whose verdict and disposition "
+                                 "agree.")
+            self.observation = "Verification Report: contradictory verdict and disposition."
+            if self.no_progress >= NO_PROGRESS_LIMIT:
+                self._end_unfinished_no_progress("the saved Verification Report contradicts itself")
             return True
         with self.lock:
             self.verdicts.append(verdict)
-        if verdict == "PASSED":
-            self.observation = "Verification Report: PASSED."
-            self._end("complete", "Verification passed; the run is complete.")
-            return False
-        if verdict == "REVIEW INCOMPLETE":
+        if disposition == "INCOMPLETE" or verdict == "REVIEW INCOMPLETE":
             self.no_progress += 1
-            self.attempt_note = ("The previous verification did not finish: the report records REVIEW INCOMPLETE. "
-                                 "Investigate the cause and change the approach, then complete or rerun the review so "
-                                 "one current report states a full verdict.")
-            self.observation = "Verification Report: REVIEW INCOMPLETE."
+            self.attempt_note = ("The previous verification did not finish. Investigate the cause and "
+                                 "change the approach, then complete or rerun the review so one current "
+                                 "report states a full verdict and disposition.")
+            self.observation = "Verification Report: INCOMPLETE."
             if self.no_progress >= NO_PROGRESS_LIMIT:
-                self._end_unfinished_no_progress("verification stayed REVIEW INCOMPLETE")
+                self._end_unfinished_no_progress("verification stayed INCOMPLETE")
             return True
-        # NOT PASSED: the first becomes the best verified state; a later one
-        # must show evidenced improvement over the best one, not the previous.
-        if not self.not_passed_seen:
-            self.not_passed_seen = True
-            self.no_progress = 0
-            self._remember_best(report["text"])
-            self.observation = "Verification Report: NOT PASSED. Correction follows."
+        if disposition == "SETTLED":
+            self.observation = "Verification Report: SETTLED."
+            self._end("complete", "Verification settled with no unresolved finding; the run is complete.")
+            return False
+        if disposition == "CORRECTION":
+            self.observation = "Verification Report: findings require builder decisions. Correction follows."
             self.step = "correction"
             return True
-        improved, why_not = progress_of(report["text"])
-        if improved:
-            self.no_progress = 0
-            self.attempt_note = ""
-            self._remember_best(report["text"])
-            self.observation = "Verification Report: NOT PASSED, improved over the best verified state. Correction follows."
+        if disposition == "SEVERE":
+            # The owner decides; when the run resumes, the answer guides the
+            # correction that must fix the severe finding with evidence.
             self.step = "correction"
-            return True
-        self.no_progress += 1
-        self.attempt_note = (f"The previous correction did not improve on the best verified state ({why_not}). "
-                             "Investigate the cause and change the approach; rewording findings or trading one "
-                             "defect for another of equal effect is not improvement.")
-        self.observation = "Verification Report: NOT PASSED, not improved."
-        if self.no_progress >= NO_PROGRESS_LIMIT:
-            self._end_unfinished_no_progress(f"the report was Not improved ({why_not})")
-        return True
+            self._pause_for_owner(
+                "The Verification Report records an unresolved severe finding. A severe finding settles "
+                "only through a recorded fix with evidence that its harmful path was removed; a rejection "
+                "does not stand. Answer to guide the correction, or stop the run — the run cannot "
+                "complete while the severe finding stands.")
+            return False
+        # ASK USER: missing authority or an unresolved product choice.
+        self._pause_for_owner(
+            "The Verification Report's disposition is ASK USER: a missing authority or an unresolved "
+            "product choice needs your decision. Answer it and the verification is retried with your "
+            "decision, or stop the run.")
+        return False
 
-    def _remember_best(self, text):
-        self.best_report = text
-        folder = conversation.reserve_turn_folder(self.project)
-        _record_run_note(self.project, folder, RUN_EVIDENCE, self.run,
-                         {"Verdict": "NOT PASSED", "Order": "best verified state"},
-                         "\n# Best verified state — the report's full text\n\n" + quoted(text))
+    def _pause_for_owner(self, question):
+        with self.lock:
+            self.state = "paused-question"
+            self.questions = [question]
+            self.observation = "Paused for your decision."
+        self._observe(f"Paused: {question}")
 
     def _advance(self):
         self.no_progress = 0
@@ -833,11 +906,10 @@ class RunDriver:
         self._observe(f"Paused: {reason}")
 
     def _end_unfinished_no_progress(self, what):
-        best = "The best available artifact is the best verified state's NOT PASSED report." if self.best_report else (
-            "The best available artifact is the work already saved in the project.")
         self._end("unfinished",
                   f"The run ended unfinished after {NO_PROGRESS_LIMIT} attempts without progress: {what}. "
-                  f"{best} Nothing is claimed to have passed; the real check status is what the saved reports say.")
+                  "The best available artifact is the work already saved in the project. Nothing is "
+                  "claimed to have passed; the real check status is what the saved reports say.")
 
     def _end(self, outcome, reason):
         # The durable outcome note is written before the in-memory state claims
@@ -876,7 +948,6 @@ class RunDriver:
         return {"run": self.run, "state": state, "step": step, "entry": self.entry,
                 "reason": self.reason, "questions": list(self.questions),
                 "observation": self.observation, "no_progress": self.no_progress,
-                "best_verified": self.best_report is not None,
                 "verdicts": list(self.verdicts),
                 "model": self.step_requested, "reported_model": self.reported_model,
                 "elapsed_seconds": round(elapsed + (operation.get("elapsed_seconds", 0) if operation else 0), 1),

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Callable, Generic, Sequence, TypeVar
 
 from .errors import CallFailure, MalformedResponse, OraReviewError
 from .models import (
+    AnswerBoundary,
     CallAdapter,
     ReviewHistory,
     RunResult,
@@ -20,7 +22,8 @@ from .packet import (
     compose_instruction_prefix,
     extract_answer,
     load_repository_instructions,
-    parse_verdict,
+    parse_review_outcome,
+    parse_revision_outcome,
     resolve_global_instruction_master,
 )
 from .record import RunRecord
@@ -30,16 +33,12 @@ from .record import RunRecord
 class RunRequest:
     material: UserMaterial
     existing_answer: str | None = None
-    consensus: bool = False
     breadth: str = "analytical"
     run_root: Path | None = None
     initial_notices: tuple[str, ...] = ()
     #: Target repository / task-worktree path (launch metadata; ``None``
     #: for non-repository work).
     repository_path: Path | None = None
-    #: The assignment's applicable paths inside that repository, supplied
-    #: explicitly — never guessed from prompt text.
-    assigned_paths: tuple[Path | str, ...] = ()
     #: The original current user message for this turn, forwarded verbatim
     #: to every packet after the core; never recovered from history.
     current_turn_instructions: str | None = None
@@ -111,7 +110,6 @@ class ReviewRunner:
         self.packet_builder = packet_builder or PacketBuilder()
         self._peer_active = peer is not None
         self._notices: list[str] = []
-        self._transport_incomplete = False
         self._launch_notices: tuple[str, ...] = ()
         self._launch_prefix_provenance: str | None = None
         self.latest_user_deliverable_answer: str | None = None
@@ -120,12 +118,13 @@ class ReviewRunner:
     @contextmanager
     def _launch_run_context(self, request: RunRequest):
         """Load launch instructions once per run: the core from the resolved
-        global instruction master (when one is configured) and the target
-        repository's rules are resolved here and bound as the packet prefix,
-        so every packet this run builds — native, peer, reviser, recovery and
-        the Gear-3 fallback — prepends it. A launch with no configured master
-        proceeds without the core prefix and discloses that. Cleared in
-        ``finally``; a reused runner resolves afresh on its next run."""
+        global instruction master (when one loads) and the target
+        repository's root ``AGENTS.md`` are resolved here and bound as the
+        packet prefix, so every packet this run builds — native, peer,
+        reviser, recovery and the Gear-3 fallback — prepends it. A launch
+        with no master proceeds without the core prefix and discloses that.
+        Cleared in ``finally``; a reused runner resolves afresh on its next
+        run."""
         resolution = resolve_global_instruction_master()
         self._launch_notices = (resolution.notice,) if resolution.notice else ()
         self._launch_prefix_provenance = (
@@ -133,16 +132,9 @@ class ReviewRunner:
         )
         repository_instructions = None
         repository_root = None
-        if request.repository_path is None:
-            if request.assigned_paths:
-                raise OraReviewError(
-                    "Assigned paths require a repository target. Supply "
-                    "RunRequest.repository_path naming the target repository "
-                    "or task worktree, or remove the assigned paths."
-                )
-        else:
+        if request.repository_path is not None:
             repository_instructions, root = load_repository_instructions(
-                request.repository_path, request.assigned_paths,
+                request.repository_path,
             )
             repository_root = str(root)
         self.packet_builder.bind_instruction_prefix(compose_instruction_prefix(
@@ -166,11 +158,9 @@ class ReviewRunner:
         self._reset_route(request.initial_notices)
         self._validate_material(request.material)
         self.latest_user_deliverable_answer = request.existing_answer
-        ending = "consensus" if request.consensus else "one-pass"
         snapshot = self.packet_builder.snapshot_instructions(self.GEAR3_INSTRUCTIONS)
         record = RunRecord.create(
             tool="ora-gear-3",
-            ending=ending,
             route="external" if self._peer_active else "internal",
             native_engine=self.native_engine,
             native_model_selector=self.native_model_selector,
@@ -191,9 +181,7 @@ class ReviewRunner:
             status=history.status or "NOT PASSED",
             run_path=str(record.path),
             notices=tuple(self._notices),
-            technical_incomplete=(
-                cycle.technical_incomplete or self._transport_incomplete
-            ),
+            technical_incomplete=cycle.technical_incomplete,
         )
 
     def run_gear4(self, request: RunRequest) -> RunResult:
@@ -218,11 +206,9 @@ class ReviewRunner:
                 "Committed Breadth requires a separate non-empty commitment in the user's words."
             )
 
-        ending = "consensus" if request.consensus else "one-pass"
         snapshot = self.packet_builder.snapshot_instructions(self.GEAR4_INSTRUCTIONS)
         record = RunRecord.create(
             tool="ora-gear-4",
-            ending=ending,
             route="external" if self._peer_active else "internal",
             native_engine=self.native_engine,
             native_model_selector=self.native_model_selector,
@@ -280,14 +266,13 @@ class ReviewRunner:
         depth_cycle = self._review_cycle(
             material=request.material,
             current_answer=depth,
-            consensus=request.consensus,
             reviewer_role_files=("reviewer.md", "review-depth.md"),
             reviser_role_files=("reviser.md", "revise-depth.md"),
             reviewer_prefers_peer=True,
             reviser_prefers_peer=False,
             role_prefix="gear-4-depth",
             record=record,
-            one_pass_revised_status="NOT RE-REVIEWED",
+            one_pass_revised_status="REVISED — SETTLED, NOT RE-REVIEWED",
             user_deliverable=False,
         )
         record.append(
@@ -298,14 +283,13 @@ class ReviewRunner:
         breadth_cycle = self._review_cycle(
             material=request.material,
             current_answer=breadth,
-            consensus=request.consensus,
             reviewer_role_files=("reviewer.md", "review-breadth.md"),
             reviser_role_files=("reviser.md", "revise-breadth.md"),
             reviewer_prefers_peer=False,
             reviser_prefers_peer=True,
             role_prefix="gear-4-breadth",
             record=record,
-            one_pass_revised_status="NOT RE-REVIEWED",
+            one_pass_revised_status="REVISED — SETTLED, NOT RE-REVIEWED",
             user_deliverable=False,
         )
         record.append(
@@ -329,30 +313,41 @@ class ReviewRunner:
                 user_deliverable=True,
             ).value
         except _StageIncomplete as failure:
-            return self._gear3_fallback(request, record, [f"Consolidation: {failure}"])
+            return self._gear3_fallback(
+                request, record, [f"Consolidation: {failure}"], lane_material
+            )
 
         record.append_artifact("Complete original consolidated answer", consolidated)
         final_cycle = self._review_cycle(
             material=request.material,
             current_answer=consolidated,
-            consensus=request.consensus,
             reviewer_role_files=("reviewer.md", "review-consolidated.md"),
             reviser_role_files=("reviser.md", "revise-consolidated.md"),
             reviewer_prefers_peer=True,
             reviser_prefers_peer=False,
             role_prefix="gear-4-consolidated-answer",
             record=record,
-            one_pass_revised_status="ONE PASS COMPLETE — REVISED, NOT RE-REVIEWED",
+            one_pass_revised_status="SETTLED AFTER CORRECTION — REVISED, NOT RE-REVIEWED",
             extra_stage_material=lane_material,
             user_deliverable=True,
         )
 
         history = final_cycle.history
+        # A lane that ended severe never had a revision, so nothing in this
+        # run recorded a fix for its severe finding: a passing consolidated
+        # review cannot settle it, and the run never reports success.
+        if any(
+            (cycle.history.status or "").startswith("SEVERE")
+            for cycle in (depth_cycle, breadth_cycle)
+        ) and (
+            history.status == "PASSED"
+            or (history.status or "").startswith("SETTLED")
+        ):
+            history.status = "SEVERE — UNRESOLVED, OWNER DECISION REQUIRED"
         technical_incomplete = (
             depth_cycle.technical_incomplete
             or breadth_cycle.technical_incomplete
             or final_cycle.technical_incomplete
-            or self._transport_incomplete
         )
         record.finish(history.status or "NOT PASSED", self._notices)
         return RunResult(
@@ -363,7 +358,12 @@ class ReviewRunner:
             technical_incomplete=technical_incomplete,
         )
 
-    def _gear3_graph(self, request: RunRequest, record: RunRecord) -> CycleResult:
+    def _gear3_graph(
+        self,
+        request: RunRequest,
+        record: RunRecord,
+        extra_stage_material: Sequence[StageMaterial] = (),
+    ) -> CycleResult:
         if request.existing_answer is None:
             try:
                 current = self._answer_call(
@@ -394,15 +394,15 @@ class ReviewRunner:
         return self._review_cycle(
             material=request.material,
             current_answer=current,
-            consensus=request.consensus,
             reviewer_role_files=("reviewer.md",),
             reviser_role_files=("reviser.md",),
             reviewer_prefers_peer=True,
             reviser_prefers_peer=False,
             role_prefix="gear-3",
             record=record,
-            one_pass_revised_status="ONE PASS COMPLETE — REVISED, NOT RE-REVIEWED",
+            one_pass_revised_status="SETTLED AFTER CORRECTION — REVISED, NOT RE-REVIEWED",
             user_deliverable=True,
+            extra_stage_material=extra_stage_material,
         )
 
     def _gear3_fallback(
@@ -410,19 +410,22 @@ class ReviewRunner:
         request: RunRequest,
         record: RunRecord,
         failures: Sequence[str],
+        lane_material: Sequence[StageMaterial] = (),
     ) -> RunResult:
         marker = "GEAR 4 UNAVAILABLE — GEAR 3 FALLBACK"
         details = "; ".join(failures) if failures else "Gear 4 input was unavailable."
         notice = f"{marker}. {details}"
         self._notices.append(notice)
         record.append("Gear 4 fallback", notice)
-        self._transport_incomplete = False
         fallback_request = RunRequest(
             material=request.material,
-            consensus=request.consensus,
             run_root=request.run_root,
         )
-        cycle = self._gear3_graph(fallback_request, record)
+        # The completed lanes' findings — including any unresolved severe
+        # review — travel into the fallback's review and revision stages, so
+        # a transport failure cannot drop a known finding from the run that
+        # replaces them.
+        cycle = self._gear3_graph(fallback_request, record, lane_material)
         history = cycle.history
         record.finish(history.status or "NOT PASSED", self._notices)
         return RunResult(
@@ -430,9 +433,7 @@ class ReviewRunner:
             status=history.status or "NOT PASSED",
             run_path=str(record.path),
             notices=tuple(self._notices),
-            technical_incomplete=(
-                cycle.technical_incomplete or self._transport_incomplete
-            ),
+            technical_incomplete=cycle.technical_incomplete,
         )
 
     @staticmethod
@@ -464,7 +465,6 @@ class ReviewRunner:
         *,
         material: UserMaterial,
         current_answer: str,
-        consensus: bool,
         reviewer_role_files: Sequence[str],
         reviser_role_files: Sequence[str],
         reviewer_prefers_peer: bool,
@@ -475,107 +475,93 @@ class ReviewRunner:
         user_deliverable: bool,
         extra_stage_material: Sequence[StageMaterial] = (),
     ) -> CycleResult:
+        """One review, then at most one builder-decided correction.
+
+        The review's disposition line routes the cycle. A complete revision
+        that fixes or reasonably declines every non-severe finding ends the
+        cycle — no further review is forced after that builder decision. An
+        unresolved severe finding never becomes a success and is returned to
+        the owner with the answer and record preserved.
+        """
         history = ReviewHistory(
             original_answer=current_answer,
             current_answer=current_answer,
         )
-        review_limit = 3 if consensus else 1
 
-        for review_number in range(1, review_limit + 1):
-            stage = [
-                *extra_stage_material,
-                StageMaterial("COMPLETE CURRENT ANSWER", history.current_answer),
-            ]
-            for index, review in enumerate(history.reviews, start=1):
-                stage.append(StageMaterial(f"PRIOR COMPLETE REVIEW {index}", review))
-                if index <= len(history.revisions):
-                    stage.append(
-                        StageMaterial(
-                            f"PRIOR COMPLETE REVISER RESPONSE {index}",
-                            history.revisions[index - 1],
-                        )
-                    )
-            try:
-                reviewed = self._review_call(
-                    material=material,
-                    role_files=reviewer_role_files,
-                    stage_material=stage,
-                    prefer_peer=reviewer_prefers_peer,
-                    role=f"{role_prefix}-review-{review_number}",
-                    record=record,
-                    record_title=f"{role_prefix} review {review_number}",
-                )
-            except _StageIncomplete as failure:
-                notice = str(failure)
-                history.notices.append(notice)
-                self._notices.append(notice)
-                history.status = "NOT PASSED — REVIEW INCOMPLETE"
-                return CycleResult(history, True)
-
-            history.reviews.append(reviewed.response)
-            history.verdicts.append(reviewed.value)
-            record.append_artifact(
-                f"{role_prefix} complete review {review_number}", reviewed.response
+        stage = [
+            *extra_stage_material,
+            StageMaterial("COMPLETE CURRENT ANSWER", history.current_answer),
+        ]
+        try:
+            reviewed = self._review_call(
+                material=material,
+                role_files=reviewer_role_files,
+                stage_material=stage,
+                prefer_peer=reviewer_prefers_peer,
+                role=f"{role_prefix}-review-1",
+                record=record,
+                record_title=f"{role_prefix} review 1",
             )
-            if reviewed.value == "PASS":
-                history.status = "PASSED"
-                return CycleResult(history, False)
+        except _StageIncomplete as failure:
+            notice = str(failure)
+            history.notices.append(notice)
+            self._notices.append(notice)
+            history.status = "NOT PASSED — REVIEW INCOMPLETE"
+            return CycleResult(history, True)
 
-            if consensus and review_number == review_limit:
-                history.status = "NOT PASSED"
-                return CycleResult(history, False)
+        history.reviews.append(reviewed.response)
+        disposition = reviewed.value
+        record.append_artifact(
+            f"{role_prefix} complete review 1", reviewed.response
+        )
+        if disposition == "SETTLED":
+            history.status = "PASSED"
+            return CycleResult(history, False)
+        if disposition == "SEVERE":
+            history.status = "SEVERE — UNRESOLVED, OWNER DECISION REQUIRED"
+            return CycleResult(history, False)
+        if disposition == "ASK USER":
+            history.status = "ASK USER — OWNER DECISION REQUIRED"
+            return CycleResult(history, False)
 
-            revision_number = len(history.revisions) + 1
-            revision_stage = [
-                *extra_stage_material,
-                StageMaterial("COMPLETE CURRENT ANSWER", history.current_answer),
-                StageMaterial("COMPLETE CURRENT REVIEW", reviewed.response),
-            ]
-            for index, review in enumerate(history.reviews[:-1], start=1):
-                revision_stage.append(
-                    StageMaterial(f"PRIOR COMPLETE REVIEW {index}", review)
-                )
-                if index <= len(history.revisions):
-                    revision_stage.append(
-                        StageMaterial(
-                            f"PRIOR COMPLETE REVISER RESPONSE {index}",
-                            history.revisions[index - 1],
-                        )
-                    )
-            try:
-                revised = self._answer_call(
-                    material=material,
-                    role_files=reviser_role_files,
-                    output_file="output-revision.md",
-                    stage_material=revision_stage,
-                    prefer_peer=reviser_prefers_peer,
-                    role=f"{role_prefix}-revision-{revision_number}",
-                    record=record,
-                    record_title=f"{role_prefix} revision {revision_number}",
-                    user_deliverable=user_deliverable,
-                )
-            except _StageIncomplete as failure:
-                notice = str(failure)
-                history.notices.append(notice)
-                self._notices.append(notice)
-                history.status = "NOT PASSED — REVISION INCOMPLETE"
-                return CycleResult(history, True)
-
-            history.revisions.append(revised.response)
-            history.current_answer = revised.value
-            record.append_artifact(
-                f"{role_prefix} complete reviser response {revision_number}",
-                revised.response,
+        revision_stage = [
+            *extra_stage_material,
+            StageMaterial("COMPLETE CURRENT ANSWER", history.current_answer),
+            StageMaterial("COMPLETE CURRENT REVIEW", reviewed.response),
+        ]
+        try:
+            revision = self._answer_call(
+                material=material,
+                role_files=reviser_role_files,
+                stage_material=revision_stage,
+                prefer_peer=reviser_prefers_peer,
+                role=f"{role_prefix}-revision-1",
+                record=record,
+                record_title=f"{role_prefix} revision 1",
+                user_deliverable=False,
+                output_file="output-revision.md",
+                parse=partial(parse_revision_outcome, review=reviewed.response),
             )
-            record.append_artifact(
-                f"{role_prefix} complete current answer after revision {revision_number}",
-                revised.value,
-            )
-            if not consensus:
-                history.status = one_pass_revised_status
-                return CycleResult(history, False)
-
-        raise AssertionError("The fixed review loop exceeded its declared ceiling.")
+        except _StageIncomplete as failure:
+            notice = str(failure)
+            history.notices.append(notice)
+            self._notices.append(notice)
+            history.status = "NOT PASSED — REVISION INCOMPLETE"
+            return CycleResult(history, True)
+        if user_deliverable:
+            self.latest_user_deliverable_answer = revision.value.answer
+        history.revisions.append(revision.response)
+        history.current_answer = revision.value.answer
+        record.append_artifact(
+            f"{role_prefix} complete reviser response 1", revision.response
+        )
+        if revision.value.disposition == "SEVERE":
+            history.status = "SEVERE — UNRESOLVED, OWNER DECISION REQUIRED"
+        elif revision.value.disposition == "ASK USER":
+            history.status = "ASK USER — OWNER DECISION REQUIRED"
+        else:
+            history.status = one_pass_revised_status
+        return CycleResult(history, False)
 
     def _answer_call(
         self,
@@ -589,17 +575,9 @@ class ReviewRunner:
         record_title: str,
         user_deliverable: bool,
         output_file: str = "output-answer.md",
-    ) -> _ParsedCall[str]:
-        collision_bodies = [
-            material.original,
-            *material.later_user_messages,
-            *material.prior_assistant_turns,
-            *material.governing_context,
-            *(item.body for item in stage_material),
-        ]
-        if material.commitment is not None:
-            collision_bodies.append(material.commitment)
-        boundary = self.packet_builder.answer_boundary(collision_bodies)
+        parse: Callable[[str, AnswerBoundary], T] = extract_answer,
+    ) -> _ParsedCall[T]:
+        boundary = self.packet_builder.answer_boundary()
         packet = self.packet_builder.build(
             material=material,
             role_files=role_files,
@@ -613,7 +591,7 @@ class ReviewRunner:
             role=role,
             record=record,
             record_title=record_title,
-            parser=lambda response: extract_answer(response, boundary),
+            parser=lambda response: parse(response, boundary),
         )
         if user_deliverable:
             self.latest_user_deliverable_answer = result.value
@@ -642,7 +620,7 @@ class ReviewRunner:
             role=role,
             record=record,
             record_title=record_title,
-            parser=parse_verdict,
+            parser=parse_review_outcome,
         )
 
     def _execute_with_recovery(
@@ -655,6 +633,13 @@ class ReviewRunner:
         record_title: str,
         parser: Callable[[str], T],
     ) -> _ParsedCall[T]:
+        """Run one role call with its ordinary technical retry.
+
+        A native role gets one fresh internal retry. A peer role that stays
+        unavailable or malformed after its attempt switches the run to fresh
+        internal calls through the already selected native engine and tries
+        once more there; no other peer or provider is ever chosen.
+        """
         use_peer = prefer_peer and self._peer_active and self.peer is not None
         adapter = self.peer if use_peer else self.native
         attempts = 1 if use_peer else 2
@@ -663,12 +648,10 @@ class ReviewRunner:
             try:
                 try:
                     response = adapter.call(packet, role=role)
-                    if not use_peer:
-                        self._record_native_model_attribution(
-                            record, record_title, role
-                        )
+                    if use_peer:
+                        self._record_peer_model_attribution(record, record_title, role)
                     else:
-                        self._record_peer_model_attribution(
+                        self._record_native_model_attribution(
                             record, record_title, role
                         )
                 finally:
@@ -680,33 +663,11 @@ class ReviewRunner:
                 value = parser(response)
                 return _ParsedCall(response, value)
             except (CallFailure, MalformedResponse) as failure:
-                if isinstance(failure, CallFailure) and failure.usable_response is not None:
-                    try:
-                        value = parser(failure.usable_response)
-                    except MalformedResponse:
-                        pass
-                    else:
-                        detail = failure.display()
-                        transport = (
-                            "an Agent Bridge"
-                            if use_peer
-                            else f"the native `{self.native_engine}` engine"
-                        )
-                        notice = (
-                            f"Role `{role}` used a complete response found after "
-                            f"{transport} transport failure: {detail}"
-                        )
-                        if use_peer:
-                            self._peer_active = False
-                            notice += (
-                                " Remaining peer-owned roles will use fresh internal "
-                                f"`{self.native_engine}` calls."
-                            )
-                        self._notices.append(notice)
-                        self._transport_incomplete = True
-                        record.append(f"{record_title} transport notice", notice)
-                        return _ParsedCall(failure.usable_response, value)
-                detail = failure.display() if isinstance(failure, CallFailure) else str(failure)
+                detail = (
+                    failure.display()
+                    if isinstance(failure, CallFailure)
+                    else str(failure)
+                )
                 record.append(
                     f"{record_title} technical attempt {attempt}",
                     detail,
@@ -806,7 +767,6 @@ class ReviewRunner:
     def _reset_route(self, initial_notices: Sequence[str]) -> None:
         self._peer_active = self.peer is not None
         self._notices = [*self._launch_notices, *initial_notices]
-        self._transport_incomplete = False
 
     @staticmethod
     def _validate_material(material: UserMaterial) -> None:

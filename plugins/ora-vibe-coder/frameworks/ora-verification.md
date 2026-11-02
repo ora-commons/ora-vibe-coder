@@ -42,7 +42,7 @@ Prefer one user-selected, ready, project-capable external target through the rel
 1. If the user already supplied a target, check that target's current readiness and project capability.
 2. Otherwise use current Bridge readiness results to show the ready project-capable choices, recommend one with provenance different from the implementation agent, explain why, and ask for one selection. Do not create a default ranking, choose silently, or rotate peers.
 3. Create one project session bound to that peer with the inert initiator `ora-verification`. Give it Project access only when the peer is qualified for project work.
-4. Send one complete inert Markdown review request. Include the entire basis, role source, verifier assignment and return destination, and material finding and status contract under the shared packet rules; never assume an earlier Bridge message is context.
+4. Send one complete inert Markdown review request. Include the entire basis, role source, verifier assignment and return destination, and the reviewer rule and disposition contract under the shared packet rules; never assume an earlier Bridge message is context.
 5. Run the bounded session, read the returned response, and retain its temporary record only while correction or recovery needs it.
 
 Bridge constraints:
@@ -74,9 +74,9 @@ Require direct inspection of the whole current candidate for:
 - consistency between implementation and every supplied documentation product; and
 - whether every readiness statement in the Verification Report would be true.
 
-These are obligations, not finding quotas. Preferences about wording, abstraction, tracking, extra tests, documentation style, or speculative improvements are not findings. Any actual material defect forces `NOT PASSED`.
+These are obligations, not finding quotas. Follow the shared contract's reviewer rule in full.
 
-Each material finding must state the observed defect or exact unverified risk, direct evidence, material consequence, smallest correction, and earliest owning stage:
+Each finding names its earliest owning stage:
 
 - Specification owns a missing or wrong WHAT.
 - Planning owns a correction that changes or invalidates the approved HOW, affected architecture, consequential dependency, execution sequence, risk coverage, or finish line.
@@ -100,21 +100,21 @@ Correction routing:
 - Standalone Verification stops with findings and its recommendation; it never invokes a correction stage secretly.
 - In the guided path, return the complete correction set to the owner for the earliest responsible stage.
 - Specification and Plan amendments follow shared review, acceptance, custody, and refresh rules; retained user approvals remain required.
-- Programming corrects implementation and affected documentation; affected authorized checks are refreshed; and the whole current candidate receives another fresh cumulative Verification. Do not review only the last fix or convert an unresolved defect into a final limitation.
+- Programming corrects implementation and affected documentation; affected authorized checks are refreshed. The correction fixes or rejects each finding with recorded reasons, and a settled correction completes the work as **completed after correction** — no further verification pass is forced after that builder decision. An unresolved severe finding goes to the owner and never completes.
 
 ## Verdict and the Verification Report
 
-Save the actual verdict in opening YAML `status: PASSED`, `status: NOT PASSED` or `status: INCOMPLETE`, with substantive evidence and the exact reason in the report body. NOT PASSED means a completed assessment found required deficiencies; INCOMPLETE means required evidence or an essential prerequisite prevents a supported conclusion. Preserve existing vault metadata. Truthfulness rules:
+Save the actual verdict in opening YAML `status: PASSED`, `status: NOT PASSED` or `status: INCOMPLETE`, with substantive evidence and the exact reason in the report body. NOT PASSED means a completed assessment found required deficiencies; INCOMPLETE means required evidence or an essential prerequisite prevents a supported conclusion. The report body also carries exactly one current `Review disposition:` line — `SETTLED`, `CORRECTION`, `SEVERE`, `INCOMPLETE` or `ASK USER` — outside quotations and examples, per the shared contract. Preserve existing vault metadata. Truthfulness rules:
 
-- `PASSED` only when no material finding or unverified material risk remains, the authorized checks that exist pass, the implementation conforms to the available requirements where they exist, important content and data are preserved, and failure and recovery behavior is sound.
+- `PASSED` (with `SETTLED`) only when no actionable finding or unverified risk with identified harm remains, the authorized checks that exist pass, the implementation conforms to the available requirements where they exist, important content and data are preserved, and failure and recovery behavior are sound.
 - Neither the report's existence nor an older passing result proves that newer code passed. A saved verdict describes the implementation actually inspected, not automatically newer code.
-- A fallback, unrepeated, or transport-failed review is never recorded as a completed passing review.
+- A fallback, unrepeated, or transport-failed review is never recorded as a completed passing review; a missing, duplicate, unknown or contradictory disposition line reads as incomplete.
 
 Save or update one current Verification Report after actual verification — for passing, failing, and incomplete reviews alike. Update the current report after subsequent verification rather than accumulating superseded ones. It records:
 
 - the implementation and available requirements inspected;
 - the actual verdict and the supporting check evidence;
-- findings and recommended corrections;
+- findings and recommended corrections, each finding enumerated on its own line with a stable label the correction can cite — `- R1 — <finding>`, `- R2 — …`, and `S1`, `S2` … for severe findings;
 - incomplete evidence and remaining work; and
 - a truthful readiness conclusion and the relevant delivered materials.
 

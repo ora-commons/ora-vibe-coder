@@ -27,13 +27,21 @@ class AnswerBoundary:
     end: str
 
 
+@dataclass(frozen=True)
+class RevisionOutcome:
+    """One parsed correction result: the complete answer plus the single
+    disposition line the reviser emitted."""
+
+    answer: str
+    disposition: str
+
+
 @dataclass
 class ReviewHistory:
     original_answer: str
     current_answer: str
     reviews: list[str] = field(default_factory=list)
     revisions: list[str] = field(default_factory=list)
-    verdicts: list[str] = field(default_factory=list)
     status: str | None = None
     notices: list[str] = field(default_factory=list)
 
@@ -48,7 +56,11 @@ class RunResult:
 
     @property
     def exit_code(self) -> int:
-        return 1 if self.technical_incomplete else 0
+        # A demonstrated unresolved severe finding is never a clean success,
+        # even though the answer and record are preserved and delivered.
+        if self.technical_incomplete or self.status.startswith("SEVERE"):
+            return 1
+        return 0
 
 
 class CallAdapter(Protocol):

@@ -168,10 +168,14 @@ def reply_with_questions(*questions):
             + "\n".join(f"- {question}" for question in questions) + "\n")
 
 
-def report(verdict, progress=None):
+def report(verdict, disposition=None, findings=None):
+    if disposition is None:
+        disposition = ("SETTLED" if verdict.startswith("PASSED") else
+                       "INCOMPLETE" if "INCOMPLETE" in verdict else "CORRECTION")
     text = f"# Verification Report\n\nVerdict: {verdict}\n\nWhat was checked and found.\n"
-    if progress is not None:
-        text += f"\n## Progress\n\n{progress}\n"
+    if findings is not None:
+        text += "\n## Findings\n\n" + "\n".join(f"- {item}" for item in findings) + "\n"
+    text += f"\nReview disposition: {disposition}\n"
     return text
 
 
@@ -768,11 +772,11 @@ class RunCase(unittest.TestCase):
         paused_verification = self.settle(driver, lambda status: status["state"] == "paused-question" and status["step"] == "verification")
         self.assertEqual(paused_verification["step"], "verification")
         self.directive(3, reply="Verified.\n", writes={str(root / "One — Verification Report.md"): report("PASSED")})
-        driver.receive_answer("Lawrence signs off.")
+        driver.receive_answer("The work is signed off.")
         self.settle(driver, lambda status: status["state"] == "complete")
         requests = self.step_requests(project)
         self.assertIn("Use SQLite everywhere.", requests[1])
-        self.assertIn("Lawrence signs off.", requests[3])
+        self.assertIn("The work is signed off.", requests[3])
         # The answer's picture rode the resumed build step too, its notes tied
         # to it, and was consumed there: the verification step carries no copy
         # of it. Its original stays retained from acceptance onward, beside
@@ -838,28 +842,80 @@ class RunCase(unittest.TestCase):
             self.assertIn("Investigate the cause", repeat)
         self.assertEqual(driver.status()["verdicts"], [])
 
-    def test_not_passed_goes_to_correction_then_verification_passes(self):
-        project = self.project()
-        root = project.root
-        (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
-        (root / "Plan.md").write_text("# P\n\n## Approach\n\nFilled.\n", encoding="utf-8")
-        self.directive(0, reply="Built.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-        self.directive(1, reply="Found one defect.\n", writes={str(root / "One — Verification Report.md"): report("NOT PASSED")})
-        self.directive(2, reply="Corrected the defect.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nCorrected.\n"})
-        self.directive(3, reply="Verified again.\n", writes={str(root / "One — Verification Report.md"): report("PASSED")})
-        driver = self.start(project, "build", tool="zcode")
-        at_correction = self.settle(driver, lambda status: status["step"] == "correction" or status["state"] == "complete")
-        final = self.settle(driver, lambda status: status["state"] == "complete")
-        self.assertEqual(final["verdicts"], ["NOT PASSED", "PASSED"])
-        steps = [turn["fields"].get("Run-Step") for turn in
-                 (conversation.read_turn(folder) for folder in conversation.turn_folders(project))
-                 if turn["purpose"] == conversation.PURPOSE_WORK and turn["fields"].get("Run")]
-        self.assertEqual(steps, ["build", "verification", "correction", "verification"])
-        calls = [json.loads(line) for line in self.argv_log.read_text(encoding="utf-8").splitlines()]
-        self.assertEqual([call["work_permission"] for call in calls if call["purpose"] == "work"],
-                         ["full-access", None, "full-access", None])
+    def test_not_passed_goes_to_correction_which_settles_and_completes(self):
+        with self.subTest(name="multi-item correction settles and completes"):
+            project = self.project()
+            root = project.root
+            (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
+            (root / "Plan.md").write_text("# P\n\n## Approach\n\nFilled.\n", encoding="utf-8")
+            self.directive(0, reply="Built.\n", writes={
+                str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
+            # The report enumerates both findings with the stable labels the
+            # correction must cite back.
+            self.directive(1, reply="Found two defects.\n", writes={str(root / "One — Verification Report.md"): report(
+                "NOT PASSED", disposition="CORRECTION",
+                findings=["R1 — the login check accepts an empty password.",
+                          "R2 — the export omits the trailing summary row."])})
+            self.directive(2, reply="Corrected both defects.\n", writes={
+                str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\n"
+                                                           "- R1 — FIXED — corrected the login check; the empty-password case now fails.\n"
+                                                           "- R2 — FIXED — added the summary row; the export test passes.\n\n"
+                                                           "Review disposition: SETTLED\n"})
+            driver = self.start(project, "build", tool="zcode")
+            final = self.settle(driver, lambda status: status["state"] == "complete")
+            self.assertEqual(final["verdicts"], ["NOT PASSED"])
+            self.assertIn("completed after correction", final["reason"])
+            steps = [turn["fields"].get("Run-Step") for turn in
+                     (conversation.read_turn(folder) for folder in conversation.turn_folders(project))
+                     if turn["purpose"] == conversation.PURPOSE_WORK and turn["fields"].get("Run")]
+            self.assertEqual(steps, ["build", "verification", "correction"])
+            # The settled correction completes the run; verification is never
+            # selected again after it.
+            self.assertEqual(len(self.step_requests(project, "verification")), 1)
+            calls = [json.loads(line) for line in self.argv_log.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([call["work_permission"] for call in calls if call["purpose"] == "work"],
+                             ["full-access", None, "full-access"])
+        with self.subTest(name="a severe finding settles only through its own recorded fix"):
+            project = self.project("Two")
+            root = project.root
+            (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
+            (root / "Plan.md").write_text("# P\n\n## Approach\n\nFilled.\n", encoding="utf-8")
+            self.directive(3, reply="Built.\n", writes={
+                str(root / "Two — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
+            # A severe report pauses for the owner's decision; its findings
+            # carry the S label that the settlement must eventually fix.
+            self.directive(4, reply="Found a severe defect.\n", writes={str(root / "Two — Verification Report.md"): report(
+                "NOT PASSED", disposition="SEVERE",
+                findings=["S1 — the export sends the collected addresses to an outside endpoint.",
+                          "R1 — the login check accepts an empty password."])})
+            driver = self.start(project, "build")
+            paused = self.settle(driver, lambda status: status["state"] == "paused-question")
+            self.assertIn("severe finding", paused["questions"][0])
+            # The owner's answer guides the correction; the run resumes there.
+            # This attempt fixes the unrelated finding and tries to reject the
+            # severe one — neither erases it.
+            self.directive(5, reply="Rejected the integration claim.\n", writes={
+                str(root / "Two — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\n"
+                                                           "- S1 — REJECTED — the outside send is the vendor's required integration; no change.\n"
+                                                           "- R1 — FIXED — corrected the login check; the empty-password case now fails.\n\n"
+                                                           "Review disposition: SETTLED\n"})
+            self.directive(6, reply="Resolved the severe finding.\n", writes={
+                str(root / "Two — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\n"
+                                                           "- S1 — FIXED — removed the outside send; the export writes only the local file, verified by its check.\n"
+                                                           "- R1 — FIXED — corrected the login check; the empty-password case now fails.\n\n"
+                                                           "Review disposition: SETTLED\n"})
+            driver.receive_answer("Remove the outside send; keep everything else.", [], [])
+            final = self.settle(driver, lambda status: status["state"] == "complete", timeout=60)
+            self.assertEqual(final["verdicts"], ["NOT PASSED"])
+            self.assertIn("completed after correction", final["reason"])
+            corrections = self.step_requests(project, "correction")
+            self.assertEqual(len(corrections), 2)
+            # An unrelated fix cannot settle the severe finding: the retry
+            # names S1 itself.
+            self.assertIn("the severe finding(s) S1", corrections[1])
+            self.assertIn("own recorded fix with evidence", corrections[1])
+            # Verification is never selected again after the correction.
+            self.assertEqual(len(self.step_requests(project, "verification")), 1)
 
     def test_repeated_review_incomplete_repeats_with_changed_approach_and_ends_unfinished(self):
         project = self.project()
@@ -875,14 +931,14 @@ class RunCase(unittest.TestCase):
                     report("NOT PASSED — REVIEW INCOMPLETE") + f"\nAttempt {index}.\n"})
         driver = self.start(project, "build")
         final = self.settle(driver, lambda status: status["state"] == "unfinished")
-        self.assertIn("REVIEW INCOMPLETE", final["reason"])
+        self.assertIn("stayed INCOMPLETE", final["reason"])
         requests = self.step_requests(project, "verification")
         self.assertEqual(len(requests), 3)
         for repeat in requests[1:]:
             self.assertIn("did not finish", repeat)
             self.assertIn("change the approach", repeat)
 
-    def test_improved_with_evidence_keeps_corrections_going_past_three_attempts(self):
+    def test_correction_that_is_not_settled_is_retried_then_settling_completes(self):
         project = self.project()
         root = project.root
         (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
@@ -890,29 +946,39 @@ class RunCase(unittest.TestCase):
         (root / "One — Programming Result.md").write_text("# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n", encoding="utf-8")
         _n, writes = self.build_step_ok(root)
         self.directive(0, reply="Built for the run.\n", writes=writes)
-        self.directive(1, reply="First check.\n", writes={str(root / "One — Verification Report.md"):
-            report("NOT PASSED", "The login form fails for every user.\n\n- The login form rejected all users in the best verified state; now only SSO users fail, shown by the login check.\n")})
-        index = 2
-        for round_index in range(1, 5):
-            self.directive(index, reply=f"Correction {round_index}.\n", writes={
-                str(root / "One — Programming Result.md"): f"# Programming Result\n\nStatus: COMPLETE\n\nCorrection {round_index}.\n"})
-            self.directive(index + 1, reply=f"Check {round_index}.\n", writes={
-                str(root / "One — Verification Report.md"):
-                    report("NOT PASSED", f"Improved\n\n- Round {round_index}: fewer users fail the login check than in the best verified state, shown by the login check.\n")})
-            index += 2
-        # The fifth correction — still showing improvement, so still continuing —
-        # is the one the final PASSED verification follows.
-        self.directive(index, reply="Correction five.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nCorrection five.\n"})
-        self.directive(index + 1, reply="All fixed.\n", writes={str(root / "One — Verification Report.md"): report("PASSED")})
+        self.directive(1, reply="Found two defects.\n", writes={str(root / "One — Verification Report.md"):
+            report("NOT PASSED", disposition="CORRECTION",
+                   findings=["R1 — the login check accepts an empty password.",
+                             "R2 — the export omits the trailing summary row."])})
+        # The first correction is genuinely unfinished: its saved result
+        # declares INCOMPLETE, so nothing is settled yet.
+        self.directive(2, reply="Interrupted mid-correction.\n", writes={
+            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\n"
+                                                       "Work began on the defect.\n\nReview disposition: INCOMPLETE\n"})
+        # The retry records a decision for the report's findings — one fix
+        # and one reasoned rejection — and settles, completing the run
+        # without another verification call.
+        self.directive(3, reply="Resolved both.\n", writes={
+            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\n"
+                                                       "- R1 — FIXED — corrected the login check; the empty-password case now fails.\n"
+                                                       "- R2 — REJECTED — the summary row is outside the approved Specification; no change.\n\n"
+                                                       "Review disposition: SETTLED\n"})
         driver = self.start(project, "build")
         final = self.settle(driver, lambda status: status["state"] == "complete", timeout=60)
-        self.assertEqual(len(final["verdicts"]), 6)
-        self.assertEqual(final["verdicts"][:5], ["NOT PASSED"] * 5)
-        self.assertEqual(final["verdicts"][5], "PASSED")
-        self.assertEqual(final["no_progress"], 0)
+        self.assertEqual(final["verdicts"], ["NOT PASSED"])
+        self.assertIn("completed after correction", final["reason"])
+        steps = [turn["fields"].get("Run-Step") for turn in
+                 (conversation.read_turn(folder) for folder in conversation.turn_folders(project))
+                 if turn["purpose"] == conversation.PURPOSE_WORK and turn["fields"].get("Run")]
+        self.assertEqual(steps, ["build", "verification", "correction", "correction"])
+        corrections = self.step_requests(project, "correction")
+        self.assertEqual(len(corrections), 2)
+        self.assertIn("declared `INCOMPLETE`", corrections[1])
+        self.assertIn("Actually resolve every recorded finding", corrections[1])
+        # Verification is never selected again after the correction.
+        self.assertEqual(len(self.step_requests(project, "verification")), 1)
 
-    def test_not_improved_counts_no_progress_and_best_report_is_resupplied(self):
+    def test_unsettled_corrections_count_no_progress_and_end_unfinished(self):
         project = self.project()
         root = project.root
         (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
@@ -920,36 +986,24 @@ class RunCase(unittest.TestCase):
         (root / "One — Programming Result.md").write_text("# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n", encoding="utf-8")
         _n, writes = self.build_step_ok(root)
         self.directive(0, reply="Built for the run.\n", writes=writes)
-        self.directive(1, reply="First check.\n", writes={str(root / "One — Verification Report.md"):
-            report("NOT PASSED", "Improved\n\n- BEST-STATE-MARKER-ONE everything failed here.\n")})
-        self.directive(2, reply="Correction one.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nCorrection one.\n"})
-        self.directive(3, reply="Second check.\n", writes={str(root / "One — Verification Report.md"):
-            report("NOT PASSED", "Not improved\n\nSECOND-REPORT-MARKER\n")})
-        self.directive(4, reply="Correction two.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nCorrection two.\n"})
-        self.directive(5, reply="Third check.\n", writes={str(root / "One — Verification Report.md"):
-            report("NOT PASSED", "Improved\n")})
-        self.directive(6, reply="Correction three.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nCorrection three.\n"})
-        self.directive(7, reply="Fourth check.\n", writes={str(root / "One — Verification Report.md"):
-            report("NOT PASSED", "")})
+        self.directive(1, reply="Found one defect.\n", writes={str(root / "One — Verification Report.md"):
+            report("NOT PASSED", disposition="CORRECTION",
+                   findings=["R1 — the login check accepts an empty password."])})
+        for index in range(2, 5):
+            # Each correction saves a success word alone, with no disposition
+            # of the finding and no settled declaration.
+            self.directive(index, reply=f"Correction attempt {index} done.\n", writes={
+                str(root / "One — Programming Result.md"): f"# Programming Result\n\nStatus: COMPLETE\n\nCorrection attempt {index}.\n"})
         driver = self.start(project, "build")
         final = self.settle(driver, lambda status: status["state"] == "unfinished")
-        self.assertIn("Not improved", final["reason"])
-        requests = self.step_requests(project, "verification")
-        self.assertEqual(len(requests), 4)
-        # From the second verification onward the request supplies the best
-        # verified state's report — the first one, never merely the previous
-        # (Not improved) one.
-        for later in requests[1:]:
-            self.assertIn("## The best verified state", later)
-            at = later.index("## The best verified state")
-            end = later.find("\n## Changed approach", at)
-            quoted = later[at:end if end > 0 else None]
-            self.assertIn("BEST-STATE-MARKER-ONE", quoted)
-            self.assertNotIn("SECOND-REPORT-MARKER", quoted)
-            self.assertIn("Progress", later)
+        self.assertIn("did not carry one current settled", final["reason"])
+        corrections = self.step_requests(project, "correction")
+        self.assertEqual(len(corrections), 3)
+        for repeat in corrections[1:]:
+            self.assertIn("Actually resolve every recorded finding", repeat)
+            self.assertIn("A saved success word alone is not a settled correction", repeat)
+        # No second verification dispatch ever followed the correction.
+        self.assertEqual(len(self.step_requests(project, "verification")), 1)
 
     def test_stop_run_records_unfinished_without_replay(self):
         project = self.project()
@@ -1166,9 +1220,12 @@ class RunCase(unittest.TestCase):
             {str(root / "Specification.md"): "# Specification\n\n## Description\n\nA sample tool.\n"},
             {str(root / "Plan.md"): "# Plan\n\n## Approach\n\nOne executable approach.\n"},
             {str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"},
-            {str(root / "One — Verification Report.md"): report("NOT PASSED")},
-            {str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nCorrected.\n"},
-            {str(root / "One — Verification Report.md"): report("PASSED")},
+            {str(root / "One — Verification Report.md"): report(
+                "NOT PASSED", findings=["R1 — the saved result omits the required check evidence."])},
+            {str(root / "One — Programming Result.md"):
+                "# Programming Result\n\nStatus: COMPLETE\n\n"
+                "- R1 — FIXED — corrected; the check passes.\n\n"
+                "Review disposition: SETTLED\n"},
         ]
         for index, files in enumerate(writes):
             self.directive(index, reply="Saved.\n", model="reported-native-model", writes=files)
@@ -1180,7 +1237,9 @@ class RunCase(unittest.TestCase):
         final = self.settle(driver, lambda status: status["state"] == "complete")
         argv = [json.loads(line) for line in self.argv_log.read_text(encoding="utf-8").splitlines()]
         work_calls = [entry for entry in argv if entry.get("purpose") == "work"]
-        order = ["specification", "planning", "implementation", "verification", "correction", "verification"]
+        # The settled correction completes the run; verification is not
+        # selected again after it.
+        order = ["specification", "planning", "implementation", "verification", "correction"]
         self.assertEqual([(entry["model"], entry["effort"]) for entry in work_calls],
                          [(choices[role]["model"], choices[role]["effort"]) for role in order])
         for step in ("build", "correction"):

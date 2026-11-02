@@ -11,7 +11,6 @@ from .adapters import ANALYTICAL_ENGINES, BridgeAdapter, ClaudeAdapter, CodexAda
 from .errors import CallFailure, OraReviewError
 from .models import UserMaterial
 from .runner import ReviewRunner, RunRequest
-from .validator import ValidationRequest, ValidationRunner
 
 
 def _parser(tool: str) -> argparse.ArgumentParser:
@@ -91,22 +90,20 @@ def _parser(tool: str) -> argparse.ArgumentParser:
     parser.add_argument(
         "--repository", metavar="PATH",
         help="absolute path of the target repository or task worktree; its "
-             "complete AGENTS.md (imports expanded) follows the core in "
-             "every packet",
-    )
-    parser.add_argument(
-        "--assigned-path", action="append", default=[], metavar="PATH",
-        help="path inside the target repository this assignment works on, "
-             "relative to the repository root or absolute; repeatable. The "
-             "narrower AGENTS.md rules for these paths join the repository "
-             "rules in every packet. Requires --repository",
+             "complete root AGENTS.md follows the core in every packet",
     )
     parser.add_argument(
         "--turn-instructions-file", metavar="FILE",
         help="read this turn's original user message verbatim from FILE and "
              "forward it to every packet after the core",
     )
-    parser.add_argument("--consensus", action="store_true")
+    parser.add_argument(
+        "--run-root", metavar="DIR",
+        help="write the run record under this project-owned directory "
+             "instead of the default user-level runs directory; for Git "
+             "work, point it inside the project so the record is committed "
+             "with the change it documents",
+    )
     if tool == "gear3":
         parser.add_argument(
             "--current-answer",
@@ -124,37 +121,6 @@ def _parser(tool: str) -> argparse.ArgumentParser:
             metavar="FILE",
             help="exact user-written commitment required by committed Breadth",
         )
-    return parser
-
-
-def _validator_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="ora-validator",
-        description=(
-            "Send one exact validation request to one explicit external peer and "
-            "require a complete decision for every explicit root."
-        ),
-        allow_abbrev=False,
-    )
-    parser.add_argument(
-        "--request",
-        required=True,
-        metavar="FILE",
-        help="read the exact UTF-8 validation request from FILE; stdin is not accepted",
-    )
-    parser.add_argument(
-        "--root",
-        required=True,
-        action="append",
-        metavar="ID",
-        help="require a decision for this exact root ID; repeat for each root",
-    )
-    parser.add_argument(
-        "--peer",
-        required=True,
-        metavar="TARGET",
-        help="use this exact Agent Bridge target; no fallback is permitted",
-    )
     return parser
 
 
@@ -190,67 +156,12 @@ def _files(paths: Sequence[str], label: str) -> tuple[str, ...]:
 
 def _configuration_line(tool: str, args: argparse.Namespace) -> str:
     name = "Ora Gear 3" if tool == "gear3" else "Ora Gear 4"
-    ending = "consensus" if args.consensus else "one-pass"
+    line = f"{name}; native engine `{args.native}`"
+    if args.peer:
+        line += f"; peer `{args.peer}`"
     if tool == "gear4":
-        line = (
-            f"{name}; {ending}; {args.breadth} Breadth; "
-            f"native engine `{args.native}`."
-        )
-    else:
-        line = f"{name}; {ending}; native engine `{args.native}`."
-    if args.model:
-        line += f" Requested native model selector `{args.model}`."
-    if args.codex_model or args.codex_effort:
-        named = " and ".join(
-            part
-            for part in (
-                f"model `{args.codex_model}`" if args.codex_model else None,
-                f"reasoning effort `{args.codex_effort}`"
-                if args.codex_effort
-                else None,
-            )
-            if part
-        )
-        line += f" Requested Codex {named}."
-    return line
-
-
-def _engine_disclosure(args: argparse.Namespace) -> str:
-    if args.native == "claude":
-        if args.model:
-            return (
-                f"The requested native model selector is `{args.model}`; every "
-                "successful native call must return one matching exact model "
-                "attribution, which is recorded. "
-            )
-        return (
-            "No native model selector was supplied; every successful native "
-            "call must return one unambiguous exact model attribution, which "
-            "is recorded. "
-        )
-    if args.native == "codex":
-        if args.codex_model or args.codex_effort:
-            named = " and ".join(
-                part
-                for part in (
-                    f"model `{args.codex_model}`" if args.codex_model else None,
-                    f"reasoning effort `{args.codex_effort}`"
-                    if args.codex_effort
-                    else None,
-                )
-                if part
-            )
-            return (
-                f"Requested Codex {named}; each reaches every native "
-                "`codex exec` call, and the model and reasoning effort Codex "
-                "reports using are recorded. "
-            )
-        return (
-            "No Codex model or reasoning effort was requested; Codex's own "
-            "default applies, and the model and reasoning effort Codex "
-            "reports using are recorded. "
-        )
-    return "Effective model and effort are not selected or reported. "
+        line += f"; {args.breadth} Breadth"
+    return line + "."
 
 
 def _run(tool: str, argv: Sequence[str] | None = None) -> int:
@@ -314,12 +225,9 @@ def _run(tool: str, argv: Sequence[str] | None = None) -> int:
         print(_configuration_line(tool, args), file=sys.stderr)
         initiator = "ora-gear-3" if tool == "gear3" else "ora-gear-4"
         if args.native == "codex":
-            if args.codex_model or args.codex_effort:
-                native = CodexAdapter(
-                    model=args.codex_model, effort=args.codex_effort
-                )
-            else:
-                native = CodexAdapter()
+            native = CodexAdapter(
+                model=args.codex_model, effort=args.codex_effort
+            )
         elif args.native == "claude":
             native = ClaudeAdapter(model=args.model) if args.model else ClaudeAdapter()
         else:
@@ -334,15 +242,6 @@ def _run(tool: str, argv: Sequence[str] | None = None) -> int:
                     f"Selectable engines: {', '.join(ANALYTICAL_ENGINES)}."
                 ) from failure
             print(native_readiness, file=sys.stderr)
-        native_label = {
-            "codex": "Codex",
-            "claude": "Claude Code",
-        }.get(args.native, f"`{args.native}`")
-        native_route = (
-            f"fresh {native_label} contexts"
-            if args.native in ("codex", "claude")
-            else f"fresh Agent Bridge calls to `{args.native}`"
-        )
         peer_adapter = None
         notices: tuple[str, ...] = ()
         if args.peer:
@@ -355,57 +254,27 @@ def _run(tool: str, argv: Sequence[str] | None = None) -> int:
                     **prepare_arguments
                 )
                 print(readiness, file=sys.stderr)
-                print(
-                    "Peer-owned roles use fresh Agent Bridge calls; native roles use "
-                    f"{native_route} selected by `--native {args.native}`. "
-                    "Fresh context is guaranteed; provider or model "
-                    "diversity is promised only when separately established. "
-                    + _engine_disclosure(args)
-                    + (
-                        "The same named Codex choices are passed to every "
-                        "Bridge call for the `codex` peer, and the values its "
-                        "reply reports are recorded. "
-                        if args.peer == "codex"
-                        and (args.codex_model or args.codex_effort)
-                        else ""
-                    )
-                    + "The vendor CLI runs "
-                    "as your operating-system account, and local or vendor tooling may "
-                    "retain plaintext transcripts.",
-                    file=sys.stderr,
-                )
             except CallFailure as failure:
                 exact = failure.display()
                 notice = (
                     f"Selected peer `{args.peer}` is unavailable: {exact} "
-                    f"This run will use fresh internal {native_label} calls instead; "
-                    "no other peer was substituted. Other Bridge targets can be "
-                    f"selected explicitly with `--peer`: {', '.join(ANALYTICAL_ENGINES)}."
+                    "This run will use fresh internal native calls instead; "
+                    "no other peer was substituted."
                 )
                 print(notice, file=sys.stderr)
                 notices = (notice,)
-        else:
-            print(
-                f"Entirely internal route: every role uses {native_route} "
-                f"selected by `--native {args.native}`. "
-                "This promises context separation, not different evidence, training, "
-                "models, or blind spots. "
-                + _engine_disclosure(args).rstrip(" "),
-                file=sys.stderr,
-            )
 
         runner = ReviewRunner(native=native, peer=peer_adapter)
         request = RunRequest(
             material=material,
             existing_answer=existing_answer,
-            consensus=args.consensus,
             breadth=args.breadth if tool == "gear4" else "analytical",
             initial_notices=notices,
             repository_path=(
                 Path(args.repository).expanduser() if args.repository else None
             ),
-            assigned_paths=tuple(args.assigned_path),
             current_turn_instructions=current_turn_instructions,
+            run_root=Path(args.run_root).expanduser() if args.run_root else None,
         )
         result = runner.run_gear3(request) if tool == "gear3" else runner.run_gear4(request)
     except (CallFailure, OraReviewError, OSError, UnicodeDecodeError) as failure:
@@ -447,56 +316,9 @@ def _run(tool: str, argv: Sequence[str] | None = None) -> int:
     return result.exit_code
 
 
-def _write_status(message: str) -> None:
-    sys.stderr.write(message)
-    if not message.endswith("\n"):
-        sys.stderr.write("\n")
-    sys.stderr.flush()
-
-
-def _run_validator(argv: Sequence[str] | None = None) -> int:
-    parser = _validator_parser()
-    args = parser.parse_args(list(argv) if argv is not None else None)
-    runner = ValidationRunner(status_sink=_write_status)
-    try:
-        request = _read_file(args.request, "validator request file")
-        _write_status(
-            f"Ora Validator; external only; selected peer `{args.peer}`; "
-            "no native adapter or fallback."
-        )
-        result = runner.run(
-            ValidationRequest(
-                request=request,
-                roots=tuple(args.root),
-                peer=args.peer,
-            )
-        )
-    except (CallFailure, OraReviewError, OSError) as failure:
-        if isinstance(failure, CallFailure):
-            detail = failure.display()
-        elif isinstance(failure, OSError):
-            detail = f"The validator run record could not be updated: {failure}."
-        else:
-            detail = str(failure)
-        _write_status(f"Technical failure — no certification: {detail}")
-        if runner.run_path is not None:
-            _write_status(f"Run record: {runner.run_path}")
-        return 1
-
-    sys.stdout.buffer.write(result.output.encode("utf-8"))
-    sys.stdout.buffer.flush()
-    _write_status("Status: VALIDATION COMPLETE")
-    _write_status(f"Run record: {result.run_path}")
-    return 0
-
-
 def main_gear3() -> int:
     return _run("gear3")
 
 
 def main_gear4() -> int:
     return _run("gear4")
-
-
-def main_validator() -> int:
-    return _run_validator()

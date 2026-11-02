@@ -71,7 +71,7 @@ Use the released Gear products through their available documented interface when
 1. Check whether Gear 4 and Gear 3 are available.
 2. When available, use Gear 4 once for meaningful ways to implement the same product. Even when the user has a preference, check for a materially simpler, safer, or better-supported route.
 3. Move promptly to Gear 3 when evidence eliminates alternatives, the user chooses, or the Plan has one direction. Give each call the complete source material, inspected facts, current Plan, intended ending, and explicit peer choice.
-4. Use Gear 3 to review the complete Plan for material gaps, contradictions, excess complexity, and executability. Use its bounded consensus form when the user has no further substantive input.
+4. Use Gear 3 to review the complete Plan for material gaps, contradictions, excess complexity, and executability.
 5. Return to Gear 4 only when new evidence reopens a material implementation choice. On technical failure, preserve the Plan and disclose the failure. When a Gear product is unavailable, say so plainly and continue the work directly; an unavailable optional aid never stops the assignment.
 
 ## Design assignments and dependencies
@@ -167,11 +167,11 @@ Produce one current Plan with only useful project-specific content, in this orde
 >
 > The checks named in this Plan are the complete testing ceiling. A named test file does not authorize unlimited test additions or reruns. Additional or repeated checks, broad suites, and builds must satisfy the supplied shared contract’s proof rule and necessary authority. Run approved checks after coherent batches; count invocations in existing check output, without a tracker.
 >
-> Add or change tests only for user-visible behavior, a material regression, preservation of important content or data, or essential failure behavior. Stop testing when the approved checks pass and material review is satisfied.
+> Add or change tests only for user-visible behavior, a material regression, preservation of important content or data, or essential failure behavior. Stop testing when the approved checks pass and review is settled.
 >
-> Independent review may reject only for a material defect — one that causes or is highly likely to cause wrong user-visible behavior, unmet approved criteria, content or data loss, falsehood or misattribution, a real runtime or deployment failure, unauthorized scope or effects, broken atomicity, failed necessary recovery or rollback, a security exposure, or a required check that does not pass. Preferences about abstraction, style, tracking, or unrequested generality are not defects.
+> Independent review follows the supplied shared contract's reviewer rule. A finding is actionable only with evidence of a result contrary to the Specification in a way that changes the result the user asked for, or a real error with identified harm. The builder fixes actionable findings the smallest way or rejects a finding with recorded reasons. A rejection stands, except on severe failures: unrecoverable data loss, security exposure, and unauthorized or erroneous spending, sending or publishing. Unresolved severe findings go to the owner.
 >
-> Continue through the approved execution sequence, exact checks, independent review, correction of every in-scope material finding, truthful documentation, task-owned cleanup, and the declared finish line. Do not stop at code written, a partial milestone, or an unreviewed candidate.
+> Continue through the approved execution sequence, exact checks, independent review, a recorded fix or reasoned rejection of every finding, one removal-only review before landing, truthful documentation, task-owned cleanup, and the declared finish line. Do not stop at code written, a partial milestone, or an unreviewed candidate.
 
 State that repository or harness instructions may add necessary safety and delivery requirements but must not silently weaken the safeguards or enlarge product scope.
 
@@ -196,7 +196,7 @@ The Plan is complete enough for the intended work when all of these hold:
 - checks and their risks are exact, and the delivery endpoint and its route are observable; and
 - every component passes the irreducible-complexity test.
 
-The user's workspace can commission a fresh independent assessment of whether the current Plan sufficiently guides the intended work; its verdict is advisory information and never blocks programming or revision. That assessment can also run as a second opinion — one model authors, a second harness evaluates, the author revises given the evaluation as a guide, optionally iterating up to three rounds before any remaining disagreement is reported for the user to break, with the different-lab or same-lab-fresh-session case labeled honestly. The user may start programming whatever the state of the Plan.
+The user's workspace can commission a fresh independent assessment of whether the current Plan sufficiently guides the intended work; its verdict is advisory information and never blocks programming or revision. That assessment can also run as a second opinion — one model authors, a second harness evaluates, the author revises given the evaluation as a guide. One evaluation followed by one revision settles it: the author's recorded dispositions — every recommendation fixed or rejected with reasons — end the exchange, and remaining disagreement stays inside the revised assessment as advisory information rather than a tie-breaking request to the user. When the user selects Iterate, up to three rounds run, stopping early once an evaluation passes; remaining disagreement still stays inside the assessment. The different-lab or same-lab-fresh-session case is labeled honestly. The user may start programming whatever the state of the Plan. A Plan finding must show a user harm or a contradiction with the owner's decision.
 
 ## Output and stop
 

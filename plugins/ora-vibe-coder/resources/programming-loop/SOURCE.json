@@ -4,26 +4,26 @@
   "files": {
     "LICENSE": "d08917ad4cf19dc0f4d6cffa9ffd792835a1748070539d7e783abc236cfa2c3c",
     "NOTICE.md": "088bc3ef8e04b3c46315c22c4621f3cce9968e87320a92b4a97cdcec74cec993",
-    "README.md": "b799ca7a00e568adb128b2bc41a82ccabacaf49985a34f0804b6287a7e9a2f5e",
-    "VERSION": "206620a657f1ccc8af72b866fdcef20e641c48f39ce27f338ce8313949c63e53",
+    "README.md": "307804918ff6fd76b23f7b451150ab9207c00313a467ba73738636abd02a902a",
+    "VERSION": "59296d23d623ce0adf7675d22156e83b1248c8508135a65dd8a9e38c497e94a8",
     "adapters/claude.md": "8bec6b665fce7d423bd93864ec08fdb8568cdda145d921c86399df52d3a28d99",
     "adapters/codex.md": "a969d8ef735acd6109a624083f8fe29d342f8912f5cb1d138dc9c74e0fa6ea61",
     "adapters/hermes.md": "bf75da4e1c503b1220128643ec0665cceb17086da8bc5a4e5e596388798131ae",
     "adapters/minimax.md": "cd53a2c7b0c04ae80e2ee8b4d9f3f1a703699ac5f2e9109a61ff83c822763c61",
     "adapters/qwen.md": "c1d90254cd8478c43cceccfaaf0c2981a09fb6d77109f3b071535456fe677333",
     "adapters/zcode.md": "06fc9f5cae58f3d1b1078c604c67461bfee2e461dbfd56c00efa8842db5eb8d2",
-    "frameworks/programming-loop.md": "70362bd4df37f7a08d93dd06a6fafd5bd27850099f8b671fd1a26f16084fe580",
-    "profiles/claude/programming-loop-reviewer.md": "0a3bda1b4b1e50c0ea75fc3ead384e29887e9806255ff7812a469a44575c8e4c",
-    "profiles/qwen/programming-loop-reviewer.md": "cfdbbb01e44ed1b8a5b2ae2e0ac3576a8eb33ba64a27c95d71e8d4cea87a3edb",
-    "profiles/zcode/programming-loop-reviewer.md": "728a9f4645076b30007dd931dd54dedda3e6426174e0ed3cb6c59612c9e4cabf",
+    "frameworks/programming-loop.md": "06773675794e02dbefd0bfb2e9e9bc8ca67f88b18c86eaeb9a521502b5952ef4",
+    "profiles/claude/programming-loop-reviewer.md": "bdbbbba6dd0ef4e447614cbc2042e2a8a38ab1d47273e8e309b555a189665666",
+    "profiles/qwen/programming-loop-reviewer.md": "6454fe3b19b365e686ef1f4a169d05c815fe4e80bf78f288ab8077270c7bcd18",
+    "profiles/zcode/programming-loop-reviewer.md": "6404d4b7c4c0c85d122f70bcad0843ac49ba81fedaee0b98f98f5ab9b0adc25b",
     "scripts/install.py": "2bfd6ff2d7987c6ef20e35e34ad590a2d6355627cd9908c0da2ad1649b4442b3",
     "skills/programming-loop/SKILL.md": "45dd03fa8b448a55021ba66d5e1d47776dc46a9dc298e90ce71f82d5a57c477d",
-    "tests/test_distribution.py": "d9dfbe2dda295a48ad4b4ae53b2b1c0ed6de48822509fa99b9edd636560d2875"
+    "tests/test_distribution.py": "640f5a956d917d1bddeb86b5b64a9c2f682e88a260966735a26c54e16fa0b3d3"
   },
   "public_release_repository": "ora-commons/ora-programming-loop",
   "source": "ora-programming-loop",
-  "source_revision": "2cef0bc0aae82771940cb5615b2b8fc53e5fcc0a",
-  "source_tree": "533370ef3d65d56db308ac9de0898ce067f406fa",
+  "source_revision": "df47cff0fc07ac08728004d41d22f321996cd808",
+  "source_tree": "2d4c8f61f9adc0783beaebce6099fb0e7948fd8a",
   "vendored_snapshot": "components/programming-loop",
-  "version": "1.2.1"
+  "version": "1.3.0"
 }

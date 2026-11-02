@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
-import subprocess
 import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -13,7 +11,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from .errors import MalformedResponse, OraReviewError
-from .models import AnswerBoundary, StageMaterial, UserMaterial
+from .models import AnswerBoundary, RevisionOutcome, StageMaterial, UserMaterial
 
 
 TokenFactory = Callable[[], str]
@@ -36,45 +34,13 @@ CURRENT_TURN_END_HEADING = "## END CURRENT USER INSTRUCTIONS"
 REPOSITORY_HEADING = "## REPOSITORY INSTRUCTIONS"
 
 
-def read_core_from_global_master(path: Path | str) -> str:
-    """Return the marked core from a global instruction master, read per
-    launch.
-
-    Raises ``OraReviewError`` when it is missing, unreadable, invalid
-    UTF-8, or has no exactly-once complete marker pair, so a launch meant
-    to carry the core refuses to run without it.
-    """
-    master = Path(path).expanduser()
-    try:
-        text = master.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise OraReviewError(
-            f"Cannot read the global instructions master at `{master}`: {exc}. "
-            "See the README's `Global instruction master (optional)` section "
-            "for the accepted file shape and how to select one."
-        ) from exc
-    begins, ends = text.count(CORE_BEGIN_MARKER), text.count(CORE_END_MARKER)
-    core = (
-        text[text.index(CORE_BEGIN_MARKER) + len(CORE_BEGIN_MARKER):
-             text.index(CORE_END_MARKER)]
-        if begins == 1 and ends == 1 else ""
-    ).strip("\n")
-    if not core.strip():
-        raise OraReviewError(
-            f"The global instructions master at `{master}` has no exactly-once "
-            f"nonempty core marker pair ({begins} begin / {ends} end). See the "
-            "README's `Global instruction master (optional)` section for the "
-            "accepted file shape."
-        )
-    return core
-
-
 @dataclass(frozen=True)
 class GlobalMasterResolution:
     """One launch's global instruction master resolution.
 
-    ``path`` and ``core_text`` are ``None`` when no master is configured;
-    ``notice`` is the disclosure for that case and ``None`` otherwise.
+    ``path`` and ``core_text`` are ``None`` when no core was loaded;
+    ``notice`` carries the disclosure or loud warning for that case and
+    is ``None`` otherwise.
     """
 
     path: Path | None
@@ -85,186 +51,72 @@ class GlobalMasterResolution:
 def resolve_global_instruction_master() -> GlobalMasterResolution:
     """Resolve the global instruction master for this launch.
 
-    The chain: (1) ``ORA_INSTRUCTION_MASTER`` names the master file
-    explicitly (``expanduser`` applied) — a selected master that is missing,
-    unreadable, invalid UTF-8, or lacks the exactly-once nonempty core
-    marker pair is a hard ``OraReviewError`` naming the path; (2) otherwise
-    any directory entry at ``~/.config/ora/global-instructions.md`` counts
-    as provisioned — a regular file there gets the same validation and the
-    same hard error, while a non-regular entry (a directory or a dangling
-    symlink) is a hard ``OraReviewError`` naming the path, and so is a
-    lookup that cannot be performed (a parent directory that cannot be
-    searched), because a failed probe must not masquerade as absence; (3)
-    only a genuinely absent path — including a parent that is a regular
-    file, so nothing can be provisioned there — means no master is
-    configured: the launch proceeds without the core and discloses that
-    through ``notice``. Fail-open applies only to the unconfigured case; a
-    selected or provisioned master that is broken fails closed.
+    One short read, failing open with a loud warning: a configured master
+    that is missing, unreadable, or malformed never stops the run — the
+    run proceeds without the core and every notice surface names the file
+    and the problem. Only a machine with no master configured at all gets
+    the plain unconfigured disclosure.
     """
     selected = os.environ.get(ORA_INSTRUCTION_MASTER_ENV, "").strip()
-    if selected:
-        master = Path(selected).expanduser()
-        return GlobalMasterResolution(
-            master, read_core_from_global_master(master), None
-        )
-    default = Path.home() / DEFAULT_MASTER_PATH
-    try:
-        default.lstat()
-    except (FileNotFoundError, NotADirectoryError):
-        # Genuine absence: no entry — or no possible entry, when a parent
-        # is a regular file — means the unconfigured fail-open case.
-        return GlobalMasterResolution(None, None, NO_MASTER_NOTICE)
-    except OSError as exc:
-        # The lookup itself failed (a parent directory cannot be searched,
-        # for example). That is inaccessibility, not absence: an explicit
-        # probe keeps it from being mistaken for no configuration.
-        raise OraReviewError(
-            f"Cannot determine whether the global instructions master at "
-            f"`{default}` is provisioned: {exc}. See the README's "
-            "`Global instruction master (optional)` section for the "
-            "accepted file shape and how to select one."
-        ) from exc
-    if not default.is_file():
-        raise OraReviewError(
-            f"The global instructions master at `{default}` exists but "
-            "is not a regular file, so it cannot provide the core. See "
-            "the README's `Global instruction master (optional)` "
-            "section for the accepted file shape and how to select one."
-        )
-    return GlobalMasterResolution(
-        default, read_core_from_global_master(default), None
+    master = (
+        Path(selected).expanduser()
+        if selected
+        else Path.home() / DEFAULT_MASTER_PATH
     )
-
-
-def _expand_instruction_imports(
-    text: str, base: Path, seen: frozenset[Path] = frozenset()
-) -> str:
-    """Expand ``@path`` import lines (relative to the file's directory);
-    an import chain that revisits a file on its own chain refuses."""
-
-    lines: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not (stripped.startswith("@") and len(stripped) > 1):
-            lines.append(line)
-            continue
-        target = (base / stripped[1:]).resolve()
-        if target in seen:
-            raise OraReviewError(
-                f"Instruction imports under `{base}` form a cycle at "
-                f"`{stripped[1:]}`."
-            )
-        try:
-            imported = target.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise OraReviewError(
-                f"Cannot read instruction import `{stripped[1:]}` under "
-                f"`{base}`: {exc}"
-            ) from exc
-        lines.append(f"[IMPORTED INSTRUCTIONS — {stripped[1:]}]")
-        lines.append(
-            _expand_instruction_imports(imported, target.parent, seen | {target})
-        )
-    return "\n".join(lines)
-
-
-def resolve_assigned_paths(
-    given: Sequence[Path | str], repository_root: Path
-) -> tuple[Path, ...]:
-    """The single pre-launch validation, reached from the loader: relative
-    values resolve against the repository root, absolute values are kept,
-    and a blank, missing, unreadable, or outside-the-repository path
-    refuses the launch before any model call."""
-    resolved: list[Path] = []
-    for value in given:
-        if not str(value).strip():
-            raise OraReviewError("An assigned-path value is empty.")
-        supplied = Path(value).expanduser()
-        target = supplied if supplied.is_absolute() else repository_root / supplied
-        target = target.resolve()
-        if not target.exists() or not os.access(target, os.R_OK):
-            raise OraReviewError(
-                f"The assigned path `{value}` at `{target}` is missing or "
-                "not readable."
-            )
-        if target == repository_root or repository_root not in target.parents:
-            raise OraReviewError(
-                f"The assigned path `{value}` at `{target}` does not lie "
-                f"inside the repository target `{repository_root}`."
-            )
-        resolved.append(target)
-    return tuple(resolved)
-
-
-def _read_instructions_file(path: Path) -> str:
+    text = ""
+    problem: str | None = None
     try:
-        return path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise OraReviewError(
-            f"Cannot read the repository instructions at `{path}`: {exc}"
-        ) from exc
+        text = master.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        if not selected:
+            return GlobalMasterResolution(None, None, NO_MASTER_NOTICE)
+        problem = "the file is missing"
+    except (OSError, UnicodeDecodeError) as exc:
+        problem = f"it cannot be read as UTF-8 ({exc})"
+    if problem is None:
+        begins, ends = text.count(CORE_BEGIN_MARKER), text.count(CORE_END_MARKER)
+        if begins == 1 and ends == 1:
+            start = text.index(CORE_BEGIN_MARKER) + len(CORE_BEGIN_MARKER)
+            core = text[start : text.index(CORE_END_MARKER)].strip("\n")
+            if core.strip():
+                return GlobalMasterResolution(master, core, None)
+        problem = (
+            f"it has no exactly-once nonempty core marker pair "
+            f"({begins} begin / {ends} end)"
+        )
+    notice = (
+        f"WARNING: the global instruction master at `{master}` could not be "
+        f"used: {problem}. This run proceeds WITHOUT the core rules; repair "
+        "or remove that file to restore them."
+    )
+    return GlobalMasterResolution(None, None, notice)
 
 
 def load_repository_instructions(
     repository: str | Path,
-    assigned_paths: Sequence[Path | str] = (),
 ) -> tuple[str | None, Path]:
-    """Resolve the target repository/worktree (Git worktree-aware) and read
-    its complete ``AGENTS.md`` with imports expanded; assigned paths add
-    their narrower rule files. A missing, unreadable, or untraversable root
-    refuses. Returns ``(instructions_or_None, root)``."""
+    """Read the target repository's complete root ``AGENTS.md``.
+
+    Returns ``(instructions_or_None, root)``. A missing target or an
+    unreadable ``AGENTS.md`` refuses the launch before any model call; a
+    repository with no ``AGENTS.md`` contributes no repository block.
+    """
     given = Path(repository).expanduser()
     if not given.is_dir():
         raise OraReviewError(
             f"The repository target `{given}` is missing or unreadable."
         )
     root = given.resolve()
-    try:
-        top = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=30, check=True,
-        ).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        top = ""
-    if top:
-        root = Path(top).resolve()
-    if not (os.access(root, os.R_OK) and os.access(root, os.X_OK)):
-        raise OraReviewError(
-            f"The repository target `{root}` is not readable or traversable."
-        )
-    assigned = resolve_assigned_paths(assigned_paths, root)
-    parts: list[str] = []
     agents = root / "AGENTS.md"
-    if agents.is_file():
-        parts.append(_expand_instruction_imports(
-            _read_instructions_file(agents), root).strip("\n"))
-    for nested in sorted(_assigned_path_rule_files(root, assigned)):
-        scope = nested.parent.relative_to(root).as_posix()
-        parts.append(
-            f"### NARROWER RULES — {nested.relative_to(root).as_posix()}\n\n"
-            f"Applies to work beneath `{scope}`.\n\n"
-            + _expand_instruction_imports(
-                _read_instructions_file(nested), nested.parent).strip("\n")
-        )
-    if not parts:
+    if not agents.is_file():
         return None, root
-    return "\n\n".join(parts), root
-
-
-def _assigned_path_rule_files(root: Path, assigned: Sequence[Path]) -> list[Path]:
-    """Narrower ``AGENTS.md`` files on each assigned path's ancestor chain,
-    deduplicated and sorted so packet text is stable; the paths arrive
-    already resolved and validated inside ``root``."""
-
-    found: set[Path] = set()
-    for target in assigned:
-        directory = target if target.is_dir() else target.parent
-        while directory != root and root in directory.parents:
-            candidate = directory / "AGENTS.md"
-            if candidate.is_file():
-                found.add(candidate)
-            directory = directory.parent
-    return sorted(found)
+    try:
+        text = agents.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise OraReviewError(
+            f"Cannot read the repository instructions at `{agents}`: {exc}"
+        ) from exc
+    return (text.strip("\n") or None), root
 
 
 def compose_instruction_prefix(
@@ -294,30 +146,17 @@ def compose_instruction_prefix(
     return "\n\n".join(blocks)
 
 
-def sha256_text(body: str) -> str:
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()
-
-
 @dataclass(frozen=True)
 class ProtectedBlock:
     label: str
     body: str
     boundary: str
 
-    @property
-    def digest(self) -> str:
-        return sha256_text(self.body)
-
     def render(self, *, heading_level: int = 2) -> str:
         hashes = "#" * heading_level
         begin = f"<<<ORA-PROTECTED-BEGIN:{self.boundary}>>>"
         end = f"<<<ORA-PROTECTED-END:{self.boundary}>>>"
-        return (
-            f"{hashes} {self.label}\n\n"
-            f"SHA-256: `{self.digest}`\n"
-            f"Boundary: `{self.boundary}`\n\n"
-            f"{begin}\n{self.body}\n{end}"
-        )
+        return f"{hashes} {self.label}\n\n{begin}\n{self.body}\n{end}"
 
 
 class InstructionStore:
@@ -362,38 +201,15 @@ class PacketBuilder:
             for name, body in self._instruction_snapshot.items()
         )
 
-    def _unique_token(self, bodies: Sequence[str], prefix: str) -> str:
-        for _ in range(100):
-            token = f"{prefix}-{self._token_factory()}"
-            markers = (
-                token,
-                f"<<<ORA-PROTECTED-BEGIN:{token}>>>",
-                f"<<<ORA-PROTECTED-END:{token}>>>",
-                f"<<<ORA-ANSWER-BEGIN:{token}>>>",
-                f"<<<ORA-ANSWER-END:{token}>>>",
-            )
-            if not any(marker in body for body in bodies for marker in markers):
-                return token
-        raise OraReviewError("Could not create a collision-free packet boundary.")
-
-    def protect(
-        self, label: str, body: str, *, collision_bodies: Sequence[str]
-    ) -> ProtectedBlock:
-        token = self._unique_token(collision_bodies, "block")
+    def protect(self, label: str, body: str) -> ProtectedBlock:
+        token = f"block-{self._token_factory()}"
         return ProtectedBlock(label, body, token)
 
-    def answer_boundary(self, collision_bodies: Sequence[str]) -> AnswerBoundary:
-        token = self._unique_token(collision_bodies, "answer")
+    def answer_boundary(self) -> AnswerBoundary:
+        token = f"answer-{self._token_factory()}"
         return AnswerBoundary(
             begin=f"<<<ORA-ANSWER-BEGIN:{token}>>>",
             end=f"<<<ORA-ANSWER-END:{token}>>>",
-        )
-
-    def validation_boundary(self, collision_bodies: Sequence[str]) -> AnswerBoundary:
-        token = self._unique_token(collision_bodies, "validation")
-        return AnswerBoundary(
-            begin=f"<<<ORA-VALIDATION-BEGIN:{token}>>>",
-            end=f"<<<ORA-VALIDATION-END:{token}>>>",
         )
 
     def build(
@@ -422,29 +238,14 @@ class PacketBuilder:
         if answer_boundary is not None:
             output = output.replace("{{ANSWER_BEGIN}}", answer_boundary.begin)
             output = output.replace("{{ANSWER_END}}", answer_boundary.end)
-            output = output.replace("{{VALIDATION_BEGIN}}", answer_boundary.begin)
-            output = output.replace("{{VALIDATION_END}}", answer_boundary.end)
-        elif "{{ANSWER_" in output or "{{VALIDATION_" in output:
+        elif "{{ANSWER_" in output:
             raise OraReviewError("A bounded-output packet has no supplied boundary.")
-
-        bodies = [
-            material.original,
-            *material.later_user_messages,
-            *material.prior_assistant_turns,
-            *material.governing_context,
-            *(item.body for item in stage_material),
-        ]
-        if material.commitment is not None:
-            bodies.append(material.commitment)
-        if self.instruction_prefix:
-            bodies.append(self.instruction_prefix)
 
         user_blocks: list[str] = []
         user_blocks.append(
             self.protect(
                 "ORIGINAL USER REQUEST — VERBATIM",
                 material.original,
-                collision_bodies=bodies,
             ).render()
         )
         user_blocks.append(
@@ -452,7 +253,6 @@ class PacketBuilder:
                 "LATER USER MESSAGES — VERBATIM, CHRONOLOGICAL",
                 "LATER USER MESSAGE",
                 material.later_user_messages,
-                bodies,
             )
         )
         user_blocks.append(
@@ -460,7 +260,6 @@ class PacketBuilder:
                 "PRIOR ASSISTANT CONTEXT — VERBATIM",
                 "PRIOR ASSISTANT TURN",
                 material.prior_assistant_turns,
-                bodies,
             )
         )
         user_blocks.append(
@@ -468,7 +267,6 @@ class PacketBuilder:
                 "OTHER GOVERNING CONTEXT — VERBATIM",
                 "GOVERNING CONTEXT",
                 material.governing_context,
-                bodies,
             )
         )
         if material.commitment is not None:
@@ -476,13 +274,12 @@ class PacketBuilder:
                 self.protect(
                     "USER COMMITMENT — VERBATIM",
                     material.commitment,
-                    collision_bodies=bodies,
                 ).render()
             )
 
         if stage_material:
             stage_blocks = "\n\n".join(
-                self.protect(item.label, item.body, collision_bodies=bodies).render()
+                self.protect(item.label, item.body).render()
                 for item in stage_material
             )
         else:
@@ -520,14 +317,11 @@ class PacketBuilder:
         heading: str,
         item_label: str,
         values: Sequence[str],
-        collision_bodies: Sequence[str],
     ) -> str:
         if not values:
             return f"## {heading}\n\nNone supplied."
         blocks = "\n\n".join(
-            self.protect(
-                f"{item_label} {index}", value, collision_bodies=collision_bodies
-            ).render(heading_level=3)
+            self.protect(f"{item_label} {index}", value).render(heading_level=3)
             for index, value in enumerate(values, start=1)
         )
         return f"## {heading}\n\n{blocks}"
@@ -558,17 +352,144 @@ def extract_answer(response: str, boundary: AnswerBoundary) -> str:
     return body
 
 
-_VERDICT = re.compile(r"^VERDICT: (PASS|FAIL)[ \t]*\r?$", re.MULTILINE)
+#: The one allowed completion line on review reports and correction results.
+DISPOSITION_VALUES = ("SETTLED", "CORRECTION", "SEVERE", "INCOMPLETE", "ASK USER")
+#: Any line shaped like a declaration counts as one, whatever its value: a
+#: valid declaration plus an unknown one is two declarations, not one.
+_DISPOSITION_DECLARATION = re.compile(r"^Review disposition:[ \t]*(.*?)[ \t]*\r?$")
 
 
-def parse_verdict(response: str) -> str:
-    """Parse one verdict only when it is the final nonblank line."""
+def parse_disposition(response: str) -> str:
+    """Parse exactly one ``Review disposition:`` line, counting every line
+    shaped like a declaration — whatever its value — outside fenced code
+    blocks and quotations. Missing, duplicate, unknown, or in-example
+    declarations are malformed."""
 
-    matches = list(_VERDICT.finditer(response))
-    if len(matches) != 1:
+    found: list[str] = []
+    fence: str | None = None
+    for line in response.splitlines():
+        stripped = line.strip()
+        if fence is not None:
+            if stripped.startswith(fence):
+                fence = None
+            continue
+        for marker in ("```", "~~~"):
+            if stripped.startswith(marker):
+                fence = marker
+                break
+        if fence is not None:
+            continue
+        if stripped.startswith(">"):
+            continue
+        match = _DISPOSITION_DECLARATION.match(line)
+        if match is not None:
+            found.append(match.group(1))
+    if len(found) != 1:
         raise MalformedResponse(
-            "The review did not contain exactly one anchored PASS or FAIL verdict."
+            "The response did not contain exactly one current "
+            "`Review disposition:` line outside quotations and examples."
         )
-    if response[matches[0].end() :].strip():
-        raise MalformedResponse("The verdict was not the final nonblank line.")
-    return matches[0].group(1)
+    if found[0] not in DISPOSITION_VALUES:
+        raise MalformedResponse(
+            f"The response declared an unknown review disposition "
+            f"{found[0]!r}; allowed values are {', '.join(DISPOSITION_VALUES)}."
+        )
+    return found[0]
+
+
+def parse_review_outcome(response: str) -> str:
+    """Parse the review's single disposition line; it alone routes the
+    cycle. An unfinished review is malformed so the existing recovery route
+    keeps the run incomplete."""
+
+    disposition = parse_disposition(response)
+    if disposition == "INCOMPLETE":
+        raise MalformedResponse("The review declared itself unfinished.")
+    return disposition
+
+
+#: The review section that enumerates severe findings a reviser must settle.
+_SEVERE_SECTION = re.compile(r"^#{1,6} +SEVERE FINDINGS\s*$")
+_SEVERE_ENTRY = re.compile(r"^[-*] +(S\d+)\b")
+#: The correction section that records the reviser's per-finding decisions.
+_DISPOSITION_SECTION = re.compile(r"^#{1,6} +REVIEW DISPOSITION\s*$")
+#: One recorded builder decision in a correction result's REVIEW DISPOSITION
+#: section; a severe finding's line is its own recorded fix and evidence.
+_DISPOSITION_ITEM = re.compile(r"^[-*] +(S\d+) — .+")
+
+
+def _severe_labels(review: str) -> list[str]:
+    """The distinct S-labels the review's SEVERE FINDINGS section enumerated."""
+
+    labels: list[str] = []
+    in_section = False
+    for line in review.splitlines():
+        if _SEVERE_SECTION.match(line):
+            in_section = True
+            continue
+        if line.startswith("#"):
+            in_section = False
+            continue
+        if not in_section:
+            continue
+        entry = _SEVERE_ENTRY.match(line)
+        if entry is not None and entry.group(1) not in labels:
+            labels.append(entry.group(1))
+    return labels
+
+
+def _recorded_severe_fixes(response: str) -> set[str]:
+    """The S-labels carrying a decision line inside the correction's
+    REVIEW DISPOSITION section — the one place a severe finding's own
+    recorded fix can live. Answer content never counts."""
+
+    labels: set[str] = set()
+    in_section = False
+    for line in response.splitlines():
+        if _DISPOSITION_SECTION.match(line):
+            in_section = True
+            continue
+        if line.startswith("#"):
+            in_section = False
+            continue
+        if not in_section:
+            continue
+        entry = _DISPOSITION_ITEM.match(line)
+        if entry is not None:
+            labels.add(entry.group(1))
+    return labels
+
+
+def _revision_disposition_issue(response: str, review: str) -> str | None:
+    """Why a correction result does not settle the review's severe findings,
+    or None when it does. A severe finding settles solely through its own
+    recorded fix line in the correction's REVIEW DISPOSITION section."""
+
+    recorded = _recorded_severe_fixes(response)
+    for label in _severe_labels(review):
+        if label not in recorded:
+            return f"The severe finding {label} recorded no fix and evidence."
+    return None
+
+
+def parse_revision_outcome(
+    response: str, boundary: AnswerBoundary, review: str
+) -> "RevisionOutcome":
+    """Parse a correction result: one complete answer and one disposition;
+    a settled result must carry its severe findings' own recorded fix."""
+
+    answer = extract_answer(response, boundary)
+    disposition = parse_disposition(response)
+    if disposition not in ("SETTLED", "SEVERE", "ASK USER"):
+        raise MalformedResponse(
+            "The correction result did not carry a settled, severe, or "
+            "ask-user disposition; an unfinished correction is not a result."
+        )
+    if disposition == "SETTLED":
+        issue = _revision_disposition_issue(response, review)
+        if issue is not None:
+            raise MalformedResponse(
+                "The correction declared SETTLED without settling the review's "
+                f"severe findings: {issue[0].lower()}{issue[1:]}"
+            )
+    return RevisionOutcome(answer=answer, disposition=disposition)
