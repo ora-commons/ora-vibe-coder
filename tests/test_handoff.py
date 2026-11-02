@@ -183,7 +183,7 @@ class Handoff(unittest.TestCase):
             in_app = conversation.conversation_request(self.project, "codex", "planning", "Revise the Plan.", [], [], [])
         for text in (packet, plan_packet, in_app):
             self.assertIn("# Bundled companions and optional Gear", text)
-            self.assertIn(f"- Ora AI Boost 9.9.9 at {boost} (commands ora-gear-3, ora-gear-4, ora-validator)", text)
+            self.assertIn(f"- Ora AI Boost 9.9.9 at {boost} (commands ora-gear-3, ora-gear-4)", text)
             self.assertIn("primary: Codex; peer: Claude Code, Qwen Code", text)
             self.assertIn("Native adapters: Codex", text)
             self.assertIn("an unavailable or failed Gear call is disclosed and does not disable this stage", text)

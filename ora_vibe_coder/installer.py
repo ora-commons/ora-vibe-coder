@@ -35,7 +35,7 @@ LOOP_PUBLIC_RELEASE_REPOSITORY = "https://github.com/" + loop_integrity.AUTHORIT
 EXECUTABLE_NAME = "Ora Vibe Coder"
 BRIDGE_HOME_NAME = "agent-bridge"
 BOOST_HOME_NAME = "ora-ai-boost"
-BOOST_ENTRIES = {"ora-gear-3": "main_gear3", "ora-gear-4": "main_gear4", "ora-validator": "main_validator"}
+BOOST_ENTRIES = {"ora-gear-3": "main_gear3", "ora-gear-4": "main_gear4"}
 SHARE_APPLICATIONS = Path("/Applications")
 
 

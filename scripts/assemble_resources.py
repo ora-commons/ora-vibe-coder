@@ -551,7 +551,7 @@ def assemble_locked(loop_source: Path | None, revision: str | None,
     _, manifest_outputs, manifest_originals = vibe_manifest_outputs()
     identity = {
         **authority,
-        # The bundled Loop's own installer (1.2.1) accepts a vendored source
+        # The bundled Loop's own installer (1.3.0) accepts a vendored source
         # only under its renamed component identity, which names the entry it
         # writes (skills/ora-programming-loop).
         "component": "ora-programming-loop",

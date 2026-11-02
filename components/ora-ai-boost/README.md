@@ -15,24 +15,28 @@ Ora Agent Bridge (https://github.com/ora-commons/ora-agent-bridge), Ora Programm
 It is a tool for getting better answers — not a benchmark, and not a promise to eliminate
 errors. Adversarial review catches defects; it does not guarantee correctness.
 
-The Python package is `ora-adversarial-review`. It installs three commands:
+The Python package is `ora-adversarial-review`. It installs two commands:
 
 - `ora-gear-3` — one strong answer, hardened by a fresh adversarial review. It produces
   or accepts one complete answer, gives it a fresh adversarial review, and revises it
-  when the review finds a material defect.
+  when the review produces findings.
 - `ora-gear-4` — two independent answers, cross-reviewed and combined. It creates blind
   Depth and Breadth answers, cross-reviews them against each other, consolidates both,
   and independently reviews the complete synthesis.
-- `ora-validator` — a strict outside check you can rely on. It sends one exact
-  validation request to one explicit external peer and accepts the result only when
-  that peer directly supplies one strict `ACCEPT` or `REJECT` decision for every
-  explicitly named root.
 
-Gear one-pass is the default; `--consensus` is capped at three reviews and two
-revisions. A run returns the latest complete deliverable when one exists, and keeps
-status and the human-readable `RUN.md` record path outside the answer. The editable
+Every review ends through one readable disposition line — `Review disposition:
+SETTLED`, `CORRECTION`, `SEVERE`, `INCOMPLETE`, or `ASK USER` — which alone routes the
+work: the reviser's recorded dispositions settle the findings, and no second review
+follows a settled correction. An unresolved severe finding is returned to the
+owner with the answer and record preserved and never reports success. For a
+final deliverable, commission one fresh removal-only pass — a Gear 3 run asking
+only what can be removed while the answer still meets the request — followed by
+the author's dispositions; never one per intermediate lane. A run returns the
+latest complete deliverable when one exists, keeping status and the
+human-readable `RUN.md` record path outside the answer; point `--run-root DIR`
+at a project directory to keep the record with the work it documents. The editable
 Markdown method and small standard-library Python runner are standalone from any other
-Ora product; the validator has one strict external-call result contract instead.
+Ora product.
 
 ## Install on a clean setup
 
@@ -40,14 +44,14 @@ You need Python 3.10 or later and `git`. Clone the public repository at the rele
 and install into a virtual environment. In a POSIX shell:
 
 ```sh
-git clone --branch v0.5.0 https://github.com/ora-commons/ora-adversarial-review.git
+git clone --branch v0.6.0 https://github.com/ora-commons/ora-adversarial-review.git
 cd ora-adversarial-review
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install .
 ```
 
-This installs all three commands plus their role Markdown as a packaged copy. Nothing
+This installs both commands plus their role Markdown as a packaged copy. Nothing
 from any private repository or personal setup is needed. Repeat
 `python -m pip install .` from a checkout to update it; an in-progress invocation keeps
 its starting instruction snapshot.
@@ -72,18 +76,6 @@ Run Gear 3 (one answer, adversarially reviewed and revised when needed):
 ora-gear-3 --request /tmp/request.md
 ```
 
-Run the validator with explicitly named roots and an outside peer (the Bridge
-prerequisite is described below):
-
-```sh
-printf 'Claim A: 17 * 23 = 391.\nClaim B: 17 * 23 = 392.\nDecide ACCEPT or REJECT for each claim.\n' > /tmp/validation.md
-ora-validator --request /tmp/validation.md --root claim-a --root claim-b --peer zcode
-```
-
-`zcode` is the peer ID passed to Agent Bridge; use an ID your Bridge checkout supports.
-On success the validator prints a trusted wrapper with the peer's exact decisions. A
-well-formed, substantive `REJECT` is a completed result, not a failure.
-
 ## Check the installed version, update, remove
 
 Check the installed version:
@@ -97,9 +89,13 @@ Update to a newer release by fetching tags, checking out the new tag, and reinst
 ```sh
 cd ora-adversarial-review
 git fetch --tags
-git checkout v0.2.1   # replace with the newest release tag
+git checkout v0.6.0   # replace with the newest release tag
 python -m pip install .
 ```
+
+If you copied host skill entries from `packages/`, copy them again after updating:
+reinstalling the Python package does not refresh separately copied entries, and
+entries from older releases still prescribe options this release removed.
 
 Remove it by uninstalling the package in that environment, then deleting the virtual
 environment and the clone if you want:
@@ -150,8 +146,7 @@ No analytical call — native or peer — has an elapsed-time cutoff. Work ends 
 completion, explicit cancellation, or a real terminal error; only readiness
 checks and cleanup stay bounded.
 
-The validator has no native role at all: it is external-only and always requires a
-peer. `--model` is valid only with `--native claude` and pins either accepted Fable
+`--model` is valid only with `--native claude` and pins either accepted Fable
 selector:
 
 ```text
@@ -165,17 +160,12 @@ ora-gear-3 --request /absolute/path/request.md --native claude --model fable
 ora-gear-3 --request /absolute/path/request.md --native codex --codex-model gpt-5.3 --codex-effort high
 ```
 
-The same selected native adapter, model selector, and any named Codex model or
-effort are retained for every native producer, reviewer, reviser, lane,
-consolidation, technical retry, peer-failure recovery, and the labelled Gear
-4-to-Gear 3 fallback. Gear never changes engine or model silently.
-
-Every successful Claude call must return one unambiguous effective model in its JSON
-`modelUsage`; a selected Fable alias must match it. Gear records every exact model in
-`RUN.md`, reports the last after successful completion, and uses the JSON `result`
-text unchanged; anything missing, ambiguous, or mismatched is a bounded technical
-failure. This route is implemented but not live-qualified: no live Claude or Fable
-model call has been made.
+The same selected native adapter and any named Codex model or effort are retained for
+every native producer, reviewer, reviser, lane, consolidation, technical retry,
+peer-failure recovery, and the labelled Gear 4-to-Gear 3 fallback. Gear never changes
+engine or model silently. Each successful Claude call's exact reported model is
+recorded in `RUN.md`; anything a tool did not report is recorded as not reported,
+never inferred.
 
 ## Exact input
 
@@ -200,24 +190,17 @@ commitment file must contain the user's own nonempty words.
 Every Gear 3 and Gear 4 packet leads with the universal core rules read from your
 global instruction master — an optional Markdown file you select with the
 `ORA_INSTRUCTION_MASTER` environment variable or provision at the default path
-`~/.config/ora/global-instructions.md`. The file must carry exactly one
+`~/.config/ora/global-instructions.md`. The file should carry exactly one
 `<!-- ORA-CORE-BEGIN -->` and `<!-- ORA-CORE-END -->` marker pair around a nonempty
-core. A selected or provisioned master that is missing, unreadable, or malformed
-stops the run with an error naming the file. With no master configured at all, the
-run still works: every packet carries the role instructions only, and the notices
-and the run record disclose that. The validator is unchanged and carries no
-instruction prefix.
+core. A master that is missing, unreadable, or malformed never stops the run: the run
+proceeds without the core and prints a loud warning naming the file and the problem.
+With no master configured at all, the run works the same way and discloses that.
 
-Three further options carry instructions into every Gear packet.
+Two further options carry instructions into every Gear packet.
 `--turn-instructions-file FILE` forwards this turn's original user message verbatim —
-use it when the current message carries instructions for this turn, and omit it when
-it does not. `--repository PATH` names the target repository or task worktree, whose
-complete AGENTS.md, imports expanded, joins every packet; repeatable
-`--assigned-path PATH` adds the narrower AGENTS.md rules covering those paths and
-requires `--repository`.
-
-The validator requires a file, explicit safe root IDs, and a peer. It neither reads
-standard input nor infers roots, and never accepts `--native` or `--model`.
+use it when the current message carries instructions for this turn, and omit it when it
+does not. `--repository PATH` names the target repository or task worktree, whose
+complete root `AGENTS.md` joins every packet.
 
 ## Outside review through Agent Bridge
 
@@ -229,9 +212,7 @@ claimed only when independently established.
 roles. Bridge owns readiness. On failure, Gear shows it exactly and then uses the
 already selected native engine and model; it never chooses another peer or provider.
 Only Gear falls back — Gear 4 does so loudly, with the status line
-`GEAR 4 UNAVAILABLE — GEAR 3 FALLBACK`. The validator ends without certification on
-readiness, transport, shape, root-set, or provenance failure, and certifies only the
-one bounded decision body.
+`GEAR 4 UNAVAILABLE — GEAR 3 FALLBACK`.
 
 External operation requires the frozen Bridge Format 2 checkout at `AGENT_BRIDGE_HOME`
 or `~/agent-bridge`, and a signed-in tool for the peer you name. When
@@ -244,26 +225,23 @@ and version, beside the readiness line. Gear invokes
 path.
 
 Gear surfaces all Bridge readiness and limitation warnings outside the answer.
-Bridge chooses neither engine, model, nor effort itself; when Codex serves as the
-outside reviewer through Bridge, Gear passes the same named Codex model and
-reasoning effort to Bridge's call, and the run record takes the requested and
-recorded values the reply reports. Qwen alone may
+When Codex serves as the outside reviewer through Bridge, Gear passes the same named
+Codex model and reasoning effort to Bridge's call, and the run record takes the
+requested and recorded values the reply reports. Qwen alone may
 preprocess `@` references or leading `/` commands before model input, so only Bridge's
 packet record is promised for that target.
 
 ## Records and output
 
 For Gear 3 and Gear 4, standard output contains only the complete current answer
-bytes. Standard error carries configuration, the selected native engine and model
-selector where applicable, route and readiness, status, notices, the verified final
-Claude model attribution after success, and the run-record path; every successful
-Claude-native role also has its own exact attribution in the record, and every
+bytes. Standard error carries one configuration line, route and readiness
+disclosures, status, notices, and the run-record path; every successful
+Claude-native role also has its own exact reported model in the record, and every
 successful Codex-native role states the model and reasoning effort Codex reported
 for that call.
 
-Validator failure leaves stdout empty; success contains its trusted wrapper and the
-exact peer decisions. Runs are recorded under
-`~/.ora-adversarial-review/runs/<run-id>/RUN.md`.
+Runs are recorded under `~/.ora-adversarial-review/runs/<run-id>/RUN.md`; the
+record is append-only — each entry is one appended write.
 
 ## Host entries
 

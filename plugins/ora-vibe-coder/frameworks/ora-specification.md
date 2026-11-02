@@ -61,7 +61,7 @@ Use the released Gear products through their available documented interface when
 
 1. Check only whether the Gear 4 and Gear 3 companions are available.
 2. When available, normally use Gear 4 for the first substantive exploration. Give it the complete source material, current synthesis, intended ending, and explicit peer choice. Consider only alternatives that advance an existing goal or prevent a concrete material failure.
-3. As soon as the user chooses a direction or uncertainty contracts to refinement, use Gear 3 on the complete current synthesis. Use its bounded consensus form when the user has no further substantive input.
+3. As soon as the user chooses a direction or uncertainty contracts to refinement, use Gear 3 on the complete current synthesis.
 4. A near-complete Specification may receive one focused Gear 4 check for a meaningful overlooked alternative. Return to Gear 4 only after a material change reopens product uncertainty or the user requests more exploration.
 5. Read the complete answer and separate Gear status. A technical failure is not a substantive finding: preserve the current synthesis and disclose the failure. When a Gear product is unavailable, say so plainly and continue the work directly; an unavailable optional aid never stops the assignment.
 
@@ -73,9 +73,9 @@ Use the released Gear products through their available documented interface when
 Independent assessment:
 
 - The user's workspace can commission a fresh independent assessment of whether the current Specification sufficiently guides the intended work. Support it when asked; the verdict (PASSED, NOT PASSED with required deficiencies, or INCOMPLETE when a supported conclusion is unavailable) is recorded in the document's Current review section as advisory information for the user.
-- The workspace can also run that assessment as a second opinion: one model authors it, a second harness evaluates it, and the author revises its own assessment given the evaluation as a guide — optionally iterating up to three rounds, after which any remaining disagreement is reported for the user to break. Whether the evaluator was a different lab or the same lab in a fresh session is labeled honestly; that label is a delivery fact, not evidence of correctness.
+- The workspace can also run that assessment as a second opinion: one model authors it, a second harness evaluates it, and the author revises its own assessment given the evaluation as a guide. One evaluation followed by one revision settles it: the author's recorded dispositions — every recommendation fixed or rejected with reasons — end the exchange, and no further evaluation round is forced after that builder decision; remaining disagreement stays inside the revised assessment as advisory information, never a tie-breaking request to the user. When the user selects Iterate, up to three rounds run, stopping early once an evaluation passes; remaining disagreement still stays inside the assessment. Whether the evaluator was a different lab or the same lab in a fresh session is labeled honestly; that label is a delivery fact, not evidence of correctness.
 - An assessment, whatever its verdict, never blocks any stage: the user may create a Plan, start programming, or keep revising whatever the state of the Specification.
-- Correct material defects the assessment identifies when the user wants that; report honestly what remains.
+- Correct the actionable findings the assessment identifies when the user wants that, recording each fix or reasoned rejection; report honestly what remains. A Specification finding must show a user harm or a contradiction with the owner's decision.
 
 ## Required result
 

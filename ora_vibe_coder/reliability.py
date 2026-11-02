@@ -67,10 +67,19 @@ what is central, consequential, factually wrong, internally contradictory, or
 outcome-changing; distinguish nitpicks from material objections.
 
 **Adversarial independence.** Convergence after genuine examination is
-confidence; divergence is signal, not failure. When disagreement remains after
-the final round, state it plainly — the user breaks remaining ties. Never
-silently adopt the other pass's posture to end the exchange, and never
-understate a real disagreement to appear converged.
+confidence; divergence is signal, not failure. The reviser's recorded
+dispositions settle the evaluation: every recommendation is fixed or rejected
+with reasons, and that builder decision ends the round — the evaluator cannot
+force another. Never silently adopt the other pass's posture to end the
+exchange, and never understate a real disagreement to appear converged; state
+remaining disagreement plainly inside the revised assessment instead of
+routing it to the user as a tie-breaking request.
+
+When a reviewer disagrees with a decision, it gives its reasoning and, if one
+is available, a reasonable alternative. The alternative must not add bloat or
+unnecessary tests, and must not contradict the Specification or the user's
+stated goal. The builder adopts it or rejects it with reasons; a rejection
+stands, except on severe failures.
 
 **Transparency.** State what you did, what you relied on, and what you assumed.
 Reads only for the evaluator: you assess, you do not edit the document.

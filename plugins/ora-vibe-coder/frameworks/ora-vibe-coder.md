@@ -48,7 +48,7 @@ Commission programming through Ora Programming with the available Specification 
 
 ### 4. Verification
 
-Commission Verification through its owner with the accessible candidate: available Specification and Plan, product, any documentation, authorized check output, and relevant baseline or diff. The owner assigns a separate verifier under Ora Verification. Exclude raw Request and implementation transcript. Verification remains read-only toward the candidate; its writable outputs are the Verification Report and its optional overview field. The report is saved for passing, failing, and incomplete reviews alike, with a truthful verdict; the displayed verdict comes from the saved report, and neither its existence nor an older passing result proves newer code passed.
+Commission Verification through its owner with the accessible candidate: available Specification and Plan, product, any documentation, authorized check output, and relevant baseline or diff. The owner assigns a separate verifier under Ora Verification. Exclude raw Request and implementation transcript; the verifier does receive the review record — findings, rejections, pushback and reversals — as material to examine while independently inspecting the candidate. Verification remains read-only toward the candidate; its writable outputs are the Verification Report and its optional overview field. The report is saved for passing, failing, and incomplete reviews alike, with a truthful verdict and one current `Review disposition:` line; the displayed verdict comes from the saved report, and neither its existence nor an older passing result proves newer code passed.
 
 ### 5. Delivery
 
@@ -58,11 +58,11 @@ Requesting Create Plan approves the supplied Specification; requesting implement
 
 ## Route correction to the earliest owner
 
-Treat every material Verification finding as correction work:
+Treat every actionable Verification finding as correction work routed to its earliest owning stage:
 
-- Missing or wrong WHAT returns to an executor using Specification; follow accepted correction with affected Planning, Programming, and fresh cumulative Verification.
-- A changed or invalid HOW returns to an executor using Planning; follow accepted correction with affected Programming and fresh cumulative Verification.
-- Code or documentation that violates adequate upstream artifacts returns to Programming, followed by fresh cumulative Verification.
+- Missing or wrong WHAT returns to an executor using Specification; follow accepted correction with the affected Planning and Programming.
+- A changed or invalid HOW returns to an executor using Planning; follow accepted correction with the affected Programming.
+- Code or documentation that violates adequate upstream artifacts returns to Programming.
 
 Send the owner one consolidated current finding set and controlling artifacts/evidence, excluding superseded findings. Apply the shared amendment route:
 
@@ -75,12 +75,12 @@ For every correction:
 
 - Delegated detail needs no automatic user interruption; changed goals, constraints, reserved decisions, or effects do.
 - Preserve initial stage approvals and each self-contained workflow's correction procedures.
-- Repeat affected authorized downstream work and fresh whole-candidate review.
-- Continue while correction makes progress; record any unresolved finding truthfully in the Verification Report instead of converting it into a final limitation.
+- The correction fixes or rejects each finding with recorded reasons, per the shared reviewer rule. A settled correction completes the work as completed after correction — no further verification pass is forced after that builder decision, and reviewer agreement is not required.
+- An unresolved severe finding goes to the owner and never completes; record it truthfully in the Verification Report instead of converting it into a final limitation.
 
 ## Finish or stop truthfully
 
-After a passing Verification Report:
+After a settled (`SETTLED`) Verification Report, or a final correction whose recorded dispositions settled every finding:
 
 - Assign any remaining authorized finishing work to its responsible workers through the existing delivery procedure.
 - Obtain evidence that the agreed output exists at its intended location and final condition, with required documentation and cleanup complete.

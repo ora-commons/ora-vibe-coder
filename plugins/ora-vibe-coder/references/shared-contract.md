@@ -44,7 +44,45 @@ For every question, suggestion, artifact, check, and process element, ask:
 - A justified restriction must identify: its smallest reversible change; affected paths; user friction; compatibility and maintenance cost; extra testing; new failure modes; and removal path.
 - Optional enrichment paths fail open with loud reporting; existing security, authentication, authority, publication, and data-integrity controls retain their required failure behavior.
 
-A **material** issue causes or is highly likely to cause any of: a wrong user-visible result; lost content or data; a false claim or misattribution; a real runtime or deployment failure; unauthorized scope or effects; a broken atomic operation; a failed necessary recovery; a security exposure; or failure to fulfill the user's stated goal. Style preferences and speculative improvements are not material.
+A finding is actionable only with evidence of a result contrary to the Specification (or the approved Plan, for implementation work) in a way that changes the result the user asked for, or a real error with identified harm. Every finding states: input or situation; actual result; expected result; evidence (command output or a traced code path); who is harmed and how; size of the smallest fix.
+
+Severe failures are unrecoverable data loss, security exposure, and unauthorized or erroneous spending, sending or publishing. Identify every severe finding; for these a traced path from an actual permitted input to the harm is sufficient — do not cause the harm to prove it. A severe finding settles only through a recorded fix with evidence that its harmful path was removed; a rejection does not stand.
+
+Not actionable, so record it and move on: "could", "might" or "in theory" with no demonstrated case; rare conditions with unimportant results; errors nobody would notice and nothing depends on; fixes bigger than the harm, except on severe failures; hardening or style with no proven harm.
+
+## Reviewer rule and dispositions
+
+This one rule governs every review, verification and correction in this lifecycle. The frameworks refer to it; none restates a different threshold.
+
+**Reviewer's job.** Examine widely. Record potential issues and why they do or do not warrant a change, including close calls. Good work means finding real errors and explaining why other issues don't justify code or a test. "No findings" is full success.
+
+**Builder.** Fix actionable findings the smallest way. You may reject a finding as unnecessary, recording your reasons; a rejection stands, except on severe failures. A finding does not expand authority or require a test.
+
+When a reviewer disagrees with a decision, it gives its reasoning and, if one is available, a reasonable alternative. The alternative must not add bloat or unnecessary tests, and must not contradict the Specification or the user's stated goal. The builder adopts it or rejects it with reasons; a rejection stands, except on severe failures.
+
+**Tests.** Simple checks that something happened or didn't are fine. Do not add elaborate tests for rare, unimportant outcomes. A finding alone does not justify a test. Judge a test's whole addition, setup included.
+
+**Final verification and correction.** Verification checks the record as a third reader and may recommend reversing any decision, with reasons. Final correction fixes or rejects each recommendation with reasons. Rejected non-severe findings do not force another review or prevent completion. Unresolved severe findings go to the owner.
+
+**Delete pass.** Before landing, one fresh reviewer's only job is to recommend what can be removed while still meeting the stated user function. The builder applies each one or rejects it with reasons. Whichever method performs the programming commissions this pass exactly once, at the programming handoff — the Programming Loop's own route when it programs, otherwise the implementing host before Git landing; Vibe adds no second delete-pass engine.
+
+**Spec and Plan reviews.** A finding against a Specification or Plan must show a user harm or a contradiction with the owner's decision. Do not invent requirements; recommend removing unnecessary ones or correcting contradictions with the owner's decisions. Ordinary disagreements are settled by the recorded builder dispositions — they are not routed to the user as tie-breaking requests.
+
+**Record.** Findings, rejections, pushback and reversals are retained as ordinary project files committed to Git, with the supplied instructions and conversations. Add no separate persistence system. Include no credentials or secrets. They are not sent to the owner.
+
+**Dispositions.** Every completed review report and correction result carries exactly one current line:
+
+```text
+Review disposition: SETTLED
+```
+
+- `SETTLED` — review finished; every finding was fixed or rejected with reasons; no unresolved severe finding remains. Continue toward delivery.
+- `CORRECTION` — review finished and findings require builder decisions. Run correction.
+- `SEVERE` — a demonstrated severe finding remains unresolved. Preserve the candidate and return the necessary decision to the owner. Never complete.
+- `INCOMPLETE` — review or correction did not finish. Preserve its work; use the existing operational recovery route.
+- `ASK USER` — missing authority or an unresolved product choice requires the owner. Preserve this route.
+
+Read exactly one line from the **current completed report**, outside quotations and examples. Missing, duplicate, unknown or contradictory declarations mean `INCOMPLETE`. "No severe finding stated" means an affirmative, completed `SETTLED` or `CORRECTION` declaration, whose instructions expressly require identifying every severe finding; it never means an absent severity declaration. Completion after final correction says **completed after correction**, without inventing a subsequent verification pass.
 
 ## Understand before asking
 
@@ -290,7 +328,7 @@ Verification Report:
 - A changed delivered product needs applicable verification of the material difference.
 - A local passing result, saved report, or worker handback alone cannot close the project.
 
-Use established status meanings without treating status as user approval or authority. Where applicable, the recognized quality statuses are `PASSED`, `ONE PASS COMPLETE — REVISED, NOT RE-REVIEWED`, `NOT PASSED`, `NOT PASSED — REVIEW INCOMPLETE`, `NOT PASSED — REVISION INCOMPLETE`, and `GEAR 4 UNAVAILABLE — GEAR 3 FALLBACK`. A revised-but-unreviewed result is not passed. A transport failure is not reviewer disagreement. A fallback is not a completed Gear 4 run.
+Use established status meanings without treating status as user approval or authority. Where applicable, the recognized quality statuses are `PASSED`, `SETTLED AFTER CORRECTION — REVISED, NOT RE-REVIEWED`, `REVISED — SETTLED, NOT RE-REVIEWED`, `NOT PASSED`, `SEVERE — UNRESOLVED, OWNER DECISION REQUIRED`, `ASK USER — OWNER DECISION REQUIRED`, `NOT PASSED — REVIEW INCOMPLETE`, `NOT PASSED — REVISION INCOMPLETE`, and `GEAR 4 UNAVAILABLE — GEAR 3 FALLBACK` (the legacy `ONE PASS COMPLETE — REVISED, NOT RE-REVIEWED` remains readable in older reports). A settled correction completes the work as completed after correction without a further verification pass. A transport failure is not reviewer disagreement. A fallback is not a completed Gear 4 run. A severe-unresolved status never reports success.
 
 - Silence causes no calls, no cleanup beyond already authorized work, no status change, no manufactured report, and no manufactured closure.
 - On resumption, inspect the actual retained artifacts, candidate, findings, check output, and Git state; never infer a pass from a file or old label.

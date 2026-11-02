@@ -174,7 +174,7 @@ class LocalBoundary(unittest.TestCase):
                     top_height = page.locator("#top").bounding_box()["height"]
                     # Three compact header rows on a wide window, with no
                     # growing banner stack; narrow wrapping is the accepted
-                    # best-effort layout Lawrence's checkpoint approved.
+                    # best-effort layout the owner's checkpoint approved.
                     if width >= 1200:
                         self.assertLess(top_height, 170)
                     main = page.locator(".main-col").bounding_box()
@@ -4767,7 +4767,7 @@ elif skill.exists():
         self.assertEqual(completed.returncode, 0, completed.stderr)
         facts = json.loads(completed.stdout)
         self.assertEqual(facts["component"], "ora-adversarial-review")
-        self.assertEqual(facts["version"], "0.5.0")
+        self.assertEqual(facts["version"], "0.6.0")
         self.assertEqual(sorted(facts["analytical_roles"]), ["peer", "primary"])
         # An installed entry answers its own command surface offline; no
         # network, pip, or model call is involved in running --help.

@@ -1,8 +1,7 @@
-"""Fresh native calls and the frozen Agent Bridge Format 2 boundary."""
+"""Fresh native calls and the Agent Bridge Format 2 boundary."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -39,43 +38,20 @@ class _ProcessResult:
 
 
 @dataclass(frozen=True)
-class BridgeProvenance:
-    """Transport facts verified from one canonical Format 2 response."""
-
-    peer: str
-    initiator: str
-    session_dir: Path
-    response_path: Path
-    message_sequence: int
-    from_label: str
-    to_label: str
-    response_sha256: str
-    body_sha256: str
-    bridge_format: int = 2
-    session_verified: bool = False
-
-
-@dataclass(frozen=True)
 class BridgeChoices:
     """The model and effort one Bridge reply says the tool used.
 
     Each half is the exact single-line string the reply's header carries:
-    ``Model:`` and ``Effort:`` hold the values the tool recorded — the words
-    ``not reported`` when it could not be read — and ``Requested-Model:`` /
-    ``Requested-Effort:`` appear only when the caller named a choice. A half
-    the reply does not carry stays ``None``; nothing is inferred.
+    ``Model:`` and ``Effort:`` hold the values the tool recorded, and
+    ``Requested-Model:`` / ``Requested-Effort:`` appear only when the caller
+    named a choice. A half the reply does not carry stays ``None``; nothing
+    is inferred.
     """
 
     model: str | None = None
     effort: str | None = None
     requested_model: str | None = None
     requested_effort: str | None = None
-
-
-@dataclass(frozen=True)
-class BridgeResponse:
-    body: str
-    provenance: BridgeProvenance
 
 
 def _display_bytes(value: bytes) -> str:
@@ -95,25 +71,27 @@ def _run_bounded(
     ``timeout`` bounds only calls that are not AI work: a readiness or record
     question may be cut short. A model call passes ``None`` and is never
     killed for elapsed time — it ends on completion, explicit cancellation,
-    or its own terminal error, and the grace constant above bounds only the
-    cleanup of the group this call started.
+    or its own terminal error. Cancellation (SIGTERM/SIGHUP) and any other
+    failure always stop and reap the process group this call started; a
+    signal that lands while the child is being created is deferred until the
+    child exists and its cleanup is protected.
     """
-
     cancelled: int | None = None
-    waiting = False
 
-    def cancel(signum: int, _frame: object) -> None:
+    def record(signum: int, _frame: object) -> None:
         nonlocal cancelled
         cancelled = signum
-        if waiting:
-            raise SystemExit(128 + signum)
+
+    def cancel(signum: int, frame: object) -> None:
+        record(signum, frame)
+        raise SystemExit(128 + signum)
 
     handlers = {
         signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGHUP)
     }
     try:
         for signum in handlers:
-            signal.signal(signum, cancel)
+            signal.signal(signum, record)
         try:
             process = subprocess.Popen(
                 list(argv),
@@ -130,14 +108,11 @@ def _run_bounded(
             raise CallFailure(f"Could not start `{argv[0]}`: {failure}") from failure
 
         try:
-            # Defer cancellation during child creation and cleanup; never abandon it.
-            waiting = True
-            try:
-                if cancelled is not None:
-                    raise SystemExit(128 + cancelled)
-                stdout, stderr = process.communicate(input=body, timeout=timeout)
-            finally:
-                waiting = False
+            for signum in handlers:
+                signal.signal(signum, cancel)
+            if cancelled is not None:
+                raise SystemExit(128 + cancelled)
+            stdout, stderr = process.communicate(input=body, timeout=timeout)
         except subprocess.TimeoutExpired as failure:
             stdout, stderr = _stop_process(process)
             if cancelled is not None:
@@ -322,39 +297,22 @@ class ClaudeAdapter:
                 f"Fresh Claude Code role `{role}` returned no successful result text."
             )
 
+        # Record the model Claude actually reports, where it reports one
+        # unambiguously; nothing is verified against the request.
         model_usage = payload.get("modelUsage")
-        if not isinstance(model_usage, dict):
-            reported: list[str] = []
-        else:
-            reported = sorted(
-                key for key in model_usage if isinstance(key, str) and key.strip()
+        reported = (
+            sorted(
+                key for key in model_usage
+                if isinstance(key, str) and key.strip()
             )
-        if len(reported) != 1:
-            detail = ", ".join(f"`{key}`" for key in reported) or "none"
-            raise CallFailure(
-                f"Fresh Claude Code role `{role}` did not report one unambiguous "
-                f"effective model; returned modelUsage keys: {detail}."
-            )
-
-        effective_model = reported[0]
-        if self.model is not None:
-            normalized_selector = self.model.casefold()
-            normalized_effective = effective_model.casefold()
-            if normalized_selector == "fable":
-                matches = normalized_effective.startswith("claude-fable-")
-            else:
-                matches = normalized_effective == normalized_selector or (
-                    normalized_effective.startswith(normalized_selector + "-")
-                )
-            if not matches:
-                raise CallFailure(
-                    f"Fresh Claude Code role `{role}` requested model selector "
-                    f"`{self.model}` but reported effective model `{effective_model}`."
-                )
-        self.effective_model = effective_model
+            if isinstance(model_usage, dict)
+            else []
+        )
+        self.effective_model = reported[0] if len(reported) == 1 else None
         return payload["result"]
 
     def call(self, packet: str, *, role: str) -> str:
+        self.effective_model = None
         environment = os.environ.copy()
         for name in self._NON_SUBSCRIPTION_ENVIRONMENT:
             environment.pop(name, None)
@@ -492,22 +450,16 @@ class BridgeAdapter:
         command: _BridgeCommand,
         *,
         peer: str,
-        initiator: str,
         session_dir: Path,
-        session_verified: bool = False,
         model: str | None = None,
         effort: str | None = None,
     ) -> None:
         self.command = command
-        self.peer = peer
         self.engine = peer
-        self.initiator = initiator
         self.session_dir = session_dir
-        self.session_verified = session_verified
         self.model = model
         self.effort = effort
         self.last_call_notice = ""
-        self.last_call_provenance: BridgeProvenance | None = None
         self.last_call_choices: BridgeChoices | None = None
 
     @classmethod
@@ -557,17 +509,10 @@ class BridgeAdapter:
                 _display_bytes(created.stderr)
                 or f"Agent Bridge could not create the `{peer}` session."
             )
-        cls._verify_session_record(
-            session_dir,
-            peer=peer,
-            initiator=initiator,
-        )
         return cls(
             command,
             peer=peer,
-            initiator=initiator,
             session_dir=session_dir,
-            session_verified=True,
             model=model,
             effort=effort,
         ), readiness
@@ -579,71 +524,25 @@ class BridgeAdapter:
         ends when the peer answers, the caller cancels, or transport fails.
         """
         self.last_call_notice = ""
-        self.last_call_provenance = None
         self.last_call_choices = None
-        before = self._response_paths()
         arguments = ("run", "--session", str(self.session_dir))
         if self.model is not None:
             arguments += ("--model", self.model)
         if self.effort is not None:
             arguments += ("--effort", self.effort)
-        try:
-            result = self.command.run(arguments, body=packet, timeout=None)
-        except CallFailure as failure:
-            detail = published_detail = failure.display()
-        else:
-            if result.returncode == 0:
-                self.last_call_notice = result.stderr.decode("utf-8", errors="replace")
-                lines = [line for line in _display_bytes(result.stdout).splitlines() if line]
-                if len(lines) != 1:
-                    raise CallFailure(
-                        f"Agent Bridge returned an ambiguous response path for role `{role}`."
-                    )
-                reported = Path(lines[0]).expanduser().resolve()
-                newly_published = self._response_paths() - before
-                if len(newly_published) != 1 or reported not in newly_published:
-                    raise CallFailure(
-                        f"Agent Bridge did not publish exactly one new response for role `{role}`."
-                    )
-                return self._read_response(reported)
+        result = self.command.run(arguments, body=packet, timeout=None)
+        if result.returncode != 0:
             detail = _display_bytes(result.stderr) or (
                 f"Agent Bridge role `{role}` exited {result.returncode}."
             )
-            published_detail = _display_bytes(result.stderr) or (
-                f"Agent Bridge role `{role}` exited {result.returncode} after "
-                "publishing a readable response."
-            )
-
-        newly_published = self._response_paths() - before
-        if len(newly_published) == 1:
-            body = self._read_response(next(iter(newly_published)))
-            raise CallFailure(published_detail, usable_response=body)
-        if len(newly_published) > 1:
-            detail = (
-                f"{detail} More than one new peer response appeared in the session; "
-                "none was guessed."
-            )
-        raise CallFailure(detail)
-
-    def call_with_provenance(self, packet: str, *, role: str) -> BridgeResponse:
-        """Return one successful response together with verified transport facts."""
-
-        body = self.call(packet, role=role)
-        if self.last_call_provenance is None:
+            raise CallFailure(detail)
+        self.last_call_notice = result.stderr.decode("utf-8", errors="replace")
+        lines = [line for line in _display_bytes(result.stdout).splitlines() if line]
+        if len(lines) != 1:
             raise CallFailure(
-                f"Agent Bridge returned role `{role}` without verified response provenance."
+                f"Agent Bridge returned an ambiguous response path for role `{role}`."
             )
-        return BridgeResponse(body, self.last_call_provenance)
-
-    def _response_paths(self) -> set[Path]:
-        messages = self.session_dir / "messages"
-        if not messages.is_dir():
-            return set()
-        return {
-            path.resolve()
-            for path in messages.iterdir()
-            if path.is_file() and self._RESPONSE_NAME.fullmatch(path.name)
-        }
+        return self._read_response(Path(lines[0]).expanduser().resolve())
 
     def _read_response(self, path: Path) -> str:
         messages = (self.session_dir / "messages").resolve()
@@ -653,8 +552,7 @@ class BridgeAdapter:
                 f"Agent Bridge returned a response path outside its session: {path}"
             )
         try:
-            raw = resolved.read_bytes()
-            text = raw.decode("utf-8")
+            text = resolved.read_bytes().decode("utf-8")
         except (OSError, UnicodeDecodeError) as failure:
             raise CallFailure(
                 f"Agent Bridge response `{resolved}` could not be read as UTF-8: {failure}"
@@ -665,39 +563,7 @@ class BridgeAdapter:
                 f"Agent Bridge response `{resolved}` has no Format 2 body boundary."
             )
         header, body = text.split(marker, 1)
-        name_match = self._RESPONSE_NAME.fullmatch(resolved.name)
-        if name_match is None:
-            raise MalformedResponse(
-                f"Agent Bridge response `{resolved}` has an invalid response identity."
-            )
-        sequence_text = name_match.group("sequence")
-        lines = header.splitlines()
-        expected_header = [
-            f"# Message {sequence_text}",
-            f"From: {self.peer}",
-            f"To: {self.initiator}",
-        ]
-        if (
-            len(lines) < len(expected_header)
-            or lines[: len(expected_header)] != expected_header
-        ):
-            raise MalformedResponse(
-                f"Agent Bridge response `{resolved}` has an ambiguous or incorrect "
-                "Format 2 identity and direction."
-            )
-        self.last_call_choices = self._read_choices(lines[len(expected_header):])
-        self.last_call_provenance = BridgeProvenance(
-            peer=self.peer,
-            initiator=self.initiator,
-            session_dir=self.session_dir.expanduser().resolve(),
-            response_path=resolved,
-            message_sequence=int(sequence_text),
-            from_label=self.peer,
-            to_label=self.initiator,
-            response_sha256=hashlib.sha256(raw).hexdigest(),
-            body_sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(),
-            session_verified=self.session_verified,
-        )
+        self.last_call_choices = self._read_choices(header.splitlines())
         return body
 
     _CHOICE_KEYS = (
@@ -709,36 +575,19 @@ class BridgeAdapter:
 
     @classmethod
     def _read_choices(cls, lines: Sequence[str]) -> BridgeChoices | None:
-        """Accept the model-and-effort lines a reply may carry after `To:`.
+        """Collect the model-and-effort lines a reply header may carry.
 
-        Bridge writes them in one fixed order, each at most once: the values
-        the tool recorded as `Model:` and `Effort:`, then the caller's named
-        choices as `Requested-Model:` and `Requested-Effort:`. Any other
-        header line stays ambiguous and is refused, exactly as before.
+        Each recognized label contributes its value; unrecognized header
+        lines are ignored rather than refused.
         """
-
         values: dict[str, str] = {}
-        index = 0
-        for label, field in cls._CHOICE_KEYS:
-            if index >= len(lines):
-                break
-            line = lines[index]
-            prefix = f"{label}: "
-            if not line.startswith(prefix):
-                continue
-            value = line[len(prefix):].strip()
-            if not value:
-                raise MalformedResponse(
-                    "Agent Bridge response carried an empty "
-                    f"`{label}:` value."
-                )
-            values[field] = value
-            index += 1
-        if index != len(lines):
-            raise MalformedResponse(
-                "Agent Bridge response carries an unrecognized header line "
-                f"`{lines[index]}` beside its identity."
-            )
+        for line in lines:
+            for label, field in cls._CHOICE_KEYS:
+                prefix = f"{label}: "
+                if field not in values and line.startswith(prefix):
+                    value = line[len(prefix):].strip()
+                    if value:
+                        values[field] = value
         if not values:
             return None
         return BridgeChoices(
@@ -747,36 +596,3 @@ class BridgeAdapter:
             requested_model=values.get("requested_model"),
             requested_effort=values.get("requested_effort"),
         )
-
-    @staticmethod
-    def _verify_session_record(
-        session_dir: Path,
-        *,
-        peer: str,
-        initiator: str,
-    ) -> None:
-        path = session_dir.expanduser().resolve() / "SESSION.md"
-        try:
-            text = path.read_bytes().decode("utf-8")
-        except (OSError, UnicodeDecodeError) as failure:
-            raise CallFailure(
-                f"Agent Bridge session `{path}` could not be verified as Format 2: {failure}"
-            ) from failure
-        marker = "\n\n## Body\n\n"
-        if marker not in text:
-            raise CallFailure(
-                f"Agent Bridge session `{path}` has no Format 2 body boundary."
-            )
-        header, body = text.split(marker, 1)
-        expected_header = [
-            "# Session",
-            "",
-            "Bridge-Format: 2",
-            f"Initiator: {initiator}",
-            f"Peer: {peer}",
-        ]
-        if header.splitlines() != expected_header or not body.strip():
-            raise CallFailure(
-                f"Agent Bridge session `{path}` has an ambiguous or incorrect "
-                "Format 2 identity."
-            )

@@ -172,8 +172,7 @@ class FrameworkDeliveryTests(unittest.TestCase):
         )
         self.assertEqual(identity["component"], "ora-programming-loop")
         self.assertEqual(identity["source"], "ora-programming-loop")
-        self.assertEqual(identity["version"], "1.2.1")
-        self.assertEqual(authority["source_revision"], "2cef0bc0aae82771940cb5615b2b8fc53e5fcc0a")
+        self.assertEqual(identity["version"], "1.3.0")
         self.assertEqual(identity["version"], (source / "VERSION").read_text().strip())
         self.assertEqual(set(identity["files"]), PACKAGE_FILES)
         self.assertTrue(LOOP_FILES < PACKAGE_FILES)
@@ -196,7 +195,7 @@ class FrameworkDeliveryTests(unittest.TestCase):
         # installer exactly as shipped: its own provenance validation accepts
         # the generated SOURCE.json, digests, and Git tree identity. The
         # import must not write its bytecode cache: the cache would land in
-        # the very tree under validation, and 1.2.1's package reader refuses
+        # the very tree under validation, and 1.3.0's package reader refuses
         # any resource outside its product paths, caches included.
         previous_bytecode_setting = sys.dont_write_bytecode
         sys.dont_write_bytecode = True
@@ -207,7 +206,7 @@ class FrameworkDeliveryTests(unittest.TestCase):
             loop_installer.loader.exec_module(bundled_installer)
         finally:
             sys.dont_write_bytecode = previous_bytecode_setting
-        provenance, verified = bundled_installer.package_provenance(root, "1.2.1")
+        provenance, verified = bundled_installer.package_provenance(root, "1.3.0")
         self.assertEqual(provenance["source_kind"], "vendored-snapshot")
         self.assertEqual(provenance["source_revision"], authority["source_revision"])
         self.assertEqual(provenance["source_tree"], authority["source_tree"])
@@ -221,7 +220,6 @@ class FrameworkDeliveryTests(unittest.TestCase):
         bridge_authority = loop_integrity.bridge_authority_metadata()
         bridge_files, _bridge_modes, bridge_tree = loop_integrity.read_bridge_snapshot(bridge)
         self.assertEqual(bridge_tree, bridge_authority["source_tree"])
-        self.assertEqual(bridge_authority["source_revision"], "8d4449424341cc838262dd0aaf453187163ba7b3")
         self.assertTrue(all(name.startswith("ora_agent_bridge/") or name in {"LICENSE", "NOTICE", "README.md"}
                             for name in bridge_files))
         with tempfile.TemporaryDirectory() as directory:
@@ -236,12 +234,11 @@ class FrameworkDeliveryTests(unittest.TestCase):
             with self.assertRaisesRegex(loop_integrity.LoopIntegrityError, "unexpected files"):
                 loop_integrity.read_bridge_snapshot(cached)
 
-        # The vendored Boost runtime is exactly its reviewed 31-file import of
-        # released tag v0.5.0, and its generated counterpart carries the same
-        # files under a complete five-field provenance record.
+        # The vendored Boost runtime is exactly its reviewed 28-file import,
+        # and its generated counterpart carries the same files under a
+        # complete five-field provenance record.
         boost = PACKAGE.parents[1] / "components" / "ora-ai-boost"
         boost_authority = loop_integrity.boost_authority_metadata()
-        self.assertEqual(boost_authority["source_revision"], "853d9e4b1bd30a1982c33f300c0fdac77df515ce")
         actual_boost = {
             str(path.relative_to(boost))
             for path in boost.rglob("*") if path.is_file() and "__pycache__" not in path.parts
@@ -262,7 +259,7 @@ class FrameworkDeliveryTests(unittest.TestCase):
             boost_authority,
         )
         self.assertEqual(boost_identity["component"], "ora-adversarial-review")
-        self.assertEqual(boost_identity["version"], "0.5.0")
+        self.assertEqual(boost_identity["version"], "0.6.0")
         self.assertEqual(
             {name: hashlib.sha256(data).hexdigest() for name, data in boost_files.items()},
             boost_identity["files"],
@@ -875,14 +872,14 @@ class FrameworkDeliveryTests(unittest.TestCase):
             )
             for host, host_home in SKILL_HOMES.items():
                 installed_loop = home / host_home / "skills/ora-programming-loop"
-                # The bundled 1.2.1 installer writes the renamed entry and
+                # The bundled 1.3.0 installer writes the renamed entry and
                 # migrates the old name away; none may remain.
                 self.assertFalse((home / host_home / "skills/programming-loop").exists())
                 installed_identity = json.loads((installed_loop / "SOURCE.json").read_text())
                 self.assertEqual(installed_identity["component"], "ora-programming-loop")
                 self.assertEqual(installed_identity["source"], "ora-programming-loop")
                 self.assertEqual(installed_identity["host"], host)
-                self.assertEqual(installed_identity["version"], "1.2.1")
+                self.assertEqual(installed_identity["version"], "1.3.0")
                 self.assertEqual(installed_identity["source_kind"], "vendored-snapshot")
                 self.assertEqual(
                     installed_identity["public_release_repository"],

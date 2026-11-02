@@ -465,10 +465,101 @@ def reported_verdict(text):
     return status["label"] if status["label"] in VALUES["verification"] else ""
 
 
+#: The one allowed completion line on review reports and correction results.
+DISPOSITION_VALUES = ("SETTLED", "CORRECTION", "SEVERE", "INCOMPLETE", "ASK USER")
+#: Any line shaped like a declaration counts as one, whatever its value: a
+#: valid declaration plus an unknown one is two declarations, not one.
+_DISPOSITION_DECLARATION = re.compile(r"^Review disposition:[ \t]*(.*?)[ \t]*\r?$")
+
+
+def _live_lines(text):
+    """Yield lines outside fenced code blocks and quotations, in order.
+
+    A declaration, decision, or finding shown as an example or quoted from
+    another document is not live content, so none of the readers below
+    count it.
+    """
+    fence = None
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if fence is not None:
+            if stripped.startswith(fence):
+                fence = None
+            continue
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if marker:
+            fence = marker[1]
+            continue
+        if stripped.startswith(">"):
+            continue
+        yield line
+
+
+def review_disposition(text):
+    """The one current ``Review disposition:`` line, or '' when unreadable.
+
+    Only lines outside fenced code blocks and quotations count. Missing,
+    duplicate, unknown, or contradictory declarations read as no declaration
+    at all — the caller treats that as incomplete.
+    """
+    found = []
+    for line in _live_lines(text):
+        match = _DISPOSITION_DECLARATION.match(line)
+        if match is not None:
+            found.append(match.group(1))
+    if len(found) != 1 or found[0] not in DISPOSITION_VALUES:
+        return ""
+    return found[0]
+
+
+#: One recorded builder decision in a correction result: the finding it
+#: settles, the decision, and a nonempty reason — `- R1 — FIXED — evidence`.
+_CORRECTION_DISPOSITION = re.compile(r"^[-*] +(\S+) — (FIXED|REJECTED) — (\S.*)$")
+
+
+def correction_dispositions(text):
+    """The recorded per-finding decisions in a correction result.
+
+    Each entry is ``(label, decision, reason)`` from one live line; a settled
+    correction records at least one, and a severe finding only settles through
+    a FIXED entry with its evidence.
+    """
+    entries = []
+    for line in _live_lines(text):
+        match = _CORRECTION_DISPOSITION.match(line)
+        if match is not None:
+            entries.append((match.group(1), match.group(2), match.group(3).strip()))
+    return entries
+
+
+#: One enumerated finding in a Verification Report: the stable label the
+#: correction cites back — `- R1 — <finding>`, and `S1` for severe findings.
+_FINDING_ENTRY = re.compile(r"^[-*] +([RS]\d+)\b")
+
+
+def verification_finding_labels(text):
+    """The distinct R/S finding labels a Verification Report enumerated.
+
+    A report whose findings require builder decisions names each one on
+    its own line with a stable label, so a settled correction records a
+    decision for every supplied label, and a severe (S) label settles
+    only through its own FIXED entry.
+    """
+    labels = []
+    for line in _live_lines(text):
+        match = _FINDING_ENTRY.match(line)
+        if match is not None and match.group(1) not in labels:
+            labels.append(match.group(1))
+    return labels
+
+
 QUALITY = {
-    "PASSED", "ONE PASS COMPLETE — REVISED, NOT RE-REVIEWED", "NOT PASSED",
+    "PASSED", "SETTLED AFTER CORRECTION — REVISED, NOT RE-REVIEWED",
+    "REVISED — SETTLED, NOT RE-REVIEWED", "NOT PASSED",
+    "SEVERE — UNRESOLVED, OWNER DECISION REQUIRED", "ASK USER — OWNER DECISION REQUIRED",
     "NOT PASSED — REVIEW INCOMPLETE", "NOT PASSED — REVISION INCOMPLETE",
     "GEAR 4 UNAVAILABLE — GEAR 3 FALLBACK",
+    "ONE PASS COMPLETE — REVISED, NOT RE-REVIEWED",
 }
 VALUES = {
     "specification": {"DRAFT", "IN PROGRESS", "AWAITING APPROVAL", "APPROVED", "Approved product specification"},

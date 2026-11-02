@@ -12,17 +12,10 @@ class MalformedResponse(OraReviewError):
 class CallFailure(OraReviewError):
     """A fresh native or peer call did not return a usable response."""
 
-    def __init__(
-        self,
-        reason: str,
-        next_action: str | None = None,
-        *,
-        usable_response: str | None = None,
-    ):
+    def __init__(self, reason: str, next_action: str | None = None):
         super().__init__(reason)
         self.reason = reason
         self.next_action = next_action
-        self.usable_response = usable_response
 
     def display(self) -> str:
         if self.next_action:

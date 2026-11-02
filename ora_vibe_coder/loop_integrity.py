@@ -11,8 +11,8 @@ import re
 AUTHORITY = {
     "authoritative_repository": "Golfplan18/ora-programming-loop",
     "public_release_repository": "ora-commons/ora-programming-loop",
-    "source_revision": "2cef0bc0aae82771940cb5615b2b8fc53e5fcc0a",
-    "source_tree": "533370ef3d65d56db308ac9de0898ce067f406fa",
+    "source_revision": "df47cff0fc07ac08728004d41d22f321996cd808",
+    "source_tree": "2d4c8f61f9adc0783beaebce6099fb0e7948fd8a",
     "vendored_snapshot": "components/programming-loop",
 }
 
@@ -66,12 +66,13 @@ BRIDGE_PATHS = (
 )
 
 # This is the single maintainer update point for a reviewed Boost runtime
-# import. Boost's public release repository is authoritative in one place.
+# import. The private repository is the canonical source; the public
+# repository remains the release destination.
 BOOST_AUTHORITY = {
-    "authoritative_repository": "ora-commons/ora-adversarial-review",
+    "authoritative_repository": "Golfplan18/ora-adversarial-review",
     "public_release_repository": "ora-commons/ora-adversarial-review",
-    "source_revision": "853d9e4b1bd30a1982c33f300c0fdac77df515ce",
-    "source_tree": "b758f69f261eafc184d819152187aa889a2012f8",
+    "source_revision": "ebb96d68e176836b765581eb8c1404275b9c5a78",
+    "source_tree": "4ad8dc492c1e65c48c8912318e1c205b80146f59",
     "vendored_snapshot": "components/ora-ai-boost",
 }
 
@@ -81,13 +82,13 @@ BOOST_PATHS = (
     "README.md",
     *(f"ora_review/{name}.py" for name in (
         "__init__", "adapters", "cli", "errors", "models", "packet",
-        "record", "runner", "validator")),
+        "record", "runner")),
     *(f"ora_review/instructions/{name}.md" for name in (
         "breadth-analytical", "breadth-committed", "consolidator", "depth",
         "initial-answer", "output-answer", "output-review", "output-revision",
-        "output-validator", "review-breadth", "review-consolidated",
-        "review-depth", "reviewer", "revise-breadth", "revise-consolidated",
-        "revise-depth", "reviser", "universal", "validator")),
+        "review-breadth", "review-consolidated", "review-depth", "reviewer",
+        "revise-breadth", "revise-consolidated", "revise-depth", "reviser",
+        "universal")),
 )
 
 
@@ -219,7 +220,7 @@ def read_bridge_snapshot(root: Path, *, allowed_extra: set[str] | None = None
 
 def read_boost_snapshot(root: Path, *, allowed_extra: set[str] | None = None
                         ) -> tuple[dict[str, bytes], dict[str, str], str]:
-    """Read the exact 31 Boost runtime files: bytes, Git modes, and tree ID."""
+    """Read the exact 28 Boost runtime files: bytes, Git modes, and tree ID."""
     return _read_exact_snapshot(root, BOOST_PATHS, allowed_extra, "Ora AI Boost")
 
 
