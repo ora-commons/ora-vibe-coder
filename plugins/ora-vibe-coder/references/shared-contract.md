@@ -70,10 +70,10 @@ When a reviewer disagrees with a decision, it gives its reasoning and, if one is
 
 **Record.** Findings, rejections, pushback and reversals are retained as ordinary project files committed to Git, with the supplied instructions and conversations. Add no separate persistence system. Include no credentials or secrets. They are not sent to the owner.
 
-**Dispositions.** Every completed review report and correction result carries exactly one current line:
+**Dispositions.** Every completed review report and correction result the automatic run produces also records its routing decision in the same opening YAML:
 
 ```text
-Review disposition: SETTLED
+disposition: SETTLED
 ```
 
 - `SETTLED` — review finished; every finding was fixed or rejected with reasons; no unresolved severe finding remains. Continue toward delivery.
@@ -82,7 +82,7 @@ Review disposition: SETTLED
 - `INCOMPLETE` — review or correction did not finish. Preserve its work; use the existing operational recovery route.
 - `ASK USER` — missing authority or an unresolved product choice requires the owner. Preserve this route.
 
-Read exactly one line from the **current completed report**, outside quotations and examples. Missing, duplicate, unknown or contradictory declarations mean `INCOMPLETE`. "No severe finding stated" means an affirmative, completed `SETTLED` or `CORRECTION` declaration, whose instructions expressly require identifying every severe finding; it never means an absent severity declaration. Completion after final correction says **completed after correction**, without inventing a subsequent verification pass.
+The reader takes the `disposition:` field of the **current completed report's** opening YAML, decided after the work is finished. Missing, duplicate, unknown or off-list values mean `INCOMPLETE` — never settled. "No severe finding stated" means an affirmative, completed `SETTLED` or `CORRECTION` value, whose instructions expressly require identifying every severe finding; it never means an absent severity value. Completion after final correction says **completed after correction**, without inventing a subsequent verification pass.
 
 ## Understand before asking
 
@@ -282,15 +282,16 @@ Use a small opening YAML block for new current documents. A standalone Specifica
 | Document | Workflow `status` | Assessment `review` |
 |---|---|---|
 | Specification and Plan | `DRAFT`, `IN PROGRESS`, `AWAITING APPROVAL`, `APPROVED` | Blank when unreviewed; otherwise `PASSED`, `NOT PASSED`, `INCOMPLETE`, or `CHANGED` |
-| Programming Result and Verification Report | `PASSED`, `NOT PASSED`, or `INCOMPLETE` | No separate review field |
+| Programming Result and Verification Report | `PASSED`, `NOT PASSED`, `INCOMPLETE`, or `CLOSED BY USER — UNRESOLVED FINDINGS` | No separate review field |
 
-The three assessment/result verdicts have one meaning across stages:
+The assessment/result verdicts have one meaning across stages:
 
 - `PASSED`: the assigned scope was successfully completed and no required deficiency remains unresolved. Programming describes the execution and approved delivery endpoint; Verification describes an independent inspection. Neither substitutes for the other.
 - `NOT PASSED`: a completed assessment found required deficiencies. Keep their substantive explanation and recommended corrections in the document.
 - `INCOMPLETE`: the work or assessment cannot reach a supported conclusion because evidence, a tool, an essential decision, or required work is missing. Explain exactly what remains and who can resolve it.
+- `CLOSED BY USER — UNRESOLVED FINDINGS`: the user explicitly closed the work with unresolved material findings; never complete, verified or successful.
 
-Show PASSED in green, NOT PASSED in red, and INCOMPLETE in amber. A saved verdict describes only its actual scope and inspected delivery; an older passing result does not establish that later work passed. Keep the full assessment and findings under one `## Current review` in a Specification or Plan; it explains the YAML review value. Do not replace the explanation with metadata or counts.
+The verdict is the YAML field alone, matched exactly against the lists above, decided after the work is finished. Show PASSED in green, NOT PASSED in red, and INCOMPLETE in amber. A saved verdict describes only its actual scope and inspected delivery; an older passing result does not establish that later work passed. Keep the full assessment and findings under one `## Current review` in a Specification or Plan; it explains the YAML review value. Do not replace the explanation with metadata or counts.
 
 Approval is the user's decision and is independent of every review state. Pressing Approve, or deliberately requesting the next stage, approves the actual upstream document supplied: Create Plan approves the Specification, and Implement Plan approves the Plan. This holds when the review is absent, NOT PASSED, INCOMPLETE or CHANGED. Record `status: APPROVED` directly in the supplied document; no extra user note or AI inference is needed. Approval does not turn a review into PASSED. Opening a disclosure, selecting a workspace, previewing a request or refreshing files is not approval. The app records approval before dispatch; a later dispatch failure does not undo that real decision. In standalone conversations, an explicit request to create the Plan or implement it is the same approval; preserve the supplied version and report any unavailable write honestly.
 
@@ -300,10 +301,10 @@ Recording status, review, dates, Markdown layout and meaning-preserving typo cor
 
 Reading existing documents:
 
-- Retain truthful legacy opening fields and explicit current conclusions, including `Status: APPROVED`, decorated fields, legacy approval phrases, and Programming `COMPLETE` as a successful equivalent. A legacy Spec/Plan completeness review `INCOMPLETE` with deficiencies means NOT PASSED; the new YAML `review: INCOMPLETE` means the assessment did not finish. A legacy combined Verification `NOT PASSED — REVIEW INCOMPLETE` or `NOT PASSED — REVISION INCOMPLETE` remains unfinished and displays INCOMPLETE.
-- Prefer the current YAML field. Do not search history, examples, quoted instructions or code for a success word; an explicit current result can follow a quoted introductory note or appear under an explicitly current report heading. A historical failure mentioned in the explanation does not retract a clear current success. Actual competing current conclusions or qualified partial success must remain errors rather than false passes.
-- Untouched empty templates show NOT STARTED neutrally. Substantive Specification and Plan documents without a review show NOT REVIEWED. No Programming Result shows NO RESULT; no Verification Report shows NOT VERIFIED. A substantive result/report with no verdict shows VERDICT MISSING in amber. Malformed, unknown or duplicate current fields show REPORT ERROR with the actual explanation. An unreadable file shows COULD NOT READ and its actual reason.
-- Missing metadata alone is not failure when the substantive result can be read truthfully. Do not silently migrate or rewrite existing projects just to adopt the new fields. Optional Programming and Verification fields in Project.md remain overview history and never override the current saved result/report.
+- The verdict is the opening YAML field alone, matched exactly. The report body never decides, changes or contradicts a verdict: no reading of history, examples, quoted instructions, code or prose overrides the YAML value, and a contradiction in the prose changes nothing.
+- A Specification or Plan with no `status` shows no status, neutrally; with a blank or missing `review` it shows NOT REVIEWED. A substantive result or report with no `status` shows VERDICT MISSING in amber. A malformed, duplicate or off-list value shows REPORT ERROR naming the value.
+- Untouched empty templates show NOT STARTED neutrally. No Programming Result shows NO RESULT; no Verification Report shows NOT VERIFIED. An unreadable file shows COULD NOT READ and its actual reason. `status: INCOMPLETE` (and `review: INCOMPLETE`) shows REVIEW INCOMPLETE.
+- Do not silently migrate or rewrite existing projects just to adopt the new fields. Optional Programming and Verification fields in Project.md remain overview history and never override the current saved result/report.
 
 Overview field updates:
 
@@ -323,12 +324,12 @@ Verification Report:
 ## Keep status and stopping truthful
 
 - Carry completion from Specification through the Plan and every assignment using the role contract's delivery rules.
-- Distinguish a completed review or draft assignment from the larger project's endpoint.
+- Distinguish a completed review or draft assignment from the larger project's endpoint. The final project verdict covers the whole delivery; a worker or stage result covers only its own assignment.
 - Assign remaining authorized delivery and cleanup to responsible workers; obtain evidence of the output in its intended location and condition.
 - A changed delivered product needs applicable verification of the material difference.
 - A local passing result, saved report, or worker handback alone cannot close the project.
 
-Use established status meanings without treating status as user approval or authority. Where applicable, the recognized quality statuses are `PASSED`, `SETTLED AFTER CORRECTION — REVISED, NOT RE-REVIEWED`, `REVISED — SETTLED, NOT RE-REVIEWED`, `NOT PASSED`, `SEVERE — UNRESOLVED, OWNER DECISION REQUIRED`, `ASK USER — OWNER DECISION REQUIRED`, `NOT PASSED — REVIEW INCOMPLETE`, `NOT PASSED — REVISION INCOMPLETE`, and `GEAR 4 UNAVAILABLE — GEAR 3 FALLBACK` (the legacy `ONE PASS COMPLETE — REVISED, NOT RE-REVIEWED` remains readable in older reports). A settled correction completes the work as completed after correction without a further verification pass. A transport failure is not reviewer disagreement. A fallback is not a completed Gear 4 run. A severe-unresolved status never reports success.
+Use established status meanings without treating status as user approval or authority. The recognized result and report statuses are exactly `PASSED`, `NOT PASSED`, `INCOMPLETE` and `CLOSED BY USER — UNRESOLVED FINDINGS`; the run's routing values are the `disposition` list above. A settled correction completes the work as completed after correction without a further verification pass. A transport failure is not reviewer disagreement. A fallback is not a completed Gear 4 run. A severe-unresolved disposition never reports success.
 
 - Silence causes no calls, no cleanup beyond already authorized work, no status change, no manufactured report, and no manufactured closure.
 - On resumption, inspect the actual retained artifacts, candidate, findings, check output, and Git state; never infer a pass from a file or old label.

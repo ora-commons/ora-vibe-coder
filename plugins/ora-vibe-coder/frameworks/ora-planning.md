@@ -107,40 +107,11 @@ Before unattended execution:
 
 Silence never waives a retained checkpoint; unaffected authorized work continues, and other phases need no automatic user gate.
 
-## Size the run
+## One project, one run
 
-Deliver the approved scope in the fewest runs that can each succeed and be independently verified. Every split adds handoff, review, and replanning cost.
-
-Split only at a stable boundary for a real execution or dependency benefit:
-
-- a material choice or foundation must be settled before dependent work; or
-- independently testable outcomes have a stable boundary between them.
-
-A split never postpones required work to a later run.
-
-Keep work together when either holds:
-
-- its behavior can only be verified jointly; or
-- the interface between parts would be defined by the implementation itself.
-
-When both a split condition and a keep-together condition apply, the keep-together conditions win; settle the required choice or foundation at a checkpoint inside the run.
-
-Weigh against splitting:
-
-- a shared edit surface;
-- a fragment whose check would only restate its diff; or
-- a split that saves neither context nor capability.
-
-Checkpoints and run boundaries:
-
-- A runnable or inspectable intermediate state is a checkpoint inside the run.
-- It becomes its own run only when it also forms a stable boundary for planning and verifying what follows.
-
-When the approved scope exceeds one run:
-
-- rank the natural finish lines;
-- record which finish line this Plan delivers and what returns for later planning; and
-- design a verification point into any run that would otherwise reach completion unchecked.
+- Plan the whole project through its approved delivery endpoint, with one final project verdict.
+- Work requiring a separate later delivery becomes a separate project before approval. Preserve every outcome in the appropriate Specification; route proposed scope changes through Specification and its approval.
+- Context handoffs, phases, internal reviews, human checkpoints and recovery can remain inside one run. None establishes whole-project completion while required work remains.
 
 Model tier:
 
@@ -156,7 +127,7 @@ Produce one current Plan with only useful project-specific content, in this orde
 3. **Chosen HOW** — the implementation approach and only consequential rationale.
 4. **Execution sequence** — coherent phases and complete assignments, useful parallelism, dependencies, foundation evidence and review boundaries, integration, staffing, document custody, and affected components identified by inspection.
 5. **Exact checks** — the complete authorized testing ceiling and the concrete material risk each check judges.
-6. **Finish line** — the Specification's project-specific endpoint and the complete route through production, verification, documentation, authorized delivery, and cleanup, with responsible owners, evidence of the delivered condition, and retained approvals — or, when Size the run limits this Plan to part of the approved scope, the recorded finish line for this run and the scope returned for later planning, which is not a future backlog. A verification pass is a checkpoint when finishing work remains.
+6. **Finish line** — the Specification's project-specific endpoint and the complete route through production, verification, documentation, authorized delivery, and cleanup, with responsible owners, evidence of the delivered condition, and retained approvals. A verification pass is a checkpoint when finishing work remains.
 7. **Implementation safeguards** — include the exact block below without weakening it.
 
 > **Implementation safeguards**

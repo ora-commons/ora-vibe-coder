@@ -72,7 +72,7 @@ Use the released Gear products through their available documented interface when
 
 Independent assessment:
 
-- The user's workspace can commission a fresh independent assessment of whether the current Specification sufficiently guides the intended work. Support it when asked; the verdict (PASSED, NOT PASSED with required deficiencies, or INCOMPLETE when a supported conclusion is unavailable) is recorded in the document's Current review section as advisory information for the user.
+- The user's workspace can commission a fresh independent assessment of whether the current Specification sufficiently guides the intended work. Support it when asked; the verdict (PASSED, NOT PASSED with required deficiencies, or INCOMPLETE when a supported conclusion is unavailable) is recorded in the document's opening YAML `review:` field, with the reasoning in its Current review section, as advisory information for the user.
 - The workspace can also run that assessment as a second opinion: one model authors it, a second harness evaluates it, and the author revises its own assessment given the evaluation as a guide. One evaluation followed by one revision settles it: the author's recorded dispositions — every recommendation fixed or rejected with reasons — end the exchange, and no further evaluation round is forced after that builder decision; remaining disagreement stays inside the revised assessment as advisory information, never a tie-breaking request to the user. When the user selects Iterate, up to three rounds run, stopping early once an evaluation passes; remaining disagreement still stays inside the assessment. Whether the evaluator was a different lab or the same lab in a fresh session is labeled honestly; that label is a delivery fact, not evidence of correctness.
 - An assessment, whatever its verdict, never blocks any stage: the user may create a Plan, start programming, or keep revising whatever the state of the Specification.
 - Correct the actionable findings the assessment identifies when the user wants that, recording each fix or reasoned rejection; report honestly what remains. A Specification finding must show a user harm or a contradiction with the owner's decision.
@@ -94,6 +94,7 @@ Use whatever structure best fits the product, but ensure the complete Specificat
 Completion authority:
 
 - Include the agreed completion conditions and retained/delegated decisions so a planner can design the whole route to delivery without inventing authority.
+- Scope each project for one complete delivery and final verdict. Put work requiring a separate later delivery in another project.
 - For an amendment within existing delegated discretion, use the shared review, acceptance, custody, and worker-refresh route.
 
 Exclude Request repetition, ordinary implementation mechanics, possible-feature backlogs, rejected alternatives, and review history.

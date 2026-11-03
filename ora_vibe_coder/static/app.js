@@ -18,12 +18,14 @@ let navigationGeneration = 0, projectOpeningGeneration = 0;
 let workspaceAnimations = [];
 let workspaceReveal = null;
 const workspaceMotion = matchMedia("(prefers-reduced-motion: reduce)");
-let hostChoices = [], browseHome = "", browseFallback = "", browseNote = "", folderChoice = null, folderState = null, folderLimit = null, fileState = null;
+let hostChoices = [], browseHome = "", browseFallback = "", folderChoice = null, folderState = null, folderLimit = null, fileState = null;
+// The step-3 coding tool's display name, held beside the visible role rows:
+// the writer role's choice keeps it current, and the routing label reads it.
+let destinationName = "";
 let createUnder = "", parentAutoFill = "", createCode = "", createMaterial = [];
 let lastVisibleInput = null, pendingLocal = Promise.resolve();
-let appSettings = {warn_skip_review: true, best_guess: false, hide_advisory: false, role_defaults: {}};
+let appSettings = {best_guess: false, hide_advisory: false, role_defaults: {}};
 let runActive = null, runLast = null, pendingRunConfig = null;
-const judgmentsSeen = new Set(), sortingSeen = new Set();
 const drafts = new Map(), editDrafts = new Map(), materialDrafts = new Map(), messageFileDrafts = new Map(), projectTools = new Map(), buildReplyStages = new Map();
 let filePickerTarget = "project";
 // Conversation, split view, readiness, and the reliability engine.
@@ -36,11 +38,9 @@ let documentRefreshPending = false;
 // a poll redraws an unfinished turn's message only when that state changed.
 let conversationLiveMark = "";
 let conversationNeedsLatest = true;
-// The run, step and running turn the last poll observed. A run's driver
-// starts its next step's turn as soon as the previous one finishes, so a poll
-// can miss every terminal operation while the run continues; the mark names
-// when the observed run moved, so the conversation can reload the completed
-// replies from the retained records.
+// The observed run's identity: when it moves, the conversation reloads
+// completed replies from the retained records (a poll can miss every
+// terminal operation while the run continues).
 let conversationRunMark = "";
 let readinessChain = 0, contactLost = false;
 // The acknowledged submissions of running turns, kept per originating project
@@ -49,11 +49,9 @@ let readinessChain = 0, contactLost = false;
 // project's send never displaces that recovery.
 const pendingDrafts = new Map();
 const pendingInputs = new Set();
-// The composer's draft identity: bumped on every user edit, project switch, or
-// restored draft. An acknowledgement consumes the composer only while this is
-// still the draft that was submitted — never merely because the text now shown
-// happens to equal it, which would let one project's acknowledgement clear
-// another project's identical unsent text.
+// The composer's draft identity, bumped on every edit, switch, or restore:
+// an acknowledgement consumes the composer only while this is still the draft
+// that was submitted.
 let composerGeneration = 0;
 const workspaces = {
   specification: {title: "Specification", purpose: "specification", review: "review-specification", forward: "create-plan", assessment: "specification", transition: "Create Plan", defaultRole: "Specification"},
@@ -88,12 +86,12 @@ function renderStatusActivity() {
   const waiting = state?.startsWith("paused") || state === "failed" || questions;
   const notices = operation ? [...new Set([...(operation.visible_warnings || []),
     ...(operation.warnings || []).filter(item => !(operation.bridge_diagnostics || []).includes(item))])] : [];
-  if (operation?.maintenance && !["applied", "no-change", "none", "judgment", "sorting", "materiality"].includes(operation.maintenance))
+  if (operation?.maintenance && !["applied", "no-change", "none", "sorting"].includes(operation.maintenance))
     notices.push(operation.maintenance_reason || "The document update was not saved. Inspect the saved document before continuing.");
   const ended = ["interrupted", "open", "complete", "unfinished"].includes(state) || run?.stopped;
   const userStopped = run?.stopped || (state === "unfinished" && /^Stopped by the user\./.test(run?.reason || ""));
-  // A rejected click or a receipt is a notice, not a lifecycle transition.
-  // In particular, work that is still running stays green and stoppable.
+  // A rejected click or a receipt is a notice, never a lifecycle transition:
+  // running work stays green and stoppable.
   const needsAttention = !active && !ended && (waiting || notices.length > 0);
   bar.textContent = statusNotice;
   if ((operation || run) && !contactLost && !stopped) {
@@ -132,7 +130,7 @@ function renderStatusActivity() {
 function render(element, text) { element.innerHTML = md.render(text || "Not supplied yet."); }
 function draft() {
   const key = `${currentId}:${workspace}`;
-  if (!drafts.has(key)) drafts.set(key, {input: "", destination: "", verifier: "", saved: "", packet: null, packetPurpose: "", packetDestination: "", packetPath: "", packetCurrentOnly: false, recoveryPacket: null});
+  if (!drafts.has(key)) drafts.set(key, {input: "", destination: "", packet: null, packetPurpose: "", packetDestination: "", packetPath: "", packetCurrentOnly: false});
   return drafts.get(key);
 }
 function messageStage() { return workspace === "build" ? $("build-reply-stage").value : workspaces[workspace]?.purpose; }
@@ -157,12 +155,10 @@ function updateMessageSuggestion() {
   $("message-suggestion-note").hidden = !suggestedMessage() || !!$("message").value;
   $("message").classList.toggle("has-suggestion", !!suggestedMessage() && !$("message").value);
 }
-function signature(d) { return JSON.stringify([d.destination, material().map(item => item.path)]); }
-const emptySignature = JSON.stringify(["", []]);
 function observePacket(id, path, text, keep = null) {
   // A new save only displaces previews of the same outgoing file.
   for (const [key, d] of drafts) if (key.startsWith(`${id}:`) && d !== keep && d.packetPath === path && d.packet !== text) {
-    d.saved = ""; d.packet = null; d.packetPurpose = ""; d.packetDestination = ""; d.packetPath = ""; d.packetCurrentOnly = false; d.recoveryPacket = null;
+    d.packet = null; d.packetPurpose = ""; d.packetDestination = ""; d.packetPath = ""; d.packetCurrentOnly = false;
   }
 }
 function editorSignature(d) { return JSON.stringify([d.name, d.description, d.goals, d.parent, d.state, d.code]); }
@@ -181,8 +177,7 @@ function sizeEditorTextareas() {
 function remember() {
   if (!currentId || !workspace) return;
   const d = draft();
-  d.destination = $("destination").value;
-  if (workspace === "build") d.verifier = $("verification-verifier").value;
+  d.destination = destinationName;
   projectTools.set(currentId, d.destination);
   syncVisibleInput();
 }
@@ -210,6 +205,31 @@ async function api(path, data) {
   return body;
 }
 function guard(fn) { return async () => { try { await fn(); } catch (error) { status(error.message, "warning"); } }; }
+function chooseFromDialog(dialog, actions) {
+  // One shared modal choice: each [button, value] entry resolves with that
+  // value; the dialog's own cancel (including Esc) resolves null.
+  return new Promise(resolve => {
+    const handlers = [];
+    const done = choice => {
+      for (const [element, event, handler] of handlers) element.removeEventListener(event, handler);
+      dialog.close();
+      resolve(choice);
+    };
+    for (const [element, value] of actions) {
+      const handler = () => done(value);
+      element.addEventListener("click", handler);
+      handlers.push([element, "click", handler]);
+    }
+    const onCancel = event => { event?.preventDefault(); done(null); };
+    dialog.addEventListener("cancel", onCancel);
+    handlers.push([dialog, "cancel", onCancel]);
+    dialog.showModal();
+  });
+}
+function selectRawForManualCopy() {
+  $("raw-details").open = true;
+  $("raw").focus(); $("raw").select();
+}
 function local(fn) { const run = guard(fn); return () => { pendingLocal = run(); return pendingLocal; }; }
 function sendVisibleInput(visible, keepalive) {
   try {
@@ -225,7 +245,7 @@ function syncVisibleInput() {
   sendVisibleInput(visible);
 }
 function updateHost() {
-  const host = hostChoices.find(h => h.name === $("destination").value);
+  const host = hostChoices.find(h => h.name === destinationName);
   renderReadiness();
   applyTitleShift();  // The readiness text sizes the step-3 card the title must clear.
   renderReviewerChoices();
@@ -258,15 +278,12 @@ function updateHost() {
 }
 async function initialize() {
   const data = await api("setup", {});
-  hostChoices = data.hosts; browseHome = data.browse_home; browseFallback = data.browse_fallback || browseHome; browseNote = data.browse_note || "";
+  hostChoices = data.hosts; browseHome = data.browse_home; browseFallback = data.browse_fallback || browseHome;
   appSettings = data.app_settings || appSettings;
 
   splitFraction = typeof data.split_fraction === "number" ? Math.min(.95, Math.max(.05, data.split_fraction)) : .42;
   applySplit();
   $("version").textContent = data.version || "";
-  $("destination").replaceChildren(new Option("Choose a coding tool", ""), ...hostChoices.map(h => new Option(h.name, h.name)));
-  $("verification-verifier").replaceChildren(new Option("Ask coordinator to show choices", ""),
-    ...hostChoices.map(h => new Option(h.name, h.id)));
   $("setup-hosts").replaceChildren(...hostChoices.map(h => {
     const p = document.createElement(data.installation ? "label" : "p");
     p.append(`${h.name}: ${h.detected ? "command found — account access not checked" : "not found"}`);
@@ -449,25 +466,9 @@ function statuses() {
     rail.setAttribute("aria-label", `${workspaces[rail.dataset.stage].title} — reported ${s.label}; source ${s.source}`);
     const a = project?.assessments?.[key];
     if (a?.approval_unknown) rail.setAttribute("aria-label", `${rail.getAttribute("aria-label")}. The approved version was not retained; its applicability is unconfirmed.`);
-    else if (a?.change?.state === "pending") rail.setAttribute("aria-label", `${rail.getAttribute("aria-label")}. Change comparison pending; approval applicability is unconfirmed.`);
+    else if (a?.change?.state === "changed") rail.setAttribute("aria-label", `${rail.getAttribute("aria-label")}. The text changed since the recorded approval or review.`);
     rail.title = rail.getAttribute("aria-label");
     rail.setAttribute("aria-expanded", String(workspace === rail.dataset.stage));
-  }
-}
-function renderOverviewSources() {
-  const holder = $("overview-sources");
-  holder.replaceChildren();
-  holder.hidden = project.raw !== null || !Array.isArray(project.overview_sources) || !project.overview_sources.length;
-  if (holder.hidden) return;
-  const heading = document.createElement("h3"); heading.textContent = "Existing information in this folder"; holder.append(heading);
-  for (const source of project.overview_sources) {
-    for (const [name, text] of Object.entries(source.sections)) {
-      const block = document.createElement("div"); block.className = "overview-source";
-      const label = document.createElement("p"); label.className = "source-name";
-      label.textContent = `${name} — from ${source.name} (${source.role}), shown as saved`;
-      const body = document.createElement("div"); render(body, text);
-      block.append(label, body); holder.append(block);
-    }
   }
 }
 function renderConflicts() {
@@ -483,13 +484,14 @@ function assessmentText(a) {
   if (a?.unreadable) return {label: "COULD NOT READ", kind: "working", note: a.unreadable};
   if (!a || (!a.present && !a.untouched)) return {label: "NOT REVIEWED", kind: "neutral", note: a?.change?.reason || "No assessment has been recorded."};
   if (a.untouched) return {label: "NOT STARTED", kind: "neutral", note: "The starter template has not been filled in."};
-  if (!a.verdict || a.issues?.length) return {label: "REPORT ERROR", kind: "working", note: (a.issues || []).join(" ") || a.reason || "The saved review has no clear verdict."};
-  const upper = (a.outcome || a.verdict).toUpperCase();
-  const label = upper === "COMPLETE" ? "PASSED" : upper;
+  if (a.issues?.length) return {label: "REPORT ERROR", kind: "working", note: (a.issues || []).join(" ")};
+  // The verdict is the document's YAML review value; a review recorded as
+  // unfinished shows the same label Build uses.
+  const label = a.verdict === "INCOMPLETE" ? "REVIEW INCOMPLETE" : a.verdict;
   const kind = label === "PASSED" ? "complete" : label === "NOT PASSED" ? "incomplete" : "working";
   const note = a.applies === "earlier" ? "The saved review describes an earlier version. Its assessment and findings remain in Current review."
     : a.change?.reason ? a.change.reason
-    : a.applies === "unconfirmed" ? "The verdict is saved; its applicability to the current document version is unconfirmed."
+    : a.applies === "unconfirmed" ? (a.reason ? a.reason + " " : "") + "The verdict is saved; its applicability to the current document version is unconfirmed."
     : "Click to see the recorded assessment in the document.";
   return {label, kind, note};
 }
@@ -499,31 +501,24 @@ function reportStatusText(status, missing) {
   if (status.label.startsWith("Unknown") || status.label === "REPORT ERROR") return "REPORT ERROR";
   if (status.untouched) return "NOT STARTED";
   if (status.label === "Not reported") return "VERDICT MISSING";
-  if (/^NOT PASSED — (REVIEW|REVISION) INCOMPLETE/.test(status.label)) return "INCOMPLETE";
-  if (status.label === "COMPLETE") return "PASSED";
-  if (status.label.startsWith("NOT PASSED")) return "NOT PASSED";
+  if (status.label === "INCOMPLETE") return "REVIEW INCOMPLETE";
   return status.label.toUpperCase();
 }
 function verdictKind(label) {
   return label === "PASSED" ? "complete" : label === "NOT PASSED" ? "incomplete"
-    : ["INCOMPLETE", "CHANGED", "REPORT ERROR", "VERDICT MISSING", "COULD NOT READ"].includes(label) ? "working" : "neutral";
+    : ["REVIEW INCOMPLETE", "CHANGED", "REPORT ERROR", "VERDICT MISSING", "COULD NOT READ"].includes(label) ? "working" : "neutral";
 }
 function verificationVerdict(status, path) {
   if (!path || !status) return {label: "NOT VERIFIED", kind: "neutral"};
   const label = reportStatusText(status, "NOT VERIFIED");
   return {label, kind: verdictKind(label)};
 }
-function showStatusExplanation(id, path, reason, evidence = []) {
+function showStatusExplanation(id, path, reason) {
   const element = $(id);
   element.replaceChildren();
   element.hidden = false;
   if (reason) {
     const note = document.createElement("p"); note.textContent = reason; element.append(note);
-  }
-  for (const excerpt of evidence) {
-    const quote = document.createElement("blockquote");
-    quote.textContent = typeof excerpt === "string" ? excerpt : excerpt.text || excerpt.literal || "";
-    if (quote.textContent) element.append(quote);
   }
   if (path) {
     const source = document.createElement("details"), title = document.createElement("summary"), location = document.createElement("p");
@@ -539,8 +534,7 @@ function showReportStatus(element, report, path, missing) {
   element.className = `assessment ${verdict.kind}`;
   element.title = path ? `${report?.unreadable || report?.literal || report?.label || "Status unavailable"}\nSource: ${path}` : missing;
   showStatusExplanation(element.id === "result-status" ? "result-status-note" : "assessment-note", path,
-    report?.unreadable || report?.reason || (path ? report?.basis_note || "The saved conclusion describes the work inspected; it does not verify later changes." : missing === "NO RESULT" ? "No Programming Result is selected or found." : "No Verification Report is selected or found."),
-    report?.kind === "neutral" ? report?.evidence || [] : []);
+    report?.unreadable || report?.reason || (path ? "The saved conclusion describes the work inspected; it does not verify later changes." : missing === "NO RESULT" ? "No Programming Result is selected or found." : "No Verification Report is selected or found."));
   const open = guard(async () => {
     const entry = project?.reader?.find(file => file.path === path || `${project.root}/${file.path}` === path);
     if (!entry) return;
@@ -562,29 +556,18 @@ function confirmImplementationBasis() {
     ["planning", "Plan", "The coding tool may make inconsistent implementation choices."]
   ]) {
     const assessment = project?.assessments?.[key];
-    if (["PASSED", "COMPLETE"].includes((assessment?.outcome || assessment?.verdict)?.toUpperCase()) && ["current", "unconfirmed"].includes(assessment.applies) && !assessment.unreadable && !assessment.issues?.length) continue;
+    if (assessment?.verdict === "PASSED" && ["current", "unconfirmed"].includes(assessment.applies) && !assessment.unreadable && !assessment.issues?.length) continue;
     const state = assessment?.unreadable ? "could not be read"
-      : assessment?.issues?.length ? "has an unclear review record"
+      : assessment?.issues?.length ? "has an unreadable review record"
       : assessment?.applies === "earlier" ? "was changed after its review"
-      : (assessment?.outcome || assessment?.verdict) === "NOT PASSED" ? "was reviewed as NOT PASSED"
+      : assessment?.verdict === "NOT PASSED" ? "was reviewed as NOT PASSED"
       : "has no PASSED review for its current version";
     concerns.push(`${label} ${state}. ${consequence}`);
   }
   if (!concerns.length) return Promise.resolve(true);
   const dialog = $("implementation-warning"), content = $("implementation-warning-text");
   content.replaceChildren(...concerns.map(value => Object.assign(document.createElement("p"), {textContent: value})));
-  return new Promise(resolve => {
-    const back = $("implementation-back"), proceed = $("implementation-proceed");
-    function finish(accepted) {
-      back.removeEventListener("click", cancel); proceed.removeEventListener("click", accept);
-      dialog.removeEventListener("cancel", cancel);
-      dialog.close(); resolve(accepted);
-    }
-    function cancel(event) { event?.preventDefault(); finish(false); }
-    function accept() { finish(true); }
-    back.addEventListener("click", cancel); proceed.addEventListener("click", accept);
-    dialog.addEventListener("cancel", cancel); dialog.showModal();
-  });
+  return chooseFromDialog(dialog, [[$("implementation-back"), false], [$("implementation-proceed"), true]]);
 }
 function deliversImplementation(purpose) { return purpose === "implement-plan" || purpose === "programming"; }
 function renderAssessment() {
@@ -599,9 +582,9 @@ function renderAssessment() {
     return;
   }
   const assessment = project?.assessments?.[config.assessment];
-  let {label, kind, note} = assessmentText(assessment);
+  const {label, kind, note} = assessmentText(assessment);
   $("result-status-note").hidden = true;
-  showStatusExplanation("assessment-note", assessment?.path, note + (project?.plan_notice && workspace === "plan" ? " " + project.plan_notice : ""), assessment?.issues?.length ? assessment.evidence || [] : []);
+  showStatusExplanation("assessment-note", assessment?.path, note + (project?.plan_notice && workspace === "plan" ? " " + project.plan_notice : ""));
   $("review-step-title").textContent = `Review the ${config.title}`;
   element.textContent = label;
   element.className = `assessment ${kind}`;
@@ -629,17 +612,22 @@ function renderAssessment() {
     event.preventDefault(); event.stopPropagation(); element.click();
   };
 }
-// Approval is the user's decision, independent of the review's outcome.
 function updateApprovePlan() {
   const button = $("approve-plan"), config = workspaces[workspace];
   if (!config?.assessment) { button.hidden = true; return; }
   button.hidden = false;
   const a = project?.assessments?.[config.assessment];
-  const approved = ["APPROVED", "Approved Implementation Plan", "Approved product specification"].includes(project?.statuses?.[config.assessment]?.label);
-  button.textContent = approved && !a?.change && !a?.approval_unknown ? `${config.title} approved` : `Approve the ${config.title}`;
-  button.disabled = (approved && !a?.change && !a?.approval_unknown) || !a?.path || a?.expected == null || !!a.unreadable;
+  const approved = project?.statuses?.[config.assessment]?.label === "APPROVED";
+  const changed = a?.change?.state === "changed";
+  const reviewComplete = a?.verdict === "PASSED" && !a?.issues?.length;
+  // The PASSED-review prerequisite applies to the Plan only; a Specification
+  // remains approvable without a review.
+  const reviewRequired = workspace === "plan";
+  button.textContent = approved && !changed && !a?.approval_unknown ? `${config.title} approved` : `Approve the ${config.title}`;
+  button.disabled = (approved && !changed && !a?.approval_unknown) || (reviewRequired && !reviewComplete) || !a?.path || a?.expected == null || !!a.unreadable;
   button.title = approved ? `The ${config.title} records status: APPROVED.`
-    : `Save your approval of the displayed ${config.title}, whatever its review says.`;
+    : reviewComplete || !reviewRequired ? `Save your approval of the displayed ${config.title}.`
+    : `Approving opens once the current ${config.title} review is PASSED.`;
 }
 function readerDefault() {
   const config = workspaces[workspace];
@@ -673,11 +661,14 @@ async function refreshProject() {
   const refreshed = await api("project", {id});
   if (id !== currentId || opening !== projectOpeningGeneration) return;
   project = refreshed;
-  compareChangedDocuments();
   renderProjectOptions();
   $("project-name").textContent = project.name;
-  renderOverviewSources(); renderConflicts(); statuses();
-  const complete = ["COMPLETE", "PASSED"].includes(project.programming_result?.status?.label) && project.verification?.status?.label === "PASSED";
+  renderConflicts(); statuses();
+  // Both saved reports say PASSED, and the project's own overview does not
+  // record programming as still in progress.
+  const complete = project.programming_result?.status?.label === "PASSED"
+    && project.verification?.status?.label === "PASSED"
+    && project.statuses?.programming?.literal !== "IN PROGRESS";
   $("project-completion").hidden = !complete;
   renderProjectDetailsLabel();
   $("project-completion").title = complete ? "The selected reports say programming PASSED and verification PASSED for the work they describe. This is not user approval or verification of later changes." : "";
@@ -704,11 +695,9 @@ async function readFile(path, element, {background = false} = {}) {
     && held.path === path && held.element === element;
   const view = readerView = continuing ? held : {id: currentId, workspace, path, element};
   const reading = view.reading = (view.reading || 0) + 1;
-  // This read's own identity: it is returned to the caller so whoever started
-  // the read can tell, once it finishes, whether the reader they see is still
-  // the one this read produced — the same comparison the guards below make
-  // internally. Every non-throwing exit returns the identity, landed or
-  // superseded; comparing it against the live readerView is the caller's test.
+  // This read's identity: returned to the caller so it can tell whether the
+  // reader it sees is still the one this read produced; every non-throwing
+  // exit returns it, landed or superseded.
   const entry = (project?.reader || []).find(file => file.path === path);
   if (!path) {
     // No document is resolved yet: an empty reader adds no sentence, because
@@ -787,22 +776,8 @@ function showPacket(text, purpose) {
   renderSavedRequest();
   updateHost();
 }
-function showAbsentPacket() {
-  const recovery = draft().recoveryPacket || "";
-  readerView = {id: currentId, workspace, role: null, kind: "absent", element: $("reader")};
-  $("reader").textContent = "The saved request is no longer present. Prepare again to save a new request.";
-  $("packet-tools").hidden = false;
-  $("raw").value = recovery;
-  $("raw-details").hidden = !recovery;
-  $("raw-details").open = !!recovery;
-  $("delivery-note").textContent = recovery
-    ? "The earlier displayed Markdown is retained below for recovery. It is not the current saved file, so the delivery buttons are unavailable. Prepare again to save a new request."
-    : "No earlier Markdown is available in this tab. Prepare again to save a new request.";
-  renderSavedRequest();
-  updateHost();
-}
 // Saved request controls stay beside the stage whenever a path is known.
-function renderSavedRequest() { $("saved-request").hidden = !$("prepared-path").value || !(draft().packet !== null || project?.handoff_exists || draft().recoveryPacket); }
+function renderSavedRequest() { $("saved-request").hidden = !$("prepared-path").value || !(draft().packet !== null || project?.handoff_exists); }
 function openingWorkspace(state) {
   // A prepared outgoing request is not work on its destination stage. Only
   // actual document content and the existing live/retained work records count.
@@ -936,7 +911,7 @@ async function chooseProject(id) {
   positionRails();
   renderProjectOptions();
   conversationTurns = []; reviewRuns = []; conversationLoaded = false; $("file-picker").hidden = true; filePickerTarget = "project";
-  runActive = null; runLast = null; judgments.clear(); sortingState.clear(); judgmentsSeen.clear(); sortingSeen.clear();
+  runActive = null; runLast = null; sortingState.clear();
   $("waiting-actions").hidden = true; $("questions-box").hidden = true; $("repairs-box").hidden = true;
   composerGeneration += 1;  // The composer now holds another project's draft context.
   // undefined means unobserved; only a successful status read may report idle (null).
@@ -953,7 +928,6 @@ async function chooseProject(id) {
   renderProjectDetailsLabel();
   for (const field of ["reader", "assessment", "result-status"]) $(field).textContent = "";
   $("prepared-path").value = ""; renderSavedRequest();
-  $("overview-sources").replaceChildren(); $("overview-sources").hidden = true;
   $("raw").value = "";
   $("project-name").textContent = id ? "Selected project is not loaded" : "Choose or create a project";
   renderConversation();
@@ -1003,8 +977,7 @@ async function chooseWorkspace(next) {
   // The coding tool belongs to the project, while each stage keeps its own
   // message and prepared handoff. A changed tool leaves an old packet stale.
   if (projectTools.has(currentId)) d.destination = projectTools.get(currentId);
-  $("destination").value = d.destination;
-  if (workspace === "build") $("verification-verifier").value = d.verifier || "";
+  destinationName = d.destination;
   updateMessageSuggestion(); renderMaterialChosen();
   $("build-reply-choice").hidden = workspace !== "build";
   $("build-reply-stage").value = buildReplyStages.get(currentId) || "programming";
@@ -1042,7 +1015,6 @@ async function chooseWorkspace(next) {
     }
     if (generation !== navigationGeneration || id !== currentId) return;
     if (d.packet !== null) showPacket(d.packet, d.packetPurpose);
-    else if (d.recoveryPacket !== null) showAbsentPacket();
     else await readDocument();
   } finally {
     if (generation === navigationGeneration && id === currentId) { startWorkspaceReveal(reveal); showLatestConversation(); }
@@ -1219,10 +1191,8 @@ $("copy-path").onclick = guard(async () => {
   try { await navigator.clipboard.writeText(path); status("Saved file path copied. Paste it into your coding tool or file browser."); }
   catch (_) { $("prepared-path").focus(); $("prepared-path").select(); status("Clipboard access was unavailable. The saved file path is selected; use your browser's Copy command."); }
 });
-// The visible unsent step 4 text and its attached files travel with the
-// prepared request now that the separate instruction box is gone. Step-forward
-// defaults live server-side; the external review file carries its own explicit
-// instruction.
+// The visible unsent step-4 text and its attached files travel with the
+// prepared request; step-forward defaults live server-side.
 function composerInstruction() {
   return $("message").value.trim();
 }
@@ -1230,10 +1200,10 @@ function composerMaterial(stage, id) {
   return [...new Set([...(id === currentId ? material() : []), ...messageFilesFor(id, stage)].map(item => item.path))];
 }
 async function preparePurpose(purpose, instruction = null) {
-  remember(); const d = draft(), id = currentId, selectedWorkspace = workspace, submitted = signature(d), view = readerView;
+  remember(); const d = draft(), id = currentId, selectedWorkspace = workspace, view = readerView;
   const externalReview = ["review-specification", "review-plan"].includes(purpose);
   const submittedDestination = externalReview
-    ? hostChoices.find(h => h.id === $("step-reviewer").value)?.name || "" : d.destination;
+    ? hostChoices.find(h => h.id === chosenReviewerTool())?.name || "" : d.destination;
   if (!submittedDestination) throw new Error(externalReview ? "Choose the Reviewer first." : "Choose a coding tool first.");
   const path = purpose === "implement-plan" ? project?.implementation_request_path : project?.handoff_path;
   $("prepare").disabled = true; $("review").disabled = true; $("transition").disabled = true;
@@ -1245,8 +1215,7 @@ async function preparePurpose(purpose, instruction = null) {
       expected: d.packetPath === path ? d.packet : null});
     if (id === currentId && result.file_state) lastFiles = result.file_state;
     observePacket(id, result.path, result.text);
-    d.packet = result.text; d.packetPurpose = purpose; d.packetDestination = submittedDestination; d.packetPath = result.path; d.packetCurrentOnly = false; d.recoveryPacket = null;
-    if (instruction === null) d.saved = submitted;
+    d.packet = result.text; d.packetPurpose = purpose; d.packetDestination = submittedDestination; d.packetPath = result.path; d.packetCurrentOnly = false;
     if (id !== currentId || selectedWorkspace !== workspace) return;
     let shownView = null;
     if (readerView === view) { showPacket(d.packet, purpose); shownView = readerView; }
@@ -1260,7 +1229,6 @@ async function preparePurpose(purpose, instruction = null) {
     if (error.status !== 409) throw error;
     const name = purpose === "implement-plan" ? "implementation request" : "Handoff.md";
     observePacket(id, path, error.current, d);
-    d.recoveryPacket = typeof error.current === "string" ? null : (d.packet ?? "");
     d.packet = typeof error.current === "string" ? error.current : null;
     d.packetPurpose = purpose; d.packetDestination = ""; d.packetPath = path; d.packetCurrentOnly = typeof error.current === "string";
     if (id !== currentId || selectedWorkspace !== workspace) return;
@@ -1269,17 +1237,15 @@ async function preparePurpose(purpose, instruction = null) {
       showPacket(error.current, purpose);
       status(`The saved ${name} already exists or changed. Review it, then choose Prepare again to replace it. Nothing was overwritten.`);
     } else {
-      showAbsentPacket();
-      status(`The saved ${name} was removed. ${d.recoveryPacket ? "The earlier Markdown is retained below; " : ""}Choose Prepare again to save a new request.`);
+      status(`The saved ${name} was removed. Choose Prepare again to save a new request.`);
     }
   }
   finally { $("prepare").disabled = false; updateSecondOpinion(); $("transition").disabled = false; }
 }
 $("prepare").onclick = local(() => preparePurpose(workspaces[workspace].review, `Review the current ${workspaces[workspace].title} and record the assessment.`));
 $("review").onclick = local(runReview);
-// Step 6's one-click handoff: Send to the step-3 tool (or Open in Terminal for
-// Hermes and Qwen Code), with Copy request beside it. Build's steps keep their
-// explanatory dialog and reuse the same delivery path.
+// Step 6's one-click handoff; Build's steps reuse the same delivery path
+// through their explanatory dialog.
 $("transition").onclick = local(() => {
   const config = workspaces[workspace];
   if (!config) return Promise.resolve();
@@ -1327,18 +1293,18 @@ $("copy").onclick = local(async () => {
     const result = await api("copy", {id, displayed: d.packet, purpose: d.packetPurpose === "implement-plan" ? "implement-plan" : null});
     if (readerView !== view) return;
     try { await navigator.clipboard.writeText(result.text); if (readerView === view) status("Full raw Markdown copied from the displayed saved request. Paste it where you intend to use it; the app has not sent it."); }
-    catch (_) { if (readerView !== view) return; $("raw-details").open = true; $("raw").focus(); $("raw").select(); status("Clipboard access was denied or unavailable. The full raw Markdown is selected below; use your browser's Copy command. No copy success is claimed."); }
+    catch (_) { if (readerView !== view) return; selectRawForManualCopy();
+    status("Clipboard access was denied or unavailable. The full raw Markdown is selected below; use your browser's Copy command. No copy success is claimed."); }
   } catch (error) {
     if (error.status === 409) {
       observePacket(id, d.packetPath, error.current, d);
       d.packetDestination = "";
-      d.recoveryPacket = typeof error.current === "string" ? null : (d.packet ?? "");
       d.packet = typeof error.current === "string" ? error.current : null;
       d.packetCurrentOnly = typeof error.current === "string";
       if (readerView !== view) return;
       if (id === currentId && selectedWorkspace === workspace && readerView === view) {
         if (typeof error.current === "string") { showPacket(error.current, d.packetPurpose); $("raw-details").open = true; status("The saved request changed — review this current file before another Copy. Prepare again before delivering it."); }
-        else { showAbsentPacket(); error.message = "The saved request is now absent. Your input and the earlier Markdown are retained; use Prepare Again to save a new request. Nothing was copied."; }
+        else { error.message = "The saved request is now absent. Use Prepare Again to save a new request. Nothing was copied."; }
       }
     }
     else if (readerView !== view) return;
@@ -1348,14 +1314,14 @@ $("copy").onclick = local(async () => {
 $("copy-current").onclick = local(async () => {
   if (!currentId || !workspace) throw new Error("Choose a project and stage first.");
   const instruction = effectiveMessage();
-  const destination = $("destination").value;
+  const destination = destinationName;
   const stage = messageStage();
   if (!destination) throw new Error("Choose a coding tool first.");
   if (!instruction.trim()) throw new Error("Write the instruction you want to copy first.");
   const id = currentId, selectedWorkspace = workspace;
   const selectedMaterial = [...new Set([...material(), ...messageFiles()].map(item => item.path))];
   const sameRequest = () => id === currentId && selectedWorkspace === workspace && effectiveMessage() === instruction
-    && $("destination").value === destination && messageStage() === stage
+    && destinationName === destination && messageStage() === stage
     && JSON.stringify([...new Set([...material(), ...messageFiles()].map(item => item.path))]) === JSON.stringify(selectedMaterial);
   if (stage === "programming") {
     await refreshProject();
@@ -1374,22 +1340,21 @@ $("copy-current").onclick = local(async () => {
     if (!sameRequest()) return;
     readerView = {id, workspace, role: null, element: $("reader")};
     render($("reader"), result.text); $("raw").value = result.text;
-    $("packet-tools").hidden = false; $("raw-details").hidden = false; $("raw-details").open = true;
+    $("packet-tools").hidden = false; $("raw-details").hidden = false;
     $("delivery-note").textContent = `Copy-ready ${workspaces[workspace].title} request for another AI. This request was not saved or sent, and it did not replace the saved request file.`;
-    $("raw").focus(); $("raw").select();
+    selectRawForManualCopy();
     status("Clipboard access was unavailable. The full request is selected in the document pane; copy it there. No file was replaced or sent.");
   }
 });
 window.addEventListener("beforeunload", event => { if (dirty()) { event.preventDefault(); event.returnValue = ""; } });
 window.addEventListener("pagehide", () => { stopPolling(); if (!stopped) sendVisibleInput(false, true); });
-$("destination").onchange = () => { remember(); updateHost(); if (currentId && workspace && draft().packet) status("Coding tool changed. Prepare Again to create a snapshot addressed to this tool."); };
 async function deliverPrepared(route) {
   remember(); const d = draft(), id = currentId, selectedWorkspace = workspace, packet = d.packet, destination = d.packetDestination;
   const externalReview = ["review-specification", "review-plan"].includes(d.packetPurpose);
   if (!d.packet || !destination || (!externalReview && destination !== d.destination)) throw new Error("Prepare Again for this coding tool before opening it.");
   const host = hostChoices.find(item => item.name === destination);
   const samePacket = () => id === currentId && selectedWorkspace === workspace && packet === d.packet
-    && destination === d.packetDestination && (externalReview || destination === $("destination").value);
+    && destination === d.packetDestination && (externalReview || destination === destinationName);
   if (deliversImplementation(d.packetPurpose)) {
     await refreshProject();
     if (!samePacket()) return;
@@ -1768,8 +1733,8 @@ $("capture-cancel").onclick = () => {
   status("Stopped waiting for the markup tool; its window stays yours to close.");
 };
 function selectedToolId() {
-  // The dropdown shows display names; Bridge routes by the peer id.
-  const host = hostChoices.find(h => h.name === $("destination").value);
+  // Routing is by peer id; the visible rows and the remembered name hold it.
+  const host = hostChoices.find(h => h.name === destinationName);
   return host ? host.id : "";
 }
 $("message").addEventListener("paste", event => {
@@ -1881,12 +1846,10 @@ async function send() {
       result = await api("converse", {id: originId, tool, stage, text, roles: oneTimeRoles(), files: submittedFiles.map(item => item.path),
                                       images: submitted.map(attachmentWire)});
     } catch (error) {
-      // Pre-acknowledgement, in two distinct states. The server answered with
-      // a rejection: nothing was dispatched. No answer at all: delivery is
-      // unknown, never denied — the submission may already be recorded and
-      // working, and resending it blind could repeat consequential work. The
-      // notice belongs to the originating project: after a switch it names
-      // that project instead of posing as the displayed one's own state.
+      // Pre-acknowledgement, in two states: a server rejection dispatched
+      // nothing; no answer at all leaves delivery unknown, never denied —
+      // resending blind could repeat consequential work. After a switch the
+      // notice names the originating project.
       if (currentId === originId) {
         status(error.status
           ? `${error.message} Your message and attachments are retained here; nothing was sent.`
@@ -1899,20 +1862,16 @@ async function send() {
       }
       return;
     }
-    // Acknowledged: the turn is submitted and durable. Until its outcome is
-    // known, its submission stays restorable for its own project: an
-    // unsupported route or a failed turn must not consume it silently, and
-    // another project's send never replaces it. The server's retained names
-    // identify the saved originals for same-origin redelivery.
+    // Acknowledged and durable: the submission stays restorable for its own
+    // project until the outcome is known. The retained names identify the
+    // saved originals for same-origin redelivery.
     pendingDrafts.set(originId, {turn: result.turn, text, workspace: originWorkspace, files: submittedFiles,
                                  images: submitted.map((item, index) => (
                                    {name: (result.images || [])[index] || item.name, data: item.data,
                                     ...(item.notes ? {notes: item.notes} : {})}))});
-    // The dispatched attachments leave the composer by identity, whatever is
-    // displayed — they were sent with this message. The text is consumed only
-    // when the originating project is still displayed and this is still the
-    // same draft: another project's identical unsent text is a different
-    // draft and stays untouched.
+    // The dispatched attachments leave by identity; the text is consumed only
+    // when the originating project is still displayed and the draft is
+    // unchanged — another project's identical text is a different draft.
     attachments = attachments.filter(held => !submitted.includes(held));
     const originFiles = messageFilesFor(originId, originWorkspace);
     for (const item of submittedFiles) { const index = originFiles.indexOf(item); if (index >= 0) originFiles.splice(index, 1); }
@@ -1927,12 +1886,9 @@ async function send() {
     if (currentId !== originId) return;  // Ownership rechecked after the await.
     updateOperation(result.operation);
   } catch (error) {
-    // Only acknowledged steps can fail here. The turn is submitted and keeps
-    // working on its own; this reports the display failure without denying
-    // dispatch, so work that already left is not resent. After a switch the
-    // report is suppressed: the turn is recorded in its originating project,
-    // whose own conversation and polls carry it, and this view belongs to
-    // another project.
+    // Only acknowledged steps fail here: the report names a display failure
+    // without denying dispatch, so work that already left is not resent. After
+    // a switch it is suppressed — the originating project's own records carry it.
     if (currentId === originId) {
       status(`The message was submitted${result ? ` as turn ${result.turn}` : ""}, but updating this view failed: ${error.message} The turn's state is viewable after reopening or switching back to this project; sending the message again would start a second turn.`);
     }
@@ -1949,8 +1905,7 @@ $("message").addEventListener("keydown", event => {
   }
 });
 function updateSendState() {
-  const busy = (!!lastOperation && ["starting", "running"].includes(lastOperation.state)
-                && !lastOperation.stage?.startsWith("materiality-"))
+  const busy = (!!lastOperation && ["starting", "running"].includes(lastOperation.state))
     || (runActive && ["starting", "running"].includes(runActive.state));
   if (runActive) {
     const liveInput = runActive.operation?.tool === "codex" && runActive.operation?.input_target;
@@ -1971,7 +1926,7 @@ function updateSendState() {
     : "";
   $("send").textContent = liveInput ? "Send message to working Codex" : blocked
     ? "In-app turn unavailable for this tool"
-    : busy ? "AI is working — live messages unavailable" : `Ask ${$("destination").value || "AI"} to work on ${workspace === "build" ? (messageStage() === "verification" ? "independent verification" : "the implementation") : `the ${workspaces[workspace]?.title || "current stage"}`}`;
+    : busy ? "AI is working — live messages unavailable" : `Ask ${destinationName || "AI"} to work on ${workspace === "build" ? (messageStage() === "verification" ? "independent verification" : "the implementation") : `the ${workspaces[workspace]?.title || "current stage"}`}`;
 }
 
 // The saved conversation and the retained review runs, derived from records.
@@ -2148,12 +2103,9 @@ function runCard(run) {
   // Review-run Bridge diagnostics live only beside the stage, like every turn's.
   return card;
 }
-// A readback that merely confirms a routine successful save is secondary
-// detail: it stays in the retained turn records
-// and in the underlying records, never as a second receipt on the card — and
-// the local file's location lives there too. Only a readback the user can act
-// on stays visible beside the reply: no document, an unreadable one, or a
-// selection that moved under the turn.
+// A readback stays visible beside the reply only when the user can act on
+// it — no document, an unreadable one, or a selection that moved under the
+// turn; routine successful saves stay in the retained records.
 function appendArtifactReadback(element, artifact) {
   if (!artifact || ["changed", "unchanged"].includes(artifact.outcome)) return;
   const line = document.createElement("p"); line.className = "artifact-readback";
@@ -2192,11 +2144,9 @@ function renderConversation() {
 }
 
 // Live operation status: dispatched stage, activity and action duration.
-// A retained original is redelivered through the app's own same-origin
-// attachment route — the one image-delivery mechanism the page's narrowly
-// scoped policy permits. The token travels in the query because an image
-// load cannot carry the tab's token header; the host and origin checks on
-// that route are the same as every other route's.
+// A retained original is redelivered through the same-origin attachment
+// route; the token travels in the query because an image load cannot carry
+// the header, with the boundary otherwise unchanged.
 function attachmentUrl(turn, name) {
   return `/api/attachment?token=${encodeURIComponent(token)}&id=${encodeURIComponent(currentId)}&turn=${encodeURIComponent(turn)}&name=${encodeURIComponent(name)}`;
 }
@@ -2269,10 +2219,9 @@ async function refreshReadiness(recheck = false) {
   // Recheck refreshes discovery as well as readiness: a tool installed,
   // removed, updated or signed into since page load is reflected here.
   if (Array.isArray(data.hosts) && data.hosts.length) {
-    const held = $("destination").value;
+    const held = destinationName;
     hostChoices = data.hosts;
-    $("destination").replaceChildren(new Option("Choose a coding tool", ""), ...hostChoices.map(h => new Option(h.name, h.name)));
-    $("destination").value = hostChoices.some(h => h.name === held) ? held : "";
+    destinationName = hostChoices.some(h => h.name === held) ? held : "";
   }
   updateHost();
   renderReviewerChoices();
@@ -2344,11 +2293,16 @@ function buildBlock(id) {
 function renderReadiness() {
   const info = $("tool-problem"), facts = selectedReadiness();
   const blocked = currentId ? routeBlock(selectedToolId()) || (workspace === "build" ? buildBlock(selectedToolId()) : null) : null;
-  info.textContent = blocked ? `${blocked.reason}. ${blocked.remedy}`
+  const problem = blocked ? `${blocked.reason}. ${blocked.remedy}`
     : facts && (!facts.ready || facts.authentication === "required") ? [facts.reason || (facts.authentication === "required"
       ? "Sign in to the selected coding tool." : facts.peer === "zcode" && messageStage() === "programming"
         ? "Programming Full access is not available for the selected coding tool." : "The selected coding tool is not ready."),
       facts.next_action || "Resolve this in the tool's own window, then send again."].filter(Boolean).join(" ") : "";
+  const gear = (readinessState.peers || []).find(peer => peer.peer === selectedToolId())?.gear;
+  const gearLine = currentId && gear
+    ? ` Gear (optional): ${gear.available ? (gear.primary ? "primary analytical role available" : "peer analytical role available") : `unavailable — ${gear.reason}`}.`
+    : "";
+  info.textContent = problem + gearLine;
   info.hidden = !info.textContent;
 }
 
@@ -2368,17 +2322,15 @@ function reviewerOptions() {
                                    capable: host.conversation !== false,
                                    reason: host.conversation === false ? `${host.name} has no in-app conversation route.` : ""}));
 }
+// The step-5 Reviewer and second-opinion choices live in the same role
+// records the visible rows edit; there is no second, hidden copy of them.
+function reviewRole() { return workspace === "plan" ? "planning" : "specification"; }
+function chosenReviewerTool() { return effectiveChoice(`${reviewRole()}_review`).tool || selectedToolId(); }
+function chosenPeerTool() { return effectiveChoice(`${reviewRole()}_second_opinion`).tool || ""; }
 function renderReviewerChoices() {
-  const role = workspace === "plan" ? "planning" : "specification";
   const entries = reviewerOptions();
-  const set = (id, tool) => {
-    $(id).replaceChildren(new Option("", ""), ...entries.map(entry => new Option(entry.label, entry.id)));
-    retainedOption($(id), tool);
-  };
-  set("step-reviewer", effectiveChoice(`${role}_review`).tool || selectedToolId());
-  set("reviewer", effectiveChoice(`${role}_second_opinion`).tool || "");
   const reason = tool => entries.find(entry => entry.id === tool && !entry.capable)?.reason || "";
-  unavailableReviewerNote(reason($("step-reviewer").value), reason($("reviewer").value));
+  unavailableReviewerNote(reason(chosenReviewerTool()), reason(chosenPeerTool()));
   renderMainChoices();
   updateSecondOpinion();
 }
@@ -2391,11 +2343,11 @@ function unavailableReviewerNote(authorReason, reviewerReason) {
   note.hidden = !lines.length;
 }
 function updateOpinionNote() {
-  const select = $("reviewer"), note = $("opinion-note");
-  const tool = $("step-reviewer").value;
-  const same = !!select.value && select.value === tool;
+  const note = $("opinion-note");
+  const tool = chosenReviewerTool(), peer = chosenPeerTool();
+  const same = !!peer && peer === tool;
   note.textContent = [
-    select.value ? (same
+    peer ? (same
       ? "the second opinion runs in the same harness in a fresh session; whether that is the same lab is known only from what the run reports"
       : "the second opinion runs in a different harness; whether that is a different AI lab is known only from what the run reports") : "",
     "One second opinion costs 3 model calls; full iteration up to 7.",
@@ -2411,7 +2363,6 @@ function updateSecondOpinion() {
   $("peer-choice").hidden = !available;
   $("peer-choice").querySelector(".role-row")?.classList.toggle("opinion-off", !on);
   $("iterate-label").hidden = !on;
-  $("reviewer").disabled = !on;
   $("iterate-toggle").disabled = !on;
   $("review").textContent = !available ? "Run independent verification" : on ? "Run review with second opinion" : `Review the ${workspaces[workspace].title}`;
   $("review").title = !available ? "Sends or copies the complete Ora Verification request through one click." : on
@@ -2420,8 +2371,9 @@ function updateSecondOpinion() {
   // Both second-opinion roles need a work-capable route: the button greys
   // with its reason while the held selections stay exactly as chosen.
   if (available) {
-    const block = routeBlock($("step-reviewer").value) || (on ? routeBlock($("reviewer").value) : null);
-    if (block && $("step-reviewer").value) {
+    const reviewerTool = chosenReviewerTool();
+    const block = routeBlock(reviewerTool) || (on ? routeBlock(chosenPeerTool()) : null);
+    if (block && reviewerTool) {
       $("review").disabled = true;
       $("review").title = `${block.reason}. ${block.remedy} The chosen selections, draft and project context stay as they are.`;
     } else {
@@ -2431,8 +2383,8 @@ function updateSecondOpinion() {
   updateOpinionNote();
 }
 $("opinion-toggle").onchange = () => {
-  const role = `${workspace === "plan" ? "planning" : "specification"}_second_opinion`;
-  const tool = $("opinion-toggle").checked ? (reviewerOptions().find(entry => entry.capable && entry.id !== $("step-reviewer").value)?.id || selectedToolId()) : "";
+  const role = `${reviewRole()}_second_opinion`;
+  const tool = $("opinion-toggle").checked ? (reviewerOptions().find(entry => entry.capable && entry.id !== chosenReviewerTool())?.id || selectedToolId()) : "";
   setManualChoice(role, {tool, model: "", effort: ""});
 };
 $("iterate-toggle").onchange = updateSecondOpinion;
@@ -2443,19 +2395,16 @@ async function runReview() {
   if (config.assessment) {
     // The step-5 Reviewer picker names the assessing tool; it is independent
     // of the step 3 coding tool. The second-opinion picker stays the peer.
-    const tool = $("step-reviewer").value, secondOpinion = $("opinion-toggle").checked;
-    const reviewer = secondOpinion ? $("reviewer").value : "";
+    const tool = chosenReviewerTool(), secondOpinion = $("opinion-toggle").checked;
+    const reviewer = secondOpinion ? chosenPeerTool() : "";
     if (!tool || (secondOpinion && !reviewer)) { status("Choose the Reviewer and, for a second opinion, a work-capable peer first."); return; }
     const blocked = routeBlock(tool);
     if (blocked) { status(`${blocked.reason}. ${blocked.remedy}`, "warning"); return; }
     const id = currentId;
     let result;
     try {
-      // The workspace's assessment-stage key ("specification"/"planning") is
-      // the one stage name the whole review route accepts and records. The
-      // originating project is captured before dispatch, so a switch while
-      // the acknowledgement is awaited never shows this run under the other
-      // project.
+      // The workspace's assessment-stage key is the one the review route
+      // records; the originating project is captured before dispatch.
       result = await api("review", {id, tool, reviewer, stage: config.assessment, roles: oneTimeRoles(),
                                     iterate: secondOpinion && $("iterate-toggle").checked});
       if (currentId !== id) return;
@@ -2465,11 +2414,10 @@ async function runReview() {
       updateOperation(result.operation);
       status("");
     } catch (error) {
-      // The failure belongs to the originating project. After a switch, a
-      // rejected or unconfirmed dispatch is attributed by name — starting it
-      // again could repeat its model calls — while a post-acknowledgement
-      // view failure is suppressed: the submitted run is already recorded in
-      // its project and carried by that project's own display.
+      // After a switch, a rejected or unconfirmed dispatch is attributed by
+      // name (restarting it could repeat its model calls); a
+      // post-acknowledgement view failure is suppressed — the run is already
+      // recorded in its project.
       if (currentId !== id) {
         if (!result) {
           const label = originLabel(id);
@@ -2487,11 +2435,8 @@ async function runReview() {
 }
 
 // --- One-click stage handoffs -------------------------------------------------
-// The step instructions live on the server (ora_vibe_coder/run.py), shared with
-// Run to Completion, so manual and automated requests cannot drift apart. Send
-// prepares and saves the complete request through the existing builders, then
-// starts the next stage's in-app turn; Copy prepares, saves and writes the
-// clipboard; Terminal opens the tool's own window for Hermes and Qwen Code.
+// The step instructions live on the server (ora_vibe_coder/run.py), shared
+// with Run to Completion, so manual and automated requests cannot drift.
 
 const DELIVERY_STEPS = {
   "create-plan": {title: "Create the Plan", stage: "planning"},
@@ -2510,16 +2455,15 @@ async function buildStepDialog(step) {
   if (action) await deliverStep(step, action);
 }
 
-function selectedHost() { return hostChoices.find(h => h.id === selectedToolId()) || null; }
 
 // Build's step 7 follows the saved verification result, not only the verdict
-// heading: a completed NOT PASSED keeps the correction direction, while a
-// REVIEW INCOMPLETE result — including a legacy combined label — offers
-// finishing or rerunning the verification that never completed instead.
+// heading: a completed NOT PASSED keeps the correction direction, while an
+// INCOMPLETE result offers finishing or rerunning the verification that never
+// completed instead.
 function buildNextAction() {
   if (workspace !== "build") return "correction";
   const verdict = verificationVerdict(project?.verification?.status, project?.verification?.path);
-  return verdict.label === "INCOMPLETE" ? "verification" : "correction";
+  return verdict.label === "REVIEW INCOMPLETE" ? "verification" : "correction";
 }
 function updateBuildNextStep() {
   const unfinished = buildNextAction() === "verification";
@@ -2564,23 +2508,12 @@ function chooseDelivery(step, note) {
   send.title = blocked ? `${blocked.reason}. ${blocked.remedy} Copy request still delivers this step.` : "";
   terminal.hidden = !!capable;
   terminal.disabled = !host?.detected;
-  return new Promise(resolve => {
-    const cancel = $("build-action-cancel"), copy = $("build-action-copy");
-    function finish(choice) {
-      cancel.removeEventListener("click", onCancel); copy.removeEventListener("click", onCopy);
-      send.removeEventListener("click", onSend); terminal.removeEventListener("click", onTerminal);
-      dialog.removeEventListener("cancel", onCancel);
-      dialog.close(); resolve(choice);
-    }
-    function onCancel(event) { event?.preventDefault(); finish(null); }
-    function onCopy() { finish("copy"); }
-    function onSend() { finish("send"); }
-    function onTerminal() { finish("terminal"); }
-    cancel.addEventListener("click", onCancel); copy.addEventListener("click", onCopy);
-    send.addEventListener("click", onSend); terminal.addEventListener("click", onTerminal);
-    dialog.addEventListener("cancel", onCancel);
-    dialog.showModal();
-  });
+  return chooseFromDialog(dialog, [
+    [$("build-action-cancel"), null],
+    [$("build-action-copy"), "copy"],
+    [$("build-action-send"), "send"],
+    [$("build-action-terminal"), "terminal"],
+  ]);
 }
 
 async function deliverStep(step, action = null, note = "") {
@@ -2611,7 +2544,7 @@ async function deliverStep(step, action = null, note = "") {
     ? [...new Set([...(id === currentId ? material() : []), ...messageFilesFor(id, "build")].map(item => item.path))]
         .map(path => ({path}))
     : messageFiles().slice();
-  const verifier = step === "verification" ? $("verification-verifier").value : "";
+  const verifier = step === "verification" ? effectiveChoice("verification").tool || "" : "";
   const submittedAttachments = attachments.slice();
   if (step === "verification" && !verifier) {
     status("Choose the independent verifier for step 6, or leave it for the coordinator to ask.");
@@ -2671,12 +2604,12 @@ async function deliverStep(step, action = null, note = "") {
       $("prepared-status").textContent = receipt;
       status(receipt);
     } catch (_) {
-      if (currentId !== id || workspace !== selectedWorkspace || readerView !== copyView) return;
+      if (currentId !== id || selectedWorkspace !== workspace || readerView !== copyView) return;
       readerView = {id, workspace, role: null, kind: "packet", element: $("reader")};
       render($("reader"), result.text); $("raw").value = result.text;
-      $("packet-tools").hidden = false; $("raw-details").hidden = false; $("raw-details").open = true;
+      $("packet-tools").hidden = false; $("raw-details").hidden = false;
       $("delivery-note").textContent = `Saved ${DELIVERY_STEPS[step]?.title || step} request. Clipboard access was unavailable; the complete request is selected below for manual copy.`;
-      $("raw").focus(); $("raw").select();
+      selectRawForManualCopy();
       status("Clipboard access was unavailable. The full saved request is selected in the document pane; use your browser's Copy command. Nothing was sent.");
     }
     renderSavedRequest();
@@ -2722,8 +2655,7 @@ async function deliverStep(step, action = null, note = "") {
 
 // --- Questions at the response box, repairs, and the run banner ---------------
 
-// The bare questions of the newest entry that ended with a "Questions for you"
-// section, or of a run paused for them. With no such section, nothing shows:
+// The newest entry's bare "Questions for you" bullets, or a paused run's;
 // questions are never guessed from free text.
 function currentQuestions() {
   if (runActive?.state === "paused-question") return runActive.questions || [];
@@ -2770,15 +2702,13 @@ function sortingTrigger() {
   let stage, document;
   if (workspace === "build") {
     const verification = project?.verification;
-    const label = verification?.status?.label || "";
-    if (verification?.path && !verification.status?.unreadable && label.startsWith("NOT PASSED")
-        && !/^NOT PASSED — (REVIEW|REVISION) INCOMPLETE/.test(label)) {
+    if (verification?.path && !verification.status?.unreadable && verification.status?.label === "NOT PASSED") {
       stage = "verification"; document = verification;
     }
   } else {
     stage = workspace === "specification" ? "specification" : "planning";
     const assessment = project?.assessments?.[stage];
-    if ((assessment?.outcome || assessment?.verdict) === "NOT PASSED" && !assessment.issues?.length && !assessment.unreadable
+    if (assessment?.verdict === "NOT PASSED" && !assessment.issues?.length && !assessment.unreadable
         && ["current", "unconfirmed"].includes(assessment.applies)) document = assessment;
   }
   if (!document) return null;
@@ -2900,70 +2830,6 @@ function renderRepairsResult(trigger, result) {
   box.append(retry);
 }
 
-// One remembered read-only judgment when a saved record's wording leaves the
-// binary verdict genuinely unclear. A failed call shows a reading error —
-// never RECORD UNCLEAR beside an otherwise clear verdict.
-const judgments = new Map();
-function resolveUnclearVerdict(assessment, stageKey, attempt = 0) {
-  // One remembered judgment per content key; a working call is polled until
-  // it answers or fails, and a failed call shows a reading error.
-  const key = `${assessment.path}:${assessment.reason || assessment.issues?.join(" ")}`;
-  if (judgments.has(key)) return Promise.resolve(judgments.get(key));
-  const tool = $("step-reviewer")?.value || selectedToolId() || "codex";
-  return api("judgment", {id: currentId, stage: stageKey, tool})
-    .catch(error => ({state: "error", reason: error.message}))
-    .then(result => {
-      if (result.state === "answered" || result.state === "error" || result.state === "failed") {
-        judgments.set(key, result);
-        return result;
-      }
-      if (attempt > 60) return {state: "error", reason: "The judgment call did not answer."};
-      return new Promise(resolve => setTimeout(
-        () => resolve(resolveUnclearVerdict(assessment, stageKey, attempt + 1)), 2500));
-    });
-}
-
-const materialityChecks = new Map();
-function compareChangedDocuments() {
-  // An optional comparison must not compete with a deliberate turn or an
-  // automatic run. A foreground request can also safely retire a comparison
-  // already running when the user chooses to proceed.
-  if (runActive || (lastOperation && ["starting", "running"].includes(lastOperation.state)
-                    && !lastOperation.stage?.startsWith("materiality-"))) return;
-  const id = currentId;
-  for (const stage of ["specification", "planning"]) {
-    const change = project?.assessments?.[stage]?.change;
-    if (change?.state !== "pending") continue;
-    const remembered = materialityChecks.get(`${id}:${change.key}`);
-    if (remembered) {
-      if (remembered.state === "failed" || remembered.state === "error") {
-        change.state = "failed";
-        change.reason = `The change comparison could not finish: ${remembered.reason || "No supported conclusion."} Approval applicability remains unconfirmed. You can still approve or advance.`;
-      }
-      continue;
-    }
-    const key = `${id}:${change.key}`, tool = selectedToolId();
-    if (!tool) continue;
-    materialityChecks.set(key, "working");
-    const inspect = async () => {
-      if (id !== currentId) return;
-      let result;
-      try { result = await api("materiality", {id, stage, tool}); }
-      catch (error) { result = {state: "failed", reason: error.message}; }
-      if (id !== currentId) return;
-      if (result.state === "working") { setTimeout(inspect, 2500); return; }
-      materialityChecks.set(key, result);
-      if (result.state === "answered") await refreshProject();
-      else {
-        const a = project?.assessments?.[stage];
-        if (a?.change) a.change.reason = `The change comparison could not finish: ${result.reason || "No supported conclusion."} Approval applicability remains unconfirmed. You can still approve or advance.`;
-        renderAssessment();
-      }
-    };
-    inspect();
-  }
-}
-
 // --- Run to Completion -------------------------------------------------------
 
 function renderRunBanner() {
@@ -2999,7 +2865,7 @@ function renderRunBanner() {
       catch (error) { if (id === currentId && selectedWorkspace === workspace) throw error; return; }
       observePacket(id, result.path, result.text, d);
       d.packet = result.text; d.packetPath = result.path; d.packetPurpose = result.purpose;
-      d.packetDestination = result.destination; d.packetCurrentOnly = false; d.recoveryPacket = null;
+      d.packetDestination = result.destination; d.packetCurrentOnly = false;
       if (id !== currentId || selectedWorkspace !== workspace) return;
       showPacket(result.text, result.purpose);
       const view = readerView, pictures = (result.pictures || []).join(", ");
@@ -3013,8 +2879,8 @@ function renderRunBanner() {
       } catch (_) {
         if (id !== currentId || selectedWorkspace !== workspace || readerView !== view) return;
         splitMode = "doc"; applySplit();
-        $("raw-details").open = true; $("raw").focus(); $("raw").select();
         $("delivery-note").textContent = `${note} Clipboard access was unavailable; the complete request is selected below for manual copy.`;
+        selectRawForManualCopy();
       }
     });
     holder.append(copy);
@@ -3062,8 +2928,8 @@ function savedChoices() {
 function stageChoice(role) { return savedChoices()[role] || {}; }
 function effectiveChoice(role) { return pendingRunConfig?.roles?.[role] || stageChoice(role); }
 function oneTimeRoles() { return pendingRunConfig?.roles || {}; }
-// All visible choices use the same existing role records. The hidden legacy
-// destination selects remain routing labels for portable Desktop/Terminal paths.
+// All visible choices use the same existing role records; the remembered
+// destination name is the one routing label portable delivery paths need.
 function setManualChoice(role, choice) {
   pendingRunConfig = {...(pendingRunConfig || {}), roles: {...oneTimeRoles(), [role]: choice}};
   applyManualConfiguration();
@@ -3087,7 +2953,7 @@ function renderMainChoices() {
     put("loop-review-choice", "review", "Loop reviewer");
     put("verifier-choice", "verification", "Independent verifier");
   } else {
-    const role = workspace === "plan" ? "planning" : "specification";
+    const role = reviewRole();
     put("document-review-choice", `${role}_review`, "Reviewer");
     // Move the original label/input, retaining its listener and checked state.
     const opinionLabel = $("opinion-toggle").closest("label");
@@ -3245,12 +3111,11 @@ $("settings").onclick = guard(() => openConfiguration());
 $("configure-path").onclick = guard(() => openConfiguration(true));
 $("settings-close").onclick = () => { $("settings-panel").hidden = true; };
 function savedHideAdvisory() {
-  // Preserve the effective preference saved by either of the former warning controls.
-  return project?.configuration?.hide_advisory ?? (!!appSettings.hide_advisory || appSettings.warn_skip_review === false);
+  return project?.configuration?.hide_advisory ?? !!appSettings.hide_advisory;
 }
 $("settings-save").onclick = guard(async () => {
-  appSettings = await api("settings", {warn_skip_review: !$("settings-hide-advisory").checked,
-    best_guess: $("settings-best-guess").checked, hide_advisory: $("settings-hide-advisory").checked,
+  appSettings = await api("settings", {best_guess: $("settings-best-guess").checked,
+    hide_advisory: $("settings-hide-advisory").checked,
     role_defaults: readRoleRows($("settings-roles"))});
   if (currentId && workspace && !lastOperation?.active) applyManualConfiguration();
   $("settings-panel").hidden = true;
@@ -3259,12 +3124,9 @@ $("settings-save").onclick = guard(async () => {
 function applyManualConfiguration() {
   const writer = effectiveChoice(configurationRole());
   if (writer.tool) {
-    const name = hostChoices.find(h => h.id === writer.tool)?.name || writer.tool;
-    retainedOption($("destination"), name, name);
+    destinationName = hostChoices.find(h => h.id === writer.tool)?.name || writer.tool;
   }
-  const role = workspace === "plan" ? "planning" : "specification";
-  $("opinion-toggle").checked = !!effectiveChoice(`${role}_second_opinion`).tool;
-  $("verification-verifier").value = effectiveChoice("verification").tool || "";
+  $("opinion-toggle").checked = !!effectiveChoice(`${reviewRole()}_second_opinion`).tool;
   updateHost();
 }
 $("project-settings-save").onclick = guard(async () => {
@@ -3307,23 +3169,15 @@ $("run-completion").onclick = guard(async () => {
   // saved or run-only hide-advisory preference removes it.
   const spec = project?.assessments?.specification, plan = project?.assessments?.planning;
   const missing = [ ["Specification", spec], ["Plan", plan] ].filter(([_, a]) =>
-    !(["COMPLETE", "PASSED"].includes(a?.outcome || a?.verdict) && ["current", "unconfirmed"].includes(a.applies) && !a.issues?.length && !a.unreadable));
+    !(a?.verdict === "PASSED" && ["current", "unconfirmed"].includes(a.applies) && !a.issues?.length && !a.unreadable));
   if (missing.length && !config.hide_advisory) {
-    const proceed = await new Promise(resolve => {
-      const dialog = $("run-warning");
-      $("run-warning-text").replaceChildren(...missing.map(([label, _]) => {
-        const line = document.createElement("p");
-        line.textContent = `The ${label} has no current PASSED review; the run will skip that review.`;
-        return line;
-      }));
-      const back = $("run-warning-back"), cont = $("run-warning-continue");
-      function finish(choice) { back.removeEventListener("click", onBack); cont.removeEventListener("click", onGo); dialog.removeEventListener("cancel", onBack); dialog.close(); resolve(choice); }
-      function onBack(event) { event?.preventDefault(); finish(false); }
-      function onGo() { finish(true); }
-      back.addEventListener("click", onBack); cont.addEventListener("click", onGo); dialog.addEventListener("cancel", onBack);
-      dialog.showModal();
-    });
-    if (!proceed) return;
+    const dialog = $("run-warning");
+    $("run-warning-text").replaceChildren(...missing.map(([label, _]) => {
+      const line = document.createElement("p");
+      line.textContent = `The ${label} has no current PASSED review; the run will skip that review.`;
+      return line;
+    }));
+    if (!await chooseFromDialog(dialog, [[$("run-warning-back"), false], [$("run-warning-continue"), true]])) return;
   }
   const brief = $("message").value;
   const files = messageFiles().slice().map(item => item.path);
@@ -3424,12 +3278,9 @@ async function pollTick() {
     if (id !== currentId || opening !== projectOpeningGeneration || stopped) return;
   }
   const operation = state.operation;
-  // A run moves to its next step's turn without this poll ever observing a
-  // terminal operation, so a completed step's saved reply would stay missing
-  // from the conversation until the run ends. Whenever the observed run, its
-  // current step, or the running turn changes, the conversation reloads from
-  // the retained records — through the same loadConversation that preserves
-  // unsent drafts and this project's switch protection.
+  // Whenever the observed run, its step, or the running turn changes, the
+  // conversation reloads from the retained records through the same
+  // loadConversation that preserves drafts and switch protection.
   const runMark = runActive ? `${runActive.run}:${runActive.step}:${operation?.turn || ""}` : "";
   if (runMark !== conversationRunMark) {
     conversationRunMark = runMark;
@@ -3441,26 +3292,18 @@ async function pollTick() {
     }
   }
   if (operation) {
-    // A terminal operation must be reflected in the displayed conversation:
-    // refresh when its retained record still shows the turn or run open —
-    // the first poll after opening a project has no previous state to
-    // transition from, so a turn that finished before that poll would
-    // otherwise keep its "Unfinished" message forever — or when a live state
-    // transitioned to it.
+    // Refresh when the retained record still shows the turn or run open (a
+    // turn that finished before the first poll would otherwise stay
+    // "Unfinished" forever), or when a live state transitioned to terminal.
     const turn = conversationTurns.find(item => item.turn === operation.turn);
     const run = reviewRuns.find(item => item.run === operation.turn);
     const openRecord = (turn && turn.state === "open") || (run && run.state === "open");
-    // A terminal operation is reflected in the display only when the record
-    // it reads from carries its outcome. An ordinary turn completes on its
-    // saved reply while its maintenance outcome is one more note, so a view
-    // loaded between those two saves shows the turn complete with a derived,
-    // unconfirmed maintenance state — and the outcome recorded after that
-    // load never reaches it without a reload. The same holds when the turn
-    // or run is not displayed at all: the record exists, the display merely
-    // predates it.
-    // These read-only auxiliary calls have their own readers and never enter
-    // either conversation list. Their absence is not a late saved outcome.
-    const auxiliary = /^(judgment|sorting|materiality)-/.test(operation.stage || "");
+    // A terminal operation is reflected only when the record carries its
+    // outcome — a view loaded between the reply and its outcome note keeps a
+    // derived state until reloaded, and a record the display predates never
+    // shows without one. Auxiliary calls never enter either conversation
+    // list, so their absence is not a late saved outcome.
+    const auxiliary = /^sorting-/.test(operation.stage || "");
     const outcomeUnreflected = (turn && !turn.outcome_recorded) || (!turn && !run && !!operation.turn && !auxiliary);
     // An operation that reports its own outcome note could not be recorded can
     // never be reflected in the retained records, so refetching on an open or
@@ -3521,24 +3364,19 @@ $("refresh").onclick = guard(async () => {
   try {
     await refreshProject();
     if (id !== currentId) return;  // The switch owns the reader; the previously displayed project's document is not reread into it.
-    if (!$("packet-tools").hidden) status(readerView?.kind === "absent"
-      ? "Saved files reread. The earlier Markdown remains here for recovery; use Back to document or Prepare Again to check the request file."
-      : "Saved files reread. The displayed handoff remains its prepared snapshot; use Back to document or Prepare Again for current sources.");
+    if (!$("packet-tools").hidden) status("Saved files reread. The displayed handoff remains its prepared snapshot; use Back to document or Prepare Again for current sources.");
     else if (workspace !== space || readerView !== view) return;  // A document or workspace selection made while this refresh ran owns the reader now.
     else await readDocument(readerAnchor || $("document").value);
   } catch (error) {
-    // A manual refresh is a view reread of the project it was started in; it
-    // submits no work of its own. While that project is still displayed the
-    // failure is reported here. After a switch it is suppressed, matching the
-    // post-acknowledgement view failures: the displayed project's state was
-    // never touched by another project's failed reread, and the origin
-    // project's own records, refresh, and polling carry its truth.
+    // A manual refresh submits no work of its own: the failure is reported
+    // while its project is displayed and suppressed after a switch, when the
+    // origin project's own records and polling carry its truth.
     if (id === currentId) throw error;
   }
 });
 
-// Closing: watch the draining server until its final exit, then report only
-// what was actually observed from this page.
+// Closing: watch the draining server until its final exit; the one line says
+// what the page actually knows.
 function watchClosing() {
   const timer = setInterval(async () => {
     const id = currentId;
@@ -3550,31 +3388,7 @@ function watchClosing() {
     } catch (error) {
       if (error.status) return;  // The server answered; keep watching until it exits.
       clearInterval(timer);
-      // Describe only observed outcomes. The server stopping answering is
-      // expected at exit but is not observed confirmation of it, and this
-      // page observed only the selected project — so application-wide saving
-      // and owned-process cleanup are explicitly left unconfirmed. Durable
-      // recording of the last turn's outcome is likewise asserted only when
-      // the outcome note's write was confirmed; a recording failure keeps
-      // its warning in the closing text instead of false assurance.
-      const last = lastOperation;
-      const recording = !last || ["starting", "running"].includes(last.state) ? "" :
-        last.outcome_recorded === true
-          ? " The outcome note is recorded in the retained records."
-          : last.outcome_recorded === false
-            ? ` ${(last.warnings || []).find(item => item.startsWith("The outcome note could not be recorded")) || "Its outcome note could not be recorded."} Durable recording of this outcome is unconfirmed; reopen the project to see what its records hold.`
-            : " No outcome note was confirmed as recorded for this turn.";
-      let observed;
-      if (!last) observed = "No work turn was observed running in this project.";
-      else if (["starting", "running"].includes(last.state))
-        observed = "This project's turn was still working at the last observation; its final outcome is unconfirmed.";
-      else if (["failed", "interrupted"].includes(last.state))
-        observed = `This project's last observed turn ${last.state}: ${last.reason || "no reason was recorded."}${recording}`;
-      else if (last.maintenance && !["applied", "no-change", "none", ""].includes(last.maintenance))
-        observed = `This project's last observed turn finished, but its Registry maintenance did not apply (${last.maintenance}); the reply itself remains in the turn records.${recording}`;
-      else
-        observed = `This project's last observed turn had finished, with Registry maintenance ${last.maintenance || "none"} observed on this page.${recording}`;
-      status(`The local server stopped responding while closing; its exit was not observed from this page. ${observed} Saving of work in other projects and the ending of owned processes remain unconfirmed. Reopen from the launcher — each project's retained records reopen with it.`);
+      status("Vibe has closed; each project's records reopen with it.");
     }
   }, 2000);
 }

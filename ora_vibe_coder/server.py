@@ -21,9 +21,9 @@ from . import run as run_module
 from .handoff import PLUGIN, STAGES, prepare_request, stated_code_location
 from .hosts import model_inventory
 from .hosts import HOSTS as TOOL_LABELS, continue_in, discover
-from .launcher import Settings, documents_location, settings_path
-from .project import Conflict, ProjectError, ProjectStore, ROLES, atomic_write, not_started, read_text, findings_key
-from .status import assessment_facts, metadata, review_basis, sections
+from .launcher import documents_location, settings_path
+from .project import Conflict, ProjectError, ProjectStore, ROLES, not_started, findings_key
+from .status import assessment_facts
 
 # A 4 MiB packet can expand sixfold when JSON escapes control characters.
 # This bounded transport ceiling accommodates a full saved packet plus input.
@@ -42,12 +42,8 @@ MARKUP_APP = "Ora Screen Markup"
 
 
 def open_markup_capture(folder):
-    """Open the installed markup tool on one fresh capture, results to `folder`.
-
-    The tool is the copy installed on this Mac (ORA-299), started with its
-    return folder so a finished markup comes back as `picture.png` and
-    `notes.txt`; a missing tool is said in plain words instead of launching.
-    """
+    """Open the installed markup tool on one fresh capture, results to
+    `folder` as picture.png and notes.txt; a missing tool is said plainly."""
     if not any(base.joinpath(f"{MARKUP_APP}.app").is_dir()
                for base in (Path("/Applications"), Path.home() / "Applications")):
         raise ProjectError("Ora Screen Markup is not installed on this Mac, so Capture cannot open it. "
@@ -63,11 +59,10 @@ def open_markup_capture(folder):
 def lookup_latest_release(url=RELEASE_LOOKUP_URL, timeout=5):
     """One standard-library HTTPS question about the newest public release.
 
-    A short timeout and a User-Agent header are sent; nothing else is asked,
-    downloaded, or installed. A freshly installed python.org Python has no
-    certificates until its Install Certificates step runs, so on macOS one
-    certificate failure is retried against /etc/ssl/cert.pem before giving up.
-    """
+    A short timeout and a User-Agent are sent; nothing is downloaded or
+    installed. A fresh python.org Python lacks certificates until its Install
+    Certificates step, so on macOS one failure retries against
+    /etc/ssl/cert.pem."""
     for attempt in (None, "/etc/ssl/cert.pem"):
         context = ssl.create_default_context(cafile=attempt) if attempt else None
         request = urllib.request.Request(url, headers={"User-Agent": "Ora Vibe Coder update check"})
@@ -84,12 +79,9 @@ def lookup_latest_release(url=RELEASE_LOOKUP_URL, timeout=5):
 
 
 def release_answer(release, running):
-    """Compare one GitHub release record with the running version.
-
-    Four answers: newer (names the release and links its page with the update
-    steps), same, ahead, or can't tell — any failure, rate limit, or unreadable
-    answer is can't tell and is never reported as up to date.
-    """
+    """Compare one GitHub release record with the running version: newer
+    (with the release page and update steps), same, ahead, or can't tell —
+    never reported as up to date on a failure."""
     unparsable = {"answer": "cant_tell", "label": "Couldn't check for updates.", "url": None,
                   "note": "The check failed, was rate-limited, or returned an unreadable answer, "
                           "so no update conclusion is offered. Nothing was downloaded or installed."}
@@ -165,8 +157,8 @@ class LocalServer(HTTPServer):
         # Live Run to Completion drivers, in memory only; each run's durable
         # record is the ordinary .vibe/ turn folders it writes.
         self.runs = run_module.RunRegistry()
-        # One live read-only auxiliary call (unclear-record judgment or
-        # findings sorting) per project and purpose, for honest polling.
+        # One live read-only auxiliary call (findings sorting) per project
+        # and purpose, for honest polling.
         self.aux_lock = threading.Lock()
         self.aux_handles = {}
         # One boolean in memory: does the displayed main instruction input hold
@@ -210,6 +202,19 @@ class LocalServer(HTTPServer):
         except (OSError, ValueError):
             return {}
 
+    def hide_advisory(self, *overrides):
+        """The one advisory-warning preference; the legacy key is read once.
+
+        Each source is checked in order — run config, project choices, then
+        the global settings — and the first source carrying either key decides.
+        """
+        for source in (*overrides, self.preferences()):
+            if "hide_advisory" in source:
+                return bool(source["hide_advisory"])
+            if "warn_skip_review" in source:
+                return source["warn_skip_review"] is False
+        return False
+
     def remember_project(self, path):
         if not self.settings:
             return
@@ -240,12 +245,8 @@ class LocalServer(HTTPServer):
     def readiness_refresh(self):
         """Start one background readiness sweep unless one is already running.
 
-        An explicit recheck arriving while a sweep runs is retained — once,
-        never queued in depth — and runs as soon as that sweep completes, so a
-        sign-in repaired mid-sweep is reflected rather than the sweep's
-        already-stale result standing. Ordinary polls never call this: they
-        only read the report.
-        """
+        An explicit recheck arriving mid-sweep is retained once and runs when
+        that sweep completes. Ordinary polls only read the report."""
         with self.readiness_lock:
             if self.stopping:
                 return
@@ -321,10 +322,8 @@ class LocalServer(HTTPServer):
     def aux_report(self, project, purpose, stage, tool, body, remember):
         """A remembered auxiliary answer, a live call, or one fresh call.
 
-        The answer is remembered in the retained records by its content key, so
-        it is never repeated on refresh; a failed call is reported as a failure
-        and may be retried, never remembered as a verdict or a repair list.
-        """
+        Answers are remembered by content key and never repeated; a failed
+        call may be retried, never remembered as a verdict or repair list."""
         key = f"{stage}:{remember.get('Key', '')}"
         remembered = conversation.read_aux_answers(project).get(key)
         if remembered and remembered["purpose"] == purpose:
@@ -426,11 +425,10 @@ class Handler(BaseHTTPRequestHandler):
     def attachment(self):
         """One retained original attachment, same-origin, behind the full boundary.
 
-        An image element cannot carry the tab's token header, so this one GET
-        route accepts the identical token from its query string; the host and
-        origin checks are unchanged, and everything else about the boundary is
-        the same as every other route. Only an original retained with an
-        opened project's turn is served, exactly the bytes saved with it.
+        An image element cannot carry the token header, so this GET route
+        accepts the identical token from its query string with the boundary
+        otherwise unchanged. Only an original retained with an opened
+        project's turn is served, exactly the bytes saved with it.
         """
         parsed = urllib.parse.urlsplit(self.path)
         query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
@@ -445,13 +443,9 @@ class Handler(BaseHTTPRequestHandler):
         project = self.server.store.projects.get(identifier) if self.server.store else None
         folder = project.root / conversation.VIBE / turn / "attachments" if project is not None else None
         target = folder / name if folder is not None else None
-        # Confinement covers every path component below the project's reserved
-        # .vibe root: a symbolic link on the retained-attachment folder, on its
-        # turn folder, or on .vibe itself would serve bytes from outside the
-        # project through an otherwise valid name, because resolving both
-        # sides of a containment comparison follows the same link. Hard links
-        # cannot be distinguished on this route; containment is judged on path
-        # resolution, links included.
+        # Confinement judges on path resolution, links included: a link on
+        # .vibe, the turn folder, or the attachments folder would otherwise
+        # serve bytes from outside the project through a valid name.
         linked = project is not None and any(
             path.is_symlink() for path in (
                 project.root / conversation.VIBE,
@@ -472,13 +466,10 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(200, data, kinds[Path(name).suffix.lower()])
 
     def capture_status(self):
-        """One poll of a markup capture's return folder.
-
-        The page asks once a second while the tool is open. A finished picture
-        and its notes are returned whole and the folder removed; a `cancelled`
-        marker ends the wait the same way. Like the attachment route, an image
-        fetch cannot carry the token header, so the identical token is accepted
-        from the query string with the boundary otherwise unchanged.
+        """One poll of a markup capture's return folder: a finished picture and
+        its notes are returned whole and the folder removed; a `cancelled`
+        marker ends the wait. The token is accepted from the query string, as
+        on the attachment route, with the boundary otherwise unchanged.
         """
         parsed = urllib.parse.urlsplit(self.path)
         query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
@@ -529,12 +520,9 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(400, {"error": str(error)})
 
     def host_discovery(self):
-        """Discovery with conversation routes from the last completed sweep.
-
-        Before any sweep has reported, the reviewed fixed set of the pinned
-        bundle stands; the sweep and every Recheck then true it to the actual
-        copy in use.
-        """
+        """Discovery with conversation routes from the last completed sweep;
+        before any sweep reports, the reviewed fixed set of the pinned bundle
+        stands."""
         with self.server.readiness_lock:
             peers = self.server.readiness
         work = {facts.get("peer"): facts.get("work") for facts in peers} if peers is not None else None
@@ -563,9 +551,8 @@ class Handler(BaseHTTPRequestHandler):
     def app_settings(self):
         preferences = self.server.preferences()
         roles = preferences.get("role_defaults") if isinstance(preferences.get("role_defaults"), dict) else {}
-        return {"warn_skip_review": preferences.get("warn_skip_review", True),
+        return {"hide_advisory": self.server.hide_advisory(),
                 "best_guess": preferences.get("best_guess", False),
-                "hide_advisory": preferences.get("hide_advisory", False),
                 "role_defaults": {role: roles.get(role, {}) for role in run_module.ROLE_NAMES},
                 "settings_path": str(self.server.settings.path) if self.server.settings else ""}
 
@@ -580,7 +567,6 @@ class Handler(BaseHTTPRequestHandler):
             roles = preferences.get("role_defaults") if isinstance(preferences.get("role_defaults"), dict) else {}
             return {"home": str(self.server.store.home) if self.server.store else None,
                     "browse_home": str(documents), "browse_fallback": str(Path.home()),
-                    "browse_note": "",
                     "recent_projects": recent,
                     "last_project": preferences.get("last_project", ""),
                     "last_workspace": preferences.get("last_workspace", ""),
@@ -670,9 +656,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/check-updates":
             shape(data, [])
             # One deliberate HTTPS question to the public release record,
-            # asked only because the user pressed the button: nothing is
-            # downloaded, installed, or replaced, and no background moment
-            # ever contacts the network.
+            # asked only because the user pressed the button; nothing is
+            # downloaded, installed, or replaced.
             version = (PLUGIN / "VERSION").read_text(encoding="utf-8").strip()
             try:
                 return release_answer(self.server.update_lookup(), version)
@@ -682,15 +667,10 @@ class Handler(BaseHTTPRequestHandler):
             shape(data, [], ["recheck"])
             if "recheck" in data and not isinstance(data["recheck"], bool):
                 raise ProjectError("Expected the recheck selection.")
-            # An ordinary poll only reads the current report; it never starts
-            # the worker, so the client's poll chain ends naturally once a
-            # check finishes instead of every poll restarting it. Only an
-            # explicit recheck — startup's first check or the Recheck button —
-            # starts one background probe (no model call), still behind the
-            # single-worker guard; a recheck that arrives while a sweep runs
-            # is retained once and runs when that sweep completes. A recheck
-            # after resolving sign-in or permissions is never a retry of
-            # consequential work.
+            # Only an explicit recheck (startup's first check or the button)
+            # starts the worker; ordinary polls read the report so the poll
+            # chain ends when a check finishes. No model call, and never a
+            # retry of consequential work.
             if data.get("recheck"):
                 self.server.readiness_refresh()
             return self.server.readiness_report()
@@ -718,9 +698,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ProjectError("Select a supported harness.")
             return model_inventory(data["tool"])
         if path == "/api/settings":
-            shape(data, [], ["warn_skip_review", "best_guess", "hide_advisory", "role_defaults"])
+            shape(data, [], ["best_guess", "hide_advisory", "role_defaults"])
             updates = {}
-            for key in ("warn_skip_review", "best_guess", "hide_advisory"):
+            for key in ("best_guess", "hide_advisory"):
                 if key in data:
                     if not isinstance(data[key], bool):
                         raise ProjectError("Expected a checkbox selection.")
@@ -736,8 +716,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/stop":
             shape(data, [])
-            # A deliberate Stop interrupts owned AI work. Files already changed
-            # remain; the retained turn records show what was attempted.
+            # A deliberate Stop interrupts owned AI work; files already
+            # changed remain in place.
             finishing = self.server.conversation.in_flight()
             if not self.server.stopping:
                 self.server.stopping = True
@@ -769,9 +749,9 @@ class Handler(BaseHTTPRequestHandler):
                                            under=data.get("under") or None, code=data.get("code", ""))
             self.server.remember_project(self.server.store.projects[key].root)
             return {"id": key}
-        allowed = {"/api/project", "/api/save", "/api/read", "/api/read-file", "/api/approve-reference", "/api/prepare", "/api/preview", "/api/handoff", "/api/copy", "/api/continue",
+        allowed = {"/api/project", "/api/save", "/api/read-file", "/api/approve-reference", "/api/prepare", "/api/preview", "/api/copy", "/api/continue",
                    "/api/converse", "/api/turn-input", "/api/turn-state", "/api/conversation", "/api/review",
-                   "/api/judgment", "/api/sort-findings", "/api/approve-plan", "/api/approve-document", "/api/materiality", "/api/repair", "/api/deliver",
+                   "/api/sort-findings", "/api/approve-document", "/api/repair", "/api/deliver",
                    "/api/project-settings", "/api/run-start", "/api/run-stop", "/api/run-answer", "/api/run-resume", "/api/run-configure", "/api/run-copy", "/api/action-stop",
                    "/api/capture"}
         if path not in allowed:
@@ -816,10 +796,6 @@ class Handler(BaseHTTPRequestHandler):
             # One entry updates from the saved definition; no rescan, no switch.
             self.server.store.refresh_entry(project.root)
             return result
-        if path == "/api/read":
-            shape(data, ["id", "role"])
-            strings(data, ["role"])
-            return project.material(data["role"])
         if path == "/api/read-file":
             shape(data, ["id", "path"])
             strings(data, ["path"])
@@ -829,9 +805,6 @@ class Handler(BaseHTTPRequestHandler):
             strings(data, ["role", "path"])
             project.approve_reference(data["role"], data["path"])
             return {"selected": True}
-        if path == "/api/handoff":
-            shape(data, ["id"])
-            return {"text": project.handoff_text()}
         if path == "/api/copy":
             shape(data, ["id", "displayed"], ["purpose"])
             strings(data, ["displayed"])
@@ -843,8 +816,7 @@ class Handler(BaseHTTPRequestHandler):
             strings(data, ["displayed", "destination"])
             if data.get("purpose") not in (None, "implement-plan"):
                 raise ProjectError("Invalid saved request purpose.")
-            # A changed repository / code folder must not silently launch a
-            # stale saved assignment against the wrong folder.
+            # A changed code folder must not launch a stale saved assignment.
             current = str(project.code_folder()) if project.code_folder() else None
             if stated_code_location(data["displayed"]) != current:
                 raise ProjectError("The repository / code folder changed after this assignment was prepared, so the saved assignment names a different location. Prepare Again; nothing was launched.")
@@ -861,8 +833,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ProjectError("Vibe is closing after Stop; no new turn was started. Your message is retained in this page.")
             if self.server.runs.find(project) is not None:
                 raise ProjectError("A Run to Completion is active in this project, so the composer cannot start a separate turn. Answer the run's pause, or stop the run first.")
-            # The submission is validated and saved durably before the bounded
-            # worker starts; this handler returns as soon as dispatch begins.
+            # The submission is saved durably before the bounded worker starts.
             tool, model, effort = self.role_choice(run_module.STAGE_ROLE.get(data["stage"], "implementation"), data["tool"], project=project, roles=data.get("roles"))
             application_instructions = ""
             if data["stage"] == "programming":
@@ -871,9 +842,8 @@ class Handler(BaseHTTPRequestHandler):
             handle = conversation.start_turn(self.server.conversation, project, tool, data["stage"],
                                              data["text"], data["images"], data.get("files", []), model=model, effort=effort,
                                              application_instructions=application_instructions)
-            # The acknowledgement identifies the originating turn and the
-            # retained attachment names, so the browser keys the restorable
-            # draft to this project and can redeliver originals same-origin.
+            # The ack names the turn and retained attachments for the
+            # restorable draft's same-origin redelivery.
             return {"turn": handle.turn, "operation": handle.snapshot(),
                     "images": list(handle.retained_images)}
         if path == "/api/turn-input":
@@ -909,34 +879,8 @@ class Handler(BaseHTTPRequestHandler):
                                                    data["stage"], reviewer, data["iterate"], model=model, effort=effort,
                                                    reviewer_model=r_model, reviewer_effort=r_effort)
             return {"turn": handle.turn, "operation": handle.snapshot()}
-        if path == "/api/judgment":
-            # One remembered read-only judgment when a current record's wording
-            # leaves the binary verdict genuinely unclear. The answer is keyed
-            # by the content basis status.py computes, so it is not repeated on
-            # refresh; a failed call is a reading error, never RECORD UNCLEAR.
-            shape(data, ["id", "stage", "tool"])
-            strings(data, ["stage", "tool"])
-            if data["stage"] not in conversation.REVIEW_STAGES:
-                raise ProjectError("Judgments read the Specification and Plan review records.")
-            if data["tool"] not in conversation.PEERS:
-                raise ProjectError("Select one of the six supported coding tools as the Reviewer.")
-            role = conversation.REVIEW_STAGES[data["stage"]]
-            item = project.material(role)
-            if item["text"] is None:
-                return {"state": "error", "reason": item["reason"] or f"The current {role} could not be read."}
-            facts = assessment_facts(data["stage"], item["text"])
-            if not facts["present"]:
-                return {"state": "error", "reason": "No assessment is recorded, so there is nothing to judge."}
-            if facts["verdict"] and not facts["issues"]:
-                return {"state": "answered", "answer": {"verdict": facts.get("outcome", facts["verdict"])},
-                        "tool": "the saved record"}
-            basis = review_basis(item["text"])
-            assessment = conversation.section_body(item["text"], "Current review") or item["text"]
-            return self.server.aux_report(project, conversation.PURPOSE_JUDGMENT, data["stage"], data["tool"],
-                                          conversation.judgment_request(data["stage"], item["text"], assessment),
-                                          {"Key": basis})
         if path == "/api/sort-findings":
-            # One remembered read-only sorting of an INCOMPLETE review's or a
+            # One remembered read-only sorting of a NOT PASSED review's or a
             # NOT PASSED report's findings into AI-can-fix and needs-input.
             shape(data, ["id", "stage"])
             strings(data, ["stage"])
@@ -957,7 +901,7 @@ class Handler(BaseHTTPRequestHandler):
                 if item["text"] is None:
                     return {"state": "error", "reason": item["reason"] or f"No {role} document is resolved to sort."}
                 facts = assessment_facts(data["stage"], item["text"])
-                if facts.get("outcome", facts["verdict"]) != "NOT PASSED" or facts["issues"]:
+                if facts["verdict"] != "NOT PASSED" or facts["issues"]:
                     return {"state": "error", "reason": "Sorting runs for a current NOT PASSED review."}
                 document = item["text"]
                 findings = conversation.section_body(item["text"], "Current review") or item["text"]
@@ -974,33 +918,17 @@ class Handler(BaseHTTPRequestHandler):
                                                                        document,
                                                                        findings),
                                           {"Key": findings_key(document, data["stage"])})
-        if path in {"/api/approve-plan", "/api/approve-document"}:
+        if path == "/api/approve-document":
             shape(data, ["id", "expected", "document"], ["stage"])
             strings(data, ["expected", "document"])
             stage = data.get("stage", "planning")
             if stage not in {"specification", "planning"}:
                 raise ProjectError("Select the Specification or Plan to approve.")
             saved, warning = project.approve_document(stage, data["expected"], data["document"])
-            return {"approved": True, "document": saved["path"], "plan": saved["path"], "warning": warning, "file_state": conversation.document_fingerprint(project)}
-        if path == "/api/materiality":
-            shape(data, ["id", "stage", "tool"])
-            strings(data, ["stage", "tool"])
-            if data["stage"] not in {"specification", "planning"}:
-                raise ProjectError("Select the Specification or Plan to compare.")
-            change = project.material_change(data["stage"])
-            if not change or change["state"] != "pending":
-                return {"state": "answered", "answer": change or {"materiality": "UNCHANGED"}}
-            result = self.server.aux_report(project, conversation.PURPOSE_MATERIALITY, data["stage"], data["tool"],
-                    conversation.materiality_request(data["stage"], change["before"]["text"], change["after"]["text"]),
-                    {"Key": change["key"]})
-            if result["state"] == "answered":
-                result["change"] = project.material_change(data["stage"])
-                if result.get("change"):
-                    result["change"] = {key: value for key, value in result["change"].items() if key not in {"before", "after"}}
-            return result
+            return {"approved": True, "document": saved["path"], "warning": warning, "file_state": conversation.document_fingerprint(project)}
         if path == "/api/repair":
-            # Request repairs: the remembered AI-can-fix findings go to the
-            # step-3 tool as one ordinary work turn on the same stage.
+            # The remembered AI-can-fix findings go to the step-3 tool as one
+            # work turn on the same stage.
             shape(data, ["id", "stage", "tool"], ["roles"])
             strings(data, ["stage", "tool"])
             if data["stage"] not in conversation.REVIEW_STAGES:
@@ -1029,9 +957,8 @@ class Handler(BaseHTTPRequestHandler):
                                              instruction, [], [], model=model, effort=effort, activity="Correcting")
             return {"turn": handle.turn, "operation": handle.snapshot(), "images": []}
         if path == "/api/deliver":
-            # One-click stage handoff: Send prepares and saves the complete
-            # request through the existing builders, then starts the next
-            # stage's in-app turn; Copy prepares, saves and returns the text;
+            # One-click stage handoff: Send prepares, saves and starts the
+            # next stage's turn; Copy prepares, saves and returns the text;
             # Terminal opens the saved request in the tool's own window.
             shape(data, ["id", "step", "action", "tool", "text"], ["files", "images", "verifier", "upstream", "roles"])
             strings(data, ["step", "action", "tool", "text"])
@@ -1081,10 +1008,9 @@ class Handler(BaseHTTPRequestHandler):
                     if findings:
                         extra.append("The findings the AI can fix, from the sorted review:\n\n"
                                      + "\n".join(f"- {finding}" for finding in findings))
-            # A request delivered by copy or terminal cannot carry pictures, so
-            # the saved packet itself names each omitted one with its access
-            # limitation — the recipient sees what is missing, not only this
-            # app's status bar. A send carries them as the turn's attachments.
+            # A copy or terminal delivery cannot carry pictures, so the saved
+            # packet names each omitted one; a send carries them as
+            # attachments.
             picture_names = [item.get("name", "") for item in images]
             if data["action"] != "send" and picture_names:
                 extra.append(f"Pictures not carried by this request: {', '.join(picture_names)}. "
@@ -1118,14 +1044,12 @@ class Handler(BaseHTTPRequestHandler):
                     "images": list(handle.retained_images), "file_state": conversation.document_fingerprint(project),
                     "text": packet, "path": str(project.packet_path(purpose))}
         if path == "/api/capture":
-            # Capture: open the installed markup tool on a fresh capture whose
-            # result returns through a request-local folder; the page polls
+            # Open the markup tool on a fresh capture; the page polls
             # GET /api/capture for the picture and its notes.
             shape(data, ["id"], ["cancel"])
             if "cancel" in data:
-                # The page stopped waiting on its own — cancel pressed or
-                # another project chosen — so exactly that request's folder is
-                # removed and the tool's late Send leaves nothing behind.
+                # The page stopped waiting, so exactly that request's folder
+                # is removed and a late Send leaves nothing behind.
                 strings(data, ["cancel"])
                 if not re.fullmatch(r"[0-9a-f]{32}", data["cancel"]):
                     raise ProjectError("Malformed capture request.")
@@ -1143,9 +1067,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/run-start":
             shape(data, ["id", "entry", "text", "images", "files"], ["config", "tool"])
             strings(data, ["entry", "text"])
-            # The whitelist names exactly the ROUTE entries: every layer uses
-            # "planning" as the canonical Plan-workspace entry, and an entry
-            # outside ROUTE would silently fall back to the build step.
+            # Exactly the ROUTE entries: an entry outside ROUTE would
+            # silently fall back to the build step.
             if data["entry"] not in {"specification", "planning", "build"}:
                 raise ProjectError("A run starts from the Specification, Plan, or Build & Verify workspace.")
             if not isinstance(data["images"], list) or not isinstance(data.get("files", []), list):
@@ -1163,19 +1086,21 @@ class Handler(BaseHTTPRequestHandler):
             project_config = (preferences.get("project_defaults") or {}).get(str(project.root), {})
             run_config = {"roles": validated_roles(config.get("roles", {})),
                           "best_guess": bool(config.get("best_guess", project_config.get("best_guess", preferences.get("best_guess", False)))),
-                          "hide_advisory": bool(config.get("hide_advisory", project_config.get("hide_advisory", preferences.get("hide_advisory", False) or preferences.get("warn_skip_review") is False)))}
+                          "hide_advisory": bool(config.get("hide_advisory", self.server.hide_advisory(project_config)))}
             # Refuse for content reasons only when there is literally nothing
-            # to build: no brief, no filled-in documents, no conversation.
-            brief = data["text"].strip()
+            # to build: no brief, no project purpose, no filled-in documents,
+            # no conversation.
+            saved = project.brief()
+            brief = (data["text"] + saved["description"] + saved["goals"]).strip()
 
             def filled(role):
                 item = project.material(role)
-                return item["text"] is not None and (role not in {"Specification", "Plan"} or not not_started(item["text"]))
+                return item["text"] is not None and (role not in {"Specification", "Plan", "Registry"} or not not_started(item["text"]))
 
-            documents = any(filled(role) for role in ("Specification", "Plan", "Programming Result", "Verification Report"))
+            documents = any(filled(role) for role in ("Specification", "Plan", "Registry", "Programming Result", "Verification Report"))
             conversation_exists = bool(conversation.read_conversation(project))
             if not brief and not data["images"] and not data.get("files", []) and not documents and not conversation_exists:
-                raise ProjectError("There is literally nothing to build: no brief, no filled-in documents, and no conversation. Write what you want first.")
+                raise ProjectError("There is literally nothing to build: no brief, no project description or desired outcome, no filled-in documents, and no conversation. Write what you want first.")
             driver = self.server.runs.start(self.server.conversation, project, data["entry"], data["text"],
                                             run_config, defaults, step3_tool,
                                             data["images"], data.get("files", []))
@@ -1246,17 +1171,11 @@ class Handler(BaseHTTPRequestHandler):
                 raise ProjectError("The run is not paused; its step is running.")
             tool, model, effort, _origin = driver.assignment()
             destination = TOOL_LABELS.get(tool, (tool,))[0]
-            # A paused entry step whose turn never dispatched still owes its
-            # AI the brief, so the manual packet carries it; a dispatched
-            # step's packet keeps only the step instruction.
-            # The packet cannot carry the brief's pictures, so — like every
-            # copy — it names each one as not included instead of silently
-            # dropping it, and the response carries the names for the banner.
+            # An undispatched entry step still owes its AI the brief, so the
+            # packet carries it; pictures are named as not included.
             pictures = driver.pending_pictures()
-            # A step paused while an answer still owes its AI carries that
-            # answer's text and selected files in the packet too, and names
-            # its pictures as not included the same way; their originals stay
-            # retained in the project's run record.
+            # A paused answer's text and files ride the packet; its pictures
+            # are named as not included, originals retained in the run record.
             answer, answer_pictures, answer_files = driver.pending_answer()
             extra = []
             if pictures:

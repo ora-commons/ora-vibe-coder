@@ -32,14 +32,12 @@ VENDORED_PATHS = (
     "tests/test_distribution.py",
 )
 
-# This is the single maintainer update point for a reviewed Bridge runtime
-# import. The Bridge repository is public and authoritative in one place, so
-# the authoritative and public release repositories name the same source.
+# This is the single maintainer update point for a reviewed Bridge runtime import.
 BRIDGE_AUTHORITY = {
-    "authoritative_repository": "ora-commons/ora-agent-bridge",
+    "authoritative_repository": "Golfplan18/ora-agent-bridge",
     "public_release_repository": "ora-commons/ora-agent-bridge",
-    "source_revision": "7955bbc4829cf07e2ba626d215a6df2af1a203cd",
-    "source_tree": "43d5b690dce5d25a518404c39593e54ee6a4ca19",
+    "source_revision": "806b5f3e8c27e9e23f48c88060b52ce5c64585ce",
+    "source_tree": "95b018990f67404f275515651eccc2206b0fa5a8",
     "vendored_snapshot": "components/agent-bridge",
 }
 
