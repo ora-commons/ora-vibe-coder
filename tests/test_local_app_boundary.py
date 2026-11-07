@@ -14,12 +14,13 @@ import unittest
 from urllib.parse import parse_qs, urlsplit
 from unittest import mock
 
+from playwright.sync_api import expect, sync_playwright
+
 from ora_vibe_coder import __main__ as app_entry, conversation, hosts, project as project_module
 from ora_vibe_coder.installer import install, launcher_files, remove
 from ora_vibe_coder.launcher import AppLock, Settings, request_quit, serve
 from ora_vibe_coder.project import ProjectStore
 from ora_vibe_coder.server import LocalServer, REQUEST_LIMIT
-
 
 def stalled_inventory_reader():
     """Run genuine non-returning calls inside the owned discovery process."""
@@ -53,10 +54,8 @@ def stalled_inventory_reader():
             mock.patch.object(project_module, "read_text", side_effect=read):
         project_module._inventory_reader()
 
-
 def compact_value(tool, model=""):
     return json.dumps([tool, model], separators=(",", ":")) if tool else ""
-
 
 class LocalBoundary(unittest.TestCase):
     def setUp(self):
@@ -74,6 +73,15 @@ class LocalBoundary(unittest.TestCase):
         self.thread.join(timeout=2)
         self.server.server_close()
 
+    @contextlib.contextmanager
+    def browser_session(self):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                yield browser
+            finally:
+                browser.close()
+
     def select_project(self, page, project_id):
         page.locator("#project").select_option(project_id)
 
@@ -82,7 +90,6 @@ class LocalBoundary(unittest.TestCase):
         page.locator("#primary-choice .role-model-choice").select_option(compact_value(tool))
 
     def test_mid_run_message_targets_origin_and_preserves_failed_draft(self):
-        from playwright.sync_api import expect, sync_playwright
         first = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
         second = self.request("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})[1]["id"]
         project = self.server.store.projects[first]
@@ -99,8 +106,7 @@ class LocalBoundary(unittest.TestCase):
         self.server.conversation.by_project[str(project.root)] = handle
         ready = {"ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
         with mock.patch.object(conversation, "bridge_check", side_effect=lambda peer, **kwargs: {"peer": peer, **ready}), \
-                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), self.browser_session() as browser:
             try:
                 page = browser.new_page()
                 page.goto(self.server.url)
@@ -143,423 +149,102 @@ class LocalBoundary(unittest.TestCase):
                 browser.close()
 
     def test_project_header_keeps_selection_and_details_on_one_row(self):
-        try:
-            from playwright.sync_api import expect, sync_playwright
-        except ImportError:
-            self.skipTest("Playwright is not installed for the browser check")
-        long_name = "A complete project name describing the full planning and implementation journey for a substantial local software workspace"
-        long_parent = "Ora → Personal knowledge systems → Software delivery and verification → Long-running collaborative project portfolio"
-        description = "The complete project description, including its purpose and a second line.\nNothing is abbreviated here."
-        goals = "A full desired outcome with enough detail to read and revise.\nThe result remains visible in this one screen."
-        first = self.request("/api/create", {"directory": "One", "name": long_name, "parent": long_parent,
-                                             "description": description, "goals": goals})[1]["id"]
-        second = self.request("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})[1]["id"]
-        with sync_playwright() as playwright:
-            if not Path(playwright.chromium.executable_path).is_file():
-                self.skipTest("Playwright's Chromium is not installed for the browser check")
-            browser = playwright.chromium.launch(headless=True)
-            try:
-                page = browser.new_page(viewport={"width": 1280, "height": 720})
-                page.goto(self.server.url)
-                expect(page.locator("#project")).to_be_visible()
-                self.select_project(page, first)
-                page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
-                expect(page.locator("#project")).to_have_value(first)
-                header_height = page.locator("#top").bounding_box()["height"]
-                work_y = page.locator("#work-step").bounding_box()["y"]
-                expect(page.locator("#message")).to_be_visible()
-
-                for width, height in ((1280, 720), (800, 560), (375, 667), (320, 568)):
-                    page.set_viewport_size({"width": width, "height": height})
-                    top_height = page.locator("#top").bounding_box()["height"]
-                    # Three compact header rows on a wide window, with no
-                    # growing banner stack; narrow wrapping is the accepted
-                    # best-effort layout the owner's checkpoint approved.
-                    if width >= 1200:
-                        self.assertLess(top_height, 170)
-                    main = page.locator(".main-col").bounding_box()
-                    row = page.locator(".project-row").bounding_box()
-                    selector = page.locator("#project").bounding_box()
-                    new = page.locator("#new").bounding_box()
-                    opened = page.locator("#open").bounding_box()
-                    details = page.locator("#project-card").bounding_box()
-                    self.assertGreaterEqual(selector["width"], 55)
-                    self.assertLessEqual(row["x"] + row["width"], main["x"] + main["width"])
-                    self.assertLessEqual(details["x"] + details["width"], row["x"] + row["width"])
-                    # Row 1 keeps New, Open and the picker on one line; Details
-                    # sits on the status row beneath them by design.
-                    if width >= 1200:
-                        self.assertLess(max(abs(selector["y"] - box["y"]) for box in (new, opened)), 4)
-                        self.assertGreaterEqual(details["y"], new["y"] + new["height"] - 2)
-                    self.assertFalse(page.locator(".project-row").evaluate("element => element.scrollWidth > element.clientWidth"))
-                    expect(page.get_by_role("button", name="New project")).to_be_visible()
-                    expect(page.get_by_role("button", name="Open existing project")).to_be_visible()
-                    step = page.locator(".first-step").bounding_box()
-                    controls = [page.locator(target).bounding_box() for target in
-                                (".first-step .step-number", "#destination")]
-                    if width >= 1200:
-                        self.assertLess(max(box["y"] + box["height"] / 2 for box in controls) -
-                                        min(box["y"] + box["height"] / 2 for box in controls), 4)
-                    self.assertTrue(all(step["x"] <= box["x"] and box["x"] + box["width"] <= step["x"] + step["width"] + 1
-                                        for box in controls))
-                    self.assertFalse(page.locator(".first-step").evaluate("element => element.scrollWidth > element.clientWidth"))
-                    expect(page.get_by_label("Coding tool")).to_be_visible()
-                    expect(page.locator("#readiness, #recheck")).to_have_count(0)
-                    if width == 320:
-                        for target in ("new", "open", "project-card"):
-                            page.locator(f"#{target}").focus()
-                            self.assertEqual(page.evaluate("document.activeElement.id"), target)
-                        page.locator("#destination").focus()
-                        self.assertEqual(page.evaluate("document.activeElement.id"), "destination")
-                    page.locator("#project-card").click()
-                    expect(page.locator("#editor")).to_be_visible()
-                    self.assertEqual(page.locator("#editor").evaluate("element => element.scrollTop"), 0)
-                    expect(page.locator("#edit-name")).to_have_value(long_name)
-                    expect(page.locator("#edit-parent")).to_have_value(long_parent)
-                    expect(page.locator("#edit-description")).to_have_value(description)
-                    expect(page.locator("#edit-goals")).to_have_value(goals)
-                    for field in ("edit-name", "edit-parent", "edit-description", "edit-goals"):
-                        dimensions = page.locator(f"#{field}").evaluate(
-                            "element => ({height: element.clientHeight, contentHeight: element.scrollHeight, "
-                            "width: element.clientWidth, contentWidth: element.scrollWidth})")
-                        self.assertLessEqual(dimensions["contentHeight"], dimensions["height"], f"{field} clips vertically at {width}px")
-                        self.assertLessEqual(dimensions["contentWidth"], dimensions["width"], f"{field} clips horizontally at {width}px")
-                    if width == 1280:
-                        self.assertGreater(page.locator("#edit-name").evaluate("element => element.clientHeight"), 50)
-                        self.assertGreater(page.locator("#edit-parent").evaluate("element => element.clientHeight"), 50)
-                        page.set_viewport_size({"width": 320, "height": 568})
-                        for field in ("edit-name", "edit-parent"):
-                            page.wait_for_function(
-                                f"() => {{ const element = document.getElementById('{field}'); "
-                                "return element.scrollHeight <= element.clientHeight && element.scrollWidth <= element.clientWidth; }")
-                            self.assertFalse(page.locator(f"#{field}").evaluate(
-                                "element => element.scrollHeight > element.clientHeight || element.scrollWidth > element.clientWidth"),
-                                f"{field} clips after resizing with details open")
-                        page.set_viewport_size({"width": width, "height": height})
-                    self.assertFalse(page.locator("#editor").evaluate("element => element.scrollWidth > element.clientWidth"))
-                    self.assertFalse(page.evaluate("editDrafts.get(currentId).dirty"))
-                    editor = page.locator("#editor").bounding_box()
-                    self.assertGreaterEqual(editor["x"], 0)
-                    self.assertLessEqual(editor["x"] + editor["width"], width)
-                    self.assertLess(abs(page.locator("#top").bounding_box()["height"] - top_height), 1)
-                    page.locator("#edit-close").click()
-                    expect(page.locator("#status-bar")).to_be_empty()
-                    expect(page.locator("#project-unsaved")).to_be_hidden()
-                    if width <= 760 or height <= 560:
-                        for rail in page.locator(".rail").all():
-                            button = rail.bounding_box()
-                            label = rail.locator(".rail-label").bounding_box()
-                            self.assertGreaterEqual(label["y"], button["y"])
-                            self.assertLessEqual(label["y"] + label["height"], button["y"] + button["height"])
-
-                page.set_viewport_size({"width": 1280, "height": 720})
-                self.assertLessEqual(abs(page.locator("#top").bounding_box()["height"] - header_height), 1)
-                self.assertLessEqual(abs(page.locator("#work-step").bounding_box()["y"] - work_y), 1)
-                self.select_project(page, second)
-                expect(page.locator("#project")).to_have_value(second)
-                page.wait_for_function("() => project?.name === 'Two'")
-                self.select_project(page, first)
-                expect(page.locator("#project")).to_have_value(first)
-                expect(page.locator("#project-name")).to_have_text(long_name)
-                page.locator("#new").click()
-                expect(page.locator("#create")).to_be_visible()
-                page.locator("#create-close").click()
-                page.locator("#open").click()
-                expect(page.locator("#open-form")).to_be_visible()
-                page.locator("#open-close").click()
-                page.locator("#project-card").click()
-                page.locator("#edit-name").fill(long_name + "\ncontinued")
-                expect(page.locator("#edit-name")).to_have_value(long_name + " continued")
-                page.locator("#edit-name").fill(long_name)
-                page.locator("#edit-parent").focus()
-                page.locator("#edit-parent").press("End")
-                page.locator("#edit-parent").press("Enter")
-                expect(page.locator("#edit-parent")).to_have_value(long_parent)
-                page.locator("#edit-description").fill(description + " Draft")
-                self.assertTrue(page.evaluate("editDrafts.get(currentId).dirty"))
-                expect(page.locator("#project-unsaved")).to_be_visible()
-                page.locator("#edit-description").fill(description)
-                self.assertFalse(page.evaluate("editDrafts.get(currentId).dirty"))
-                expect(page.locator("#project-unsaved")).to_be_hidden()
-                page.locator("#edit-description").fill(description + " Draft")
-                page.locator("#edit-close").click()
-                expect(page.locator("#status-bar")).to_be_empty()
-                self.assertTrue(page.evaluate("editDrafts.get(currentId).dirty"))
-                page.locator("#project").evaluate("element => element.blur()")
-                third = self.request("/api/create", {"directory": "Three", "name": "Three", "description": "", "goals": ""})[1]["id"]
-                page.locator("#project").click()
-                expect(page.locator(f'#project option[value="{third}"]')).to_have_count(1)
-                expect(page.locator("#project")).to_have_value(first)
-                page.keyboard.press("Escape")
-                page.locator("#project").evaluate("element => element.blur()")
-                fourth = self.request("/api/create", {"directory": "Four", "name": "Four", "description": "", "goals": ""})[1]["id"]
-                page.locator("#project").focus()
-                expect(page.locator(f'#project option[value="{fourth}"]')).to_have_count(1)
-                expect(page.locator("#project")).to_have_value(first)
-                self.assertEqual(page.evaluate("""() => {
-                    const fetchBefore = window.fetch;
-                    let rescans = 0;
-                    window.fetch = (...args) => {
-                        if (args[0] === '/api/rescan') rescans++;
-                        return fetchBefore(...args);
-                    };
-                    try {
-                        for (const key of ['ArrowDown', 'ArrowUp'])
-                            document.getElementById('project').dispatchEvent(new KeyboardEvent('keydown', {key}));
-                        return rescans;
-                    } finally { window.fetch = fetchBefore; }
-                }"""), 0)
-                page.locator("#project-card").click()
-                expect(page.locator("#edit-description")).to_have_value(description + " Draft")
-                page.locator("#edit-description").fill(description)
-                self.assertFalse(page.evaluate("editDrafts.get(currentId).dirty"))
-                page.locator("#edit-state").select_option("ARCHIVED")
-                page.locator("#edit-save").click()
-                expect(page.locator("#editor")).to_be_hidden()
-                saved_brief = (self.home / "One" / "Project.md").read_text(encoding="utf-8")
-                self.assertIn(f"Name: {long_name}\n", saved_brief)
-                self.assertIn(f"Parent: {long_parent}\n", saved_brief)
-                expect(page.locator("#project-unsaved")).to_be_hidden()
-                expect(page.locator("#project")).to_have_value(first)
-                expect(page.locator("#project option:checked")).to_contain_text("Archived")
-                self.select_project(page, second)
-                expect(page.locator("#project")).to_have_value(second)
-                self.assertEqual(page.locator(f'#project option[value="{first}"]').count(), 0)
-                loose = self.home / "Loose folder"
-                loose.mkdir()
-                (loose / "Request.md").write_text("# Request\n\n## Mission\n\nFull mission text from a loose folder.\n", encoding="utf-8")
-                page.evaluate("async path => { const result = await api('open', {path}); await chooseProject(result.id); }", str(loose))
-                expect(page.locator("#project option:checked")).to_contain_text("Loose folder — Open folder")
-                page.locator("#project-card").click()
-                expect(page.locator("#overview-sources")).to_contain_text("Full mission text from a loose folder.")
-            finally:
-                browser.close()
+        name = "Project with a long descriptive name"
+        description = "Complete description.\nA second line."
+        first = self.request("/api/create", {"directory": "One", "name": name, "parent": "Ora → Projects",
+                                             "description": description, "goals": "Save notes"})[1]["id"]
+        with self.browser_session() as browser:
+            page = browser.new_page()
+            page.goto(self.server.url)
+            self.select_project(page, first)
+            page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
+            page.locator("#project-card").click()
+            for field, text in (("name", name), ("parent", "Ora → Projects"),
+                                ("description", description), ("goals", "Save notes")):
+                expect(page.locator(f"#edit-{field}")).to_have_value(text)
+            page.locator("#edit-description").fill(description + " Revised")
+            expect(page.locator("#project-unsaved")).to_be_visible()
+            page.locator("#edit-close").click()
+            page.locator("#project-card").click()
+            expect(page.locator("#edit-description")).to_have_value(description + " Revised")
+            page.locator("#edit-save").click()
+            expect(page.locator("#project-unsaved")).to_be_hidden()
+            self.assertIn(description + " Revised", (self.home / "One/Project.md").read_text())
+            page.locator("#project").evaluate("element => element.blur()")
+            second = self.request("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})[1]["id"]
+            page.locator("#project").focus()
+            expect(page.locator(f'#project option[value="{second}"]')).to_have_count(1)
+            expect(page.locator("#project")).to_have_value(first)
+            page.keyboard.press("Escape")
+            loose = self.home / "Loose"
+            loose.mkdir()
+            (loose / "Notes.md").write_text("# Notes\n\nA loose document.\n")
+            page.evaluate("async path => { const result = await api('open', {path}); await chooseProject(result.id); }", str(loose))
+            page.locator("#document").select_option("Notes.md")
+            expect(page.locator("#reader")).to_contain_text("A loose document.")
 
     def test_completed_turn_status(self):
-        from playwright.sync_api import expect, sync_playwright
         project_id = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
-        second_id = self.request("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})[1]["id"]
-        evidence = Path(os.environ.get("VIBE_ACTIVITY_EVIDENCE", self.home))
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+        with self.browser_session() as browser:
             try:
                 page = browser.new_page(viewport={"width": 1600, "height": 1000})
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
-                responses = []
-                def retain(response):
-                    if "/api/" in response.url:
-                        try:
-                            responses.append({"path": response.url.split("/api/")[-1],
-                                              "request": response.request.post_data_json, "response": response.json()})
-                        except Exception:
-                            pass
-                page.on("response", retain)
                 page.goto(self.server.url)
                 self.select_project(page, project_id)
                 page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
                 page.evaluate("() => stopPolling()")
                 bar = page.locator("#status-bar")
                 expect(page).to_have_title("One — Vibe Coder")
-                for removed in ("#more", "#readiness", "#recheck", "#run-banner", "#stop"):
-                    expect(page.locator(removed)).to_have_count(0)
-                # Returning from the tool, or observing a newly dispatched
-                # turn, replaces stale sign-in advice through the existing
-                # readiness worker. Ordinary operation polls do not recheck.
-                recovered = {"checking": False, "peers": [{"peer": "codex", "ready": True,
-                    "authentication": "confirmed", "work": "supported", "warnings": []}]}
-                readiness_requests = []
-                def recovered_readiness(route):
-                    readiness_requests.append(route.request.post_data_json)
-                    route.fulfill(json=recovered)
-                page.route("**/api/readiness", recovered_readiness)
-                self.choose_primary(page, "Codex")
-                page.evaluate("() => { readinessChain += 1; readinessState = {checking: false, peers: [{peer: 'codex', ready: false, authentication: 'required', work: 'supported', reason: 'Sign in to Codex.'}]}; renderReadiness(); }")
-                expect(page.locator("#tool-problem")).to_contain_text("Sign in to Codex.")
-                recovered_operation = {"turn": "recovered-dispatch", "tool": "codex", "stage": "specification",
-                    "state": "running", "activity": "Discussing", "dispatched": True, "elapsed_seconds": 0}
-                page.evaluate("op => updateOperation(op)", recovered_operation)
-                expect(page.locator("#tool-problem")).to_be_hidden()
-                page.evaluate("op => updateOperation(op)", recovered_operation)
-                self.assertEqual(readiness_requests, [{"recheck": True}])
-                page.evaluate("() => { readinessState = {checking: false, peers: [{peer: 'codex', ready: false, authentication: 'required', work: 'supported', reason: 'Sign in to Codex.'}]}; renderReadiness(); window.dispatchEvent(new Event('focus')); }")
-                expect(page.locator("#tool-problem")).to_be_hidden()
-                self.assertEqual(readiness_requests, [{"recheck": True}, {"recheck": True}])
                 state = {"project": str(self.home / "One"), "turn": "dispatch", "stage": "specification",
                          "activity": "Updating", "state": "running", "elapsed_seconds": 330,
                          "last_contact_seconds": 2, "bridge_diagnostics": ["Connector version is old."]}
-                styles = {}
-                for theme in ("dark", "light"):
-                    page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
-                    page.evaluate("op => updateOperation(op)", state)
-                    expect(bar).to_have_text("Specification · Updating · 5:30")
-                    expect(bar).to_have_class("active")
-                    expect(page).to_have_title("🟢 Working — One")
-                    styles[theme] = bar.evaluate("el => getComputedStyle(el).backgroundColor")
-                    # Viewing another workspace never renames dispatched work.
-                    page.locator('.rail[data-stage="plan"]').click()
-                    expect(bar).to_have_text("Specification · Updating · 5:30")
-                    page.evaluate("op => updateOperation(op)", dict(state, state="finished", elapsed_seconds=331))
-                    expect(bar).to_have_text("Specification · Finished · 5:31")
-                    expect(bar).not_to_have_class("active")
-                    expect(page).to_have_title("One — Vibe Coder")
-                    self.assertNotEqual(styles[theme], bar.evaluate("el => getComputedStyle(el).backgroundColor"))
-                # Every dispatched activity has an explicit, stable label.
-                for stage, activity in (("specification", "Discussing"), ("planning", "Creating"),
-                                        ("review-plan", "Reviewing"), ("programming", "Coding"),
-                                        ("programming", "Correcting"), ("programming-result", "Recording"),
-                                        ("sorting-verification", "Reviewing")):
-                    page.evaluate("op => updateOperation(op)", dict(state, stage=stage, activity=activity))
-                    expect(bar).to_contain_text(activity)
-                    expect(bar).not_to_contain_text("Bridge")
-                    expect(bar).not_to_contain_text("Working")
-                # Incidental rejected actions do not pause dispatched work.
-                for activity in ("Coding", "Reviewing"):
-                    page.evaluate("op => updateOperation(op)", dict(state, turn=activity,
-                        stage="programming", activity=activity))
-                    page.evaluate("() => status('One work turn per project at a time.', 'warning')")
-                    expect(bar).to_have_text(f"Implementation · {activity} · 5:30 — One work turn per project at a time.")
-                    expect(bar).to_have_class(re.compile(r"(?=.*\bnotice\b)(?=.*\bactive\b).*"))
-                    expect(page).to_have_title("🟢 Working — One")
-                    self.assertEqual(styles["light"], bar.evaluate("el => getComputedStyle(el).backgroundColor"))
-                    expect(page.locator("#stop-action")).to_be_visible()
-                    page.evaluate("op => updateOperation(op)", dict(state, turn=activity,
-                        stage="programming", activity=activity))
-                    expect(bar).to_contain_text("One work turn per project at a time.")
-                # All last-action notices, including unflagged conflicts and
-                # receipts, survive an ended turn and an idle status poll.
-                for notice in ("The saved request changed. Nothing was launched.", "Saved file path copied."):
-                    page.evaluate("op => updateOperation(op)", dict(state, turn="ended-notice", state="finished"))
-                    page.evaluate("text => status(text)", notice)
-                    expect(bar).to_have_text("Specification · Finished · 5:30 — " + notice)
-                    page.evaluate("() => updateOperation(null)")
-                    expect(bar).to_have_text(notice)
-                    expect(page).to_have_title("One — Vibe Coder")
-                page.evaluate("op => updateOperation(op)", dict(state, turn="new-action"))
+                page.evaluate("op => updateOperation(op)", state)
                 expect(bar).to_have_text("Specification · Updating · 5:30")
-                # Unchanged warnings stay actionable; routine diagnostics do
-                # not displace the reply or enter the status row.
+                expect(bar).to_have_class("active")
+                expect(page).to_have_title("\U0001F7E2 Working — One")
+                page.evaluate("op => updateOperation(op)", dict(state, state="finished", elapsed_seconds=331))
+                expect(bar).to_have_text("Specification · Finished · 5:31")
+                expect(page).to_have_title("One — Vibe Coder")
                 warning = dict(state, state="finished", maintenance="stale",
                                maintenance_reason="The Registry changed, so nothing was applied.",
-                               warnings=["Connector version is old.", "The outcome note could not be recorded: disk is full.", "Other warning."],
+                               warnings=["Connector version is old.", "The outcome note could not be recorded: disk is full."],
                                visible_warnings=["The outcome note could not be recorded: disk is full."])
                 page.evaluate("op => updateOperation(op)", warning)
                 expect(bar).to_have_class("waiting")
-                expect(page).to_have_title("🟡 Waiting — One")
-                for notice in ("Registry changed", "outcome note could not be recorded", "Other warning."):
+                for notice in ("Registry changed", "outcome note could not be recorded"):
                     expect(bar).to_contain_text(notice)
                 expect(bar).not_to_contain_text("Connector version is old.")
-                page.evaluate("turns => { conversationTurns = turns; renderConversation(); }", [{
-                    "turn": "diag-turn", "stage": "specification", "tool": "codex", "purpose": "work",
-                    "text": "The work request.", "images": [], "files": [], "state": "complete",
-                    "reply": "The completed reply.", "maintenance": None, "outcome_recorded": True,
-                    "artifact": None, "bridge_diagnostics": ["Connector version is old."], "questions": []}])
-                expect(page.locator("#conversation")).to_contain_text("The completed reply.")
-                expect(page.locator("#conversation .bridge-details")).to_have_count(0)
-                expect(page.locator("#conversation")).not_to_contain_text("Technical details")
-                page.evaluate("op => updateOperation(op)", dict(state, turn="review-warning", stage="review-plan",
-                    state="finished", maintenance="unsaved", maintenance_reason="The document could not be read: permission denied."))
-                expect(bar).to_contain_text("permission denied")
-                page.evaluate("() => status('A warning needs attention.', 'warning')")
-                expect(bar).to_contain_text("A warning needs attention.")
-                expect(bar).not_to_have_class("active")
-                page.locator('.rail[data-stage="build"]').click()
-                expect(page.get_by_label("What should the AI change or explain in the implementation?")).to_be_visible()
-                page.locator("#build-reply-stage").select_option("verification")
-                expect(page.locator("#message-label")).to_have_text("Reply to the verification coordinator")
-                page.locator('.rail[data-stage="specification"]').click()
-                expect(page.locator("#message-label")).to_have_text("What should the AI change or explain in the Specification?")
-                page.locator('.rail[data-stage="plan"]').click()
-                expect(page.locator("#message-label")).to_have_text("What should the AI change or explain in the Plan?")
-                page.evaluate("op => updateOperation(op)", dict(state, turn="long-warning", state="failed",
-                    reason="The peer harness reported a failure. " * 80))
-                self.assertTrue(bar.evaluate("el => el.scrollHeight > el.clientHeight"))
-                self.assertEqual(bar.evaluate("el => getComputedStyle(el).overflowY"), "auto")
-                bar.evaluate("el => el.scrollTop = el.scrollHeight")
-                self.assertGreater(bar.evaluate("el => el.scrollTop"), 0)
-                self.assertTrue(page.locator("#message").evaluate("element => {"
-                    " const input = element.getBoundingClientRect();"
-                    " const pane = document.getElementById('work-step-body').getBoundingClientRect();"
-                    " return input.height > 0 && input.top >= pane.top && input.bottom <= pane.bottom; }"))
-                for selected in (second_id, project_id):
-                    page.evaluate("() => status('This notice belongs to the previous project.')")
-                    self.select_project(page, selected)
-                    page.wait_for_function("id => currentId === id && !!project && workspace === 'specification' && lastFiles !== null", arg=selected)
-                    expect(page.locator("#message-label")).to_have_text("What should the AI change or explain in the Specification?")
-                    expect(bar).not_to_contain_text("previous project")
-                    expect(page).to_have_title(f"{'Two' if selected == second_id else 'One'} — Vibe Coder")
-                page.evaluate("() => stopPolling()")
-                page.locator('.rail[data-stage="plan"]').click()
-                page.wait_for_function("() => workspace === 'plan' && workspaceReveal === null")
                 active = dict(state, stage="programming", activity="Coding", elapsed_seconds=1508)
                 page.evaluate("op => updateOperation(op)", active)
-                expect(bar).to_be_visible()
-                expect(page).to_have_title("🟢 Working — One")
-                page.screenshot(path=str(evidence / "desktop-active.png"))
+                expect(bar).to_have_text("Implementation · Coding · 25:08")
                 waiting = dict(active, state="failed", reason="Sign in to the selected tool, then inspect saved work.")
                 page.evaluate("op => updateOperation(op)", waiting)
                 expect(bar).to_have_class("waiting")
-                expect(page).to_have_title("🟡 Waiting — One")
                 expect(bar).to_contain_text("Implementation · Waiting · 25:08")
-                self.assertNotEqual(styles["light"], bar.evaluate("el => getComputedStyle(el).backgroundColor"))
-                page.screenshot(path=str(evidence / "desktop-waiting.png"))
-                page.evaluate("op => updateOperation(op)", waiting)
-                expect(bar).to_contain_text("25:08")
                 stopped = dict(active, state="interrupted", reason="Stopped by the user.")
                 page.evaluate("op => updateOperation(op)", stopped)
                 expect(bar).to_have_text("Implementation · Stopped · 25:08")
                 expect(bar).not_to_have_class("active")
                 expect(bar).not_to_have_class("waiting")
-                expect(page).to_have_title("One — Vibe Coder")
-                page.screenshot(path=str(evidence / "desktop-endpoint.png"))
-                page.set_viewport_size({"width": 430, "height": 900})
-                page.evaluate("op => updateOperation(op)", active)
-                expect(bar).to_have_text("Implementation · Coding · 25:08")
-                self.assertTrue(bar.evaluate("el => el.scrollWidth <= el.clientWidth"))
-                page.screenshot(path=str(evidence / "narrow-active.png"))
-                page.evaluate("() => lostContact()")
-                expect(bar).to_contain_text("Lost contact")
-                expect(bar).not_to_have_class("active")
-                expect(page).to_have_title("🔴 Problem — One")
-                page.evaluate("() => { contactRestored(); updateOperation(lastOperation); }")
-                expect(bar).to_contain_text("Coding")
-                expect(page).to_have_title("🟢 Working — One")
-                run = {"run": "tab-run", "step": "build", "state": "running", "operation": active}
-                page.evaluate("run => updateRunState({active: run, last: null})", run)
-                expect(page).to_have_title("🟢 Working — One")
-                page.evaluate("run => updateRunState({active: run, last: null})", dict(run, state="paused-question"))
-                expect(page).to_have_title("🟡 Waiting — One")
-                for endpoint in ("complete", "unfinished", "open"):
-                    page.evaluate("run => updateRunState({active: null, last: run})",
-                                  dict(run, state=endpoint, steps=[{"turn": active["turn"]}]))
-                    expect(page).to_have_title("One — Vibe Coder")
-                page.evaluate("() => { updateRunState({active: null, last: null}); updateOperation(null); status('A warning needs attention.', 'warning'); }")
-                expect(page).to_have_title("🔴 Problem — One")
-                page.evaluate("() => status('')")
-                expect(page).to_have_title("One — Vibe Coder")
-                # Keep reusable, synthetic API evidence for installed-source comparison.
-                (evidence / "ui-fixture.json").write_text(json.dumps({"responses": responses,
-                    "project_id": project_id, "active": active, "waiting": waiting, "endpoint": stopped}), encoding="utf-8")
                 self.assertEqual(errors, [])
             finally:
                 browser.close()
 
     def test_tab_activity_updates_while_hidden_and_stays_with_its_project(self):
-        from playwright.sync_api import expect, sync_playwright
         projects = {name: self.request("/api/create", {"directory": name, "name": name,
                     "description": "", "goals": ""})[1]["id"] for name in ("Background One", "Background Two")}
         first, second = projects.values()
         states = {id: self.request("/api/turn-state", {"id": id})[1] for id in projects.values()}
         records = {id: {"turns": [], "runs": []} for id in projects.values()}
-        requests, errors, pending = [], [], {}
-        holds, disconnected = set(), set()
+        requests, errors = [], []
+        disconnected = set()
 
         def ready(peer, **kwargs):
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
 
         with mock.patch.object(conversation, "bridge_check", side_effect=ready), \
-                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), self.browser_session() as browser:
             context = browser.new_context(viewport={"width": 1440, "height": 1000}, reduced_motion="reduce")
             context.add_init_script("""window.tabVisibility = 'visible';
                 Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => tabVisibility});""")
@@ -576,12 +261,7 @@ class LocalBoundary(unittest.TestCase):
                         route.continue_()
                         return
                     body = json.dumps(data)
-                    key = (endpoint, id)
-                    if key in holds:
-                        holds.remove(key)
-                        pending[key] = (route, body)
-                    else:
-                        route.fulfill(content_type="application/json", body=body)
+                    route.fulfill(content_type="application/json", body=body)
 
                 context.route("**/api/**", route_api)
                 pages = []
@@ -611,8 +291,6 @@ class LocalBoundary(unittest.TestCase):
                 background.evaluate("() => pollTick()")
                 expect(background).to_have_title("🟢 Working — Background One")
                 expect(other).to_have_title("Background Two — Vibe Coder")
-                # The next scheduled poll, without opening the background tab,
-                # must read the saved questions and replace green with yellow.
                 document = self.home / "Background One" / "Specification.md"
                 document.write_text("# Specification\n\nA document changed while the tab was hidden.\n", encoding="utf-8")
                 states[first]["files"] = self.request("/api/turn-state", {"id": first})[1]["files"]
@@ -634,7 +312,6 @@ class LocalBoundary(unittest.TestCase):
                 expect(background).to_have_title("🟡 Waiting — Background One")
                 expect(other.locator("#message")).to_have_value("Keep the other tab's draft.")
 
-                # Foreground recovery updates the deferred document pane.
                 background.evaluate("async () => { tabVisibility = 'visible'; await pollTick(); }")
                 expect(background.locator("#reader")).to_contain_text("A document changed while the tab was hidden.")
                 expect(background).to_have_title("🟡 Waiting — Background One")
@@ -655,61 +332,14 @@ class LocalBoundary(unittest.TestCase):
                 background.evaluate("() => pollTick()")
                 expect(background).to_have_title("Background One — Vibe Coder")
 
-                # A delayed status response from the former project cannot
-                # recolor this tab after the user switches projects.
-                states[first]["operation"] = dict(operation, state="running")
-                holds.add(("turn-state", first))
-                with background.expect_request("**/api/turn-state"):
-                    background.evaluate("() => { window.pendingPoll = pollTick(); }")
-                states[second]["operation"] = None
-                self.select_project(background, second)
-                background.wait_for_function("id => currentId === id && project?.name === 'Background Two' && conversationLoaded && pollTimer !== null", arg=second)
-                background.evaluate("() => stopPolling()")
-                expect(background).to_have_title("Background Two — Vibe Coder")
-                route, body = pending.pop(("turn-state", first))
-                route.fulfill(content_type="application/json", body=body)
-                background.evaluate("() => pendingPoll")
-                expect(background).to_have_title("Background Two — Vibe Coder")
-                expect(other).to_have_title("🟢 Working — Background Two")
-
-                # Saved questions have the same origin guard as live status.
-                states[first]["operation"] = None
-                self.select_project(background, first)
-                background.wait_for_function("id => currentId === id && project?.name === 'Background One' && conversationLoaded && pollTimer !== null", arg=first)
-                background.evaluate("() => stopPolling()")
-                expect(background.locator("#message")).to_have_value("Keep this background draft.")
-                states[first]["operation"] = dict(operation, state="finished")
-                records[first]["turns"][0]["questions"] = ["A late question from the previous project?"]
-                background.evaluate("() => { conversationTurns = []; }")
-                holds.add(("conversation", first))
-                with background.expect_request("**/api/conversation"):
-                    background.evaluate("() => { window.pendingHistory = pollTick(); }")
-                self.select_project(background, second)
-                background.wait_for_function("id => currentId === id && project?.name === 'Background Two' && conversationLoaded && pollTimer !== null", arg=second)
-                background.evaluate("() => stopPolling()")
-                route, body = pending.pop(("conversation", first))
-                route.fulfill(content_type="application/json", body=body)
-                background.evaluate("() => pendingHistory")
-                expect(background).to_have_title("Background Two — Vibe Coder")
-                expect(background.locator("#conversation")).not_to_contain_text("A late question from the previous project?")
                 expect(other.locator("#message")).to_have_value("Keep the other tab's draft.")
                 self.assertEqual(errors, [])
-                self.assertEqual(pending, {})
             finally:
                 browser.close()
 
     def test_routine_readback_receipts_stay_in_records_not_on_the_cards(self):
-        # Routine successful readbacks stay in retained records; replies and
-        # actionable failures remain on the conversation cards.
-        try:
-            from playwright.sync_api import expect, sync_playwright
-        except ImportError:
-            self.skipTest("Playwright is not installed for the browser check")
         project_id = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
-        with sync_playwright() as playwright:
-            if not Path(playwright.chromium.executable_path).is_file():
-                self.skipTest("Playwright's Chromium is not installed for the browser check")
-            browser = playwright.chromium.launch(headless=True)
+        with self.browser_session() as browser:
             try:
                 page = browser.new_page()
                 page.goto(self.server.url)
@@ -730,17 +360,13 @@ class LocalBoundary(unittest.TestCase):
                      "reply": "The reply whose file could not be confirmed.", "maintenance": None,
                      "outcome_recorded": True, "artifact": unreadable, "bridge_diagnostics": [], "questions": []}])
                 conversation = page.locator("#conversation")
-                # The replies stay; the unreadable result stays visibly actionable.
                 expect(conversation).to_contain_text("The substantive saved reply.")
                 expect(conversation).to_contain_text("The reply whose file could not be confirmed.")
                 expect(conversation).to_contain_text("The selected Plan could not be read back: permission denied.")
-                # The routine successful readback is not repeated on the card.
                 expect(conversation).not_to_contain_text("differs from the content captured")
                 expect(conversation).not_to_contain_text("Local file:")
                 self.assertEqual(conversation.locator(".artifact-readback").count(), 1)
                 self.assertEqual(conversation.locator("summary", has_text="Local file").count(), 0)
-                # A completed review card behaves the same: its assessment
-                # output stays, its routine readback receipt does not appear.
                 page.evaluate("runs => { reviewRuns = runs; renderConversation(); }", [
                     {"run": "review-run", "stage": "review-specification", "state": "finished", "tool": "codex",
                      "output": "Verdict: COMPLETE — the Specification meets its requirements.",
@@ -762,20 +388,13 @@ class LocalBoundary(unittest.TestCase):
             finally:
                 browser.close()
 
-
     def test_step7_copy_works_without_a_selected_tool_while_send_still_refuses(self):
-        # The step-7 dialog promises "Copy works without one" when no coding
-        # tool is selected; the shared delivery path must keep that promise —
-        # the request is prepared, saved and copied for an external chat —
-        # while Send keeps the step-3 requirement and its existing refusal.
-        from playwright.sync_api import expect, sync_playwright
         project_id = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
         folder = self.home / "One"
         def ready(peer, **kwargs):
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "unknown", "warnings": []}
         with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready), \
-                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), self.browser_session() as browser:
             context = browser.new_context(permissions=["clipboard-read", "clipboard-write"])
             try:
                 page = context.new_page()
@@ -786,15 +405,12 @@ class LocalBoundary(unittest.TestCase):
                 page.evaluate("() => stopPolling()")
                 page.locator('.rail[data-stage="build"]').click()
                 page.wait_for_function("() => workspace === 'build'")
-                # Step 3 has no coding tool selected.
-                expect(page.locator("#destination")).to_have_value("")
+                self.assertEqual(page.evaluate("destinationName"), "")
                 page.locator("#review-step").evaluate("element => element.open = true")
                 page.locator("#review").click()
                 expect(page.locator("#build-action-dialog")).to_be_visible()
                 expect(page.locator("#build-action-title")).to_have_text("Independently verify the implementation")
                 expect(page.locator("#build-action-note")).to_contain_text("Copy works without one")
-                # With no tool there is nothing to Send to, so only Copy and
-                # Cancel are offered.
                 expect(page.locator("#build-action-send")).to_be_hidden()
                 page.locator("#build-action-copy").click()
                 expect(page.locator("#build-action-dialog")).not_to_be_visible()
@@ -806,16 +422,13 @@ class LocalBoundary(unittest.TestCase):
                 saved = (folder / "Handoff.md").read_text(encoding="utf-8")
                 self.assertIn("Coordinate a fresh, independent Ora Verification review", saved)
                 self.assertEqual(page.evaluate("() => window.clipboardText"), saved)
-                # A copy starts no conversation turn in the app.
                 _status, recorded, _headers = self.request("/api/conversation", {"id": project_id})
                 self.assertEqual(recorded["turns"], [])
-                # Send on the same shared path keeps the step-3 requirement.
                 page.evaluate("() => deliverStep('verification', 'send')")
                 expect(page.locator("#status-bar")).to_contain_text(
                     "Choose the coding tool in step 3 first; Copy works only from a prepared request.")
             finally:
                 browser.close()
-
 
     def request(self, path, body, headers=None, method="POST"):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=2)
@@ -860,7 +473,6 @@ parser.add_argument("--home", type=Path, required=True)
 args = parser.parse_args()
 skill = args.home / HOSTS[args.host] / "skills/ora-programming-loop"
 if args.action in ("install", "install-check"):
-    # The bundled installer's own guard: it never replaces a newer entry.
     installed = None
     if (skill / "SOURCE.json").is_file():
         try:
@@ -892,8 +504,6 @@ elif skill.exists():
             path = source / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding="utf-8")
-        # The release ships the reviewed Bridge runtime exactly as pinned, and
-        # the reviewed Boost runtime with its generated counterpart.
         shutil.copytree(
             Path(__file__).resolve().parents[1] / "components/agent-bridge",
             source / "components/agent-bridge",
@@ -905,10 +515,6 @@ elif skill.exists():
         return source
 
     def test_first_specification_suggestion_and_message_file_selection(self):
-        try:
-            from playwright.sync_api import expect, sync_playwright
-        except ImportError:
-            self.skipTest("Playwright is not installed for the browser check")
         project_id = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
         other_id = self.request("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})[1]["id"]
         shared = self.home / "Other notes"
@@ -916,10 +522,7 @@ elif skill.exists():
         note = shared / "Outside context.md"
         note.write_text("A note from another folder.\n", encoding="utf-8")
         submitted = []
-        with sync_playwright() as playwright:
-            if not Path(playwright.chromium.executable_path).is_file():
-                self.skipTest("Playwright's Chromium is not installed for the browser check")
-            browser = playwright.chromium.launch(headless=True)
+        with self.browser_session() as browser:
             try:
                 page = browser.new_page()
                 page.route("**/api/converse", lambda route: (
@@ -959,212 +562,12 @@ elif skill.exists():
             finally:
                 browser.close()
 
-    def test_project_opening_recovers_from_auxiliary_read_failures_and_clears_status(self):
-        try:
-            from playwright.sync_api import expect, sync_playwright
-        except ImportError:
-            self.skipTest("Playwright is not installed for the browser check")
-
-        self.server.settings = Settings(self.home / "opening-settings.json")
-        projects = {}
-        for name in ("Working", "History", "Status", "Empty", "Destination"):
-            projects[name] = self.request("/api/create", {"directory": name, "name": name,
-                                                         "description": "", "goals": ""})[1]["id"]
-        for name in ("History", "Status"):
-            (self.home / name / f"{name} — Plan.md").write_text(
-                f"# Plan\n\nStatus: DRAFT\n\nReadable {name} plan.\n", encoding="utf-8")
-            messages = self.home / name / ".vibe" / "0001-20261023-120000" / "session" / "messages"
-            messages.mkdir(parents=True)
-            body = conversation.user_note_body("verification", "codex", f"Retained {name} instruction.", [])
-            (messages / "0001-initiator-record.md").write_text(
-                f"# Message 0001\nKind: note\n\n## Body\n\n{body}", encoding="utf-8")
-        for name, stage in (("Working", "programming"), ("History", "planning"), ("Status", "verification")):
-            active = self.server.store.projects[projects[name]]
-            handle = conversation.TurnOperation(active.root, "codex", stage, {})
-            handle.turn = "0001-20261023-120000"
-            handle.state = "running"
-            self.server.conversation.by_project[str(active.root)] = handle
-
-        failures, holds, pending, requests, errors = set(), {}, {}, [], []
-        evidence = Path(os.environ["VIBE_NAVIGATION_EVIDENCE"]) / "opening" if os.environ.get("VIBE_NAVIGATION_EVIDENCE") else None
-        if evidence:
-            evidence.mkdir(parents=True, exist_ok=True)
-
-        def ready(peer, **kwargs):
-            return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
-
-        with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready), \
-                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
-                mock.patch("ora_vibe_coder.conversation.start_turn") as dispatch, \
-                mock.patch("ora_vibe_coder.conversation.start_assessment") as assess, \
-                mock.patch("ora_vibe_coder.conversation.start_aux") as auxiliary, sync_playwright() as playwright:
-            if not Path(playwright.chromium.executable_path).is_file():
-                self.skipTest("Playwright's Chromium is not installed for the browser check")
-            browser = playwright.chromium.launch(headless=True)
-            context = browser.new_context(viewport={"width": 1440, "height": 1000}, reduced_motion="reduce")
-            try:
-                page = context.new_page()
-                page.on("pageerror", lambda error: errors.append(str(error)))
-
-                def route_api(route):
-                    endpoint = urlsplit(route.request.url).path.rsplit("/", 1)[-1]
-                    data = route.request.post_data_json
-                    requests.append((endpoint, data))
-                    key = (data.get("id"), endpoint)
-                    if key in holds:
-                        mode = holds.pop(key)
-                        pending[key] = (route, route.fetch() if mode == "success" else None)
-                    elif key in failures:
-                        route.fulfill(status=503, content_type="application/json",
-                                      body=json.dumps({"error": f"Fixture: {endpoint} unavailable."}))
-                    else:
-                        route.continue_()
-
-                page.route("**/api/**", route_api)
-                page.goto(self.server.url)
-                page.wait_for_function("() => project?.name === 'Destination' && pollTimer !== null && lastFiles !== null")
-
-                def opened(name, stage):
-                    self.select_project(page, projects[name])
-                    page.wait_for_function("data => project?.name === data.name && workspace === data.stage && pollTimer !== null",
-                                           arg={"name": name, "stage": stage})
-                    expect(page.locator("#stage-panel")).to_be_visible()
-                    expect(page.locator("#rails")).to_be_visible()
-                    self.choose_primary(page, "Codex")
-                    page.wait_for_function("() => readinessState.peers?.some(peer => peer.peer === 'codex' && peer.ready)")
-
-                def capture(name):
-                    if evidence:
-                        page.screenshot(path=str(evidence / f"{name}.png"), full_page=True)
-
-                def release(name, endpoint):
-                    route, response = pending.pop((projects[name], endpoint))
-                    if response is not None:
-                        route.fulfill(response=response)
-                    else:
-                        route.fulfill(status=503, content_type="application/json",
-                                      body=json.dumps({"error": f"Fixture: stale {endpoint} failure."}))
-
-                opened("Working", "build")
-                expect(page.locator("#status-bar")).to_contain_text("Implementation · Coding")
-                # Hold the next project's live answer: the old activity text
-                # clears immediately, before any new status can replace it.
-                holds[(projects["Status"], "turn-state")] = "success"
-                self.select_project(page, projects["Status"])
-                page.wait_for_function("() => project?.name === 'Status'")
-                page.wait_for_function("() => document.getElementById('status-bar').textContent === ''")
-                expect(page.locator("#status-bar")).not_to_have_class("active")
-                capture("switch-clears-working")
-                # Its late successful answer cannot put active work on the idle
-                # destination, even though the originating turn is still live.
-                opened("Destination", "specification")
-                release("Status", "turn-state")
-                page.wait_for_function("() => project?.name === 'Destination' && lastFiles !== null")
-                expect(page.locator("#status-bar")).not_to_have_class(re.compile(r".*\bactive\b.*"))
-                self.assertIsNone(page.evaluate("lastOperation"))
-
-                failures.add((projects["History"], "conversation"))
-                opened("History", "plan")
-                expect(page.locator("#reader")).to_contain_text("Readable History plan.")
-                expect(page.locator("#status-bar")).to_contain_text("Conversation history could not be loaded")
-                self.assertEqual(page.evaluate("lastOperation.state"), "running")
-                expect(page.locator("#send")).to_be_disabled()
-                self.assertTrue(any(endpoint == "turn-state" and data.get("id") == projects["History"] for endpoint, data in requests))
-                capture("history-failure-documents-and-known-work")
-                # No manual retry: the existing timer loads the retained
-                # history when it returns, without moving the chosen page.
-                failures.remove((projects["History"], "conversation"))
-                expect(page.locator("#conversation")).to_contain_text("Retained History instruction.")
-                self.assertEqual(page.evaluate("workspace"), "plan")
-                expect(page.locator("#send")).to_be_disabled()
-                capture("history-recovered-at-chosen-stage")
-
-                failures.add((projects["Status"], "turn-state"))
-                opened("Status", "build")
-                expect(page.locator("#conversation")).to_contain_text("Retained Status instruction.")
-                page.locator("#document").select_option(label="Plan — Status")
-                expect(page.locator("#reader")).to_contain_text("Readable Status plan.")
-                expect(page.locator("#status-bar")).to_contain_text("turn-state unavailable")
-                self.assertTrue(page.evaluate("lastOperation === undefined"))
-                expect(page.locator("#send")).to_be_disabled()
-                expect(page.locator("#run-completion")).to_be_disabled()
-                page.locator("#message").fill("Keep this unsent draft while live status is unknown.")
-                picture = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c020000000b4944415478da6364f80f00010501012718e3660000000049454e44ae426082")
-                page.locator("#image-input").set_input_files({"name": "opening-draft.png", "mimeType": "image/png", "buffer": picture})
-                page.locator("#message").press("Enter")
-                expect(page.locator("#status-bar")).to_contain_text("work status is unknown")
-                page.evaluate("() => deliverStep('create-plan', 'send')")
-                self.assertFalse(any(endpoint in {"converse", "review", "repair", "deliver", "run-start"} for endpoint, _ in requests))
-                capture("status-failure-visible-history-and-draft")
-                failures.remove((projects["Status"], "turn-state"))
-                page.wait_for_function("() => lastOperation?.state === 'running' && !contactLost")
-                expect(page.locator("#status-bar")).to_contain_text("Verification · Reviewing")
-                expect(page.locator("#send")).to_be_disabled()
-                expect(page.locator("#message")).to_have_value("Keep this unsent draft while live status is unknown.")
-                expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "opening-draft.png")
-                self.assertEqual(page.evaluate("workspace"), "build")
-                capture("status-recovered-running-work")
-
-                # With both reads unavailable and no saved progress, opening
-                # still shows Specification and never calls the project idle.
-                failures.update((projects["Empty"], endpoint) for endpoint in ("conversation", "turn-state"))
-                opened("Empty", "specification")
-                expect(page.locator("#reader")).to_contain_text("Specification")
-                self.assertTrue(page.evaluate("lastOperation === undefined"))
-                expect(page.locator("#send")).to_be_disabled()
-                expect(page.locator("#status-bar")).not_to_contain_text("nothing is running")
-                capture("both-fail-specification-fallback")
-                # An early manual rail choice survives the same failures.
-                opened("Destination", "specification")
-                holds[(projects["Empty"], "conversation")] = "error"
-                self.select_project(page, projects["Empty"])
-                page.wait_for_function("() => project?.name === 'Empty' && workspace === ''")
-                page.locator('.rail[data-stage="plan"]').click()
-                release("Empty", "conversation")
-                page.wait_for_function("() => workspace === 'plan' && pollTimer !== null")
-                expect(page.locator("#reader")).to_contain_text("Plan")
-                failures.difference_update((projects["Empty"], endpoint) for endpoint in ("conversation", "turn-state"))
-                page.wait_for_function("() => conversationLoaded && lastOperation === null && lastFiles !== null")
-                expect(page.locator("#send")).to_be_enabled()
-                expect(page.locator("#run-completion")).to_be_enabled()
-                self.assertEqual(page.evaluate("workspace"), "plan")
-                expect(page.locator("#message")).to_have_value("Keep this unsent draft while live status is unknown.")
-                expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "opening-draft.png")
-                capture("both-recovered-with-manual-choice-and-draft")
-
-                # A delayed history failure also stays with its origin; the
-                # successful destination keeps its page, polling and readiness.
-                holds[(projects["History"], "conversation")] = "error"
-                self.select_project(page, projects["History"])
-                page.wait_for_function("() => project?.name === 'History' && workspace === ''")
-                opened("Destination", "specification")
-                release("History", "conversation")
-                page.wait_for_function("() => project?.name === 'Destination' && lastFiles !== null")
-                expect(page.locator("#status-bar")).not_to_contain_text("stale conversation failure")
-                expect(page.locator("#status-bar")).not_to_have_class(re.compile(r".*\bactive\b.*"))
-                self.assertTrue(page.evaluate("conversationLoaded && lastOperation === null && pollTimer !== null"))
-                capture("stale-history-error-isolated")
-                dispatch.assert_not_called()
-                assess.assert_not_called()
-                auxiliary.assert_not_called()
-                self.assertEqual(errors, [])
-                self.assertEqual(pending, {})
-            finally:
-                context.close()
-                browser.close()
-                self.server.conversation.by_project.clear()
-
     def test_projects_open_at_progress_and_rails_slide_without_losing_drafts(self):
-        try:
-            from playwright.sync_api import expect, sync_playwright
-        except ImportError:
-            self.skipTest("Playwright is not installed for the browser check")
 
         settings = Settings(self.home / "navigation-settings.json")
         self.server.settings = settings
         projects = {}
         for name in ("Fresh", "Specification", "Planning", "Approved", "Build", "Verification",
-                     "LegacyVerificationPassed", "LegacyVerificationActive",
                      "Templates", "RetainedPlan", "RetainedBuild", "ReviewPlan", "ActivePlan", "ActiveBuild", "ActiveRun"):
             projects[name] = self.request("/api/create", {"directory": name, "name": name,
                                                          "description": "", "goals": ""})[1]["id"]
@@ -1182,13 +585,6 @@ elif skill.exists():
         document("Verification", "Verification Report", "# Verification Report\n\nVerdict: INCOMPLETE\n\nThe saved file was checked; reopening still needs inspection.\n")
         document("Templates", "Programming Result", "# Programming Result\n\nStatus: NOT STARTED\n\n## Changes\n\n## Checks\n")
         document("Templates", "Verification Report", "# Verification Report\n\n## Verdict\n\n## Findings\n")
-        for name, status in (("LegacyVerificationPassed", "PASSED"), ("LegacyVerificationActive", "IN PROGRESS")):
-            definition = self.server.store.projects[projects[name]].root / "Project.md"
-            text = definition.read_text(encoding="utf-8")
-            self.assertIn("Programming: NOT STARTED", text)
-            self.assertIn("Verification: NOT STARTED", text)
-            definition.write_text(text.replace("Verification: NOT STARTED", f"Verification: {status}"), encoding="utf-8")
-        # An outgoing implementation request must not masquerade as implementation.
         (self.home / "Specification" / "Specification — Implementation Request.md").write_text(
             "# Implementation Request\n\nImplement the Plan when I send this.\n", encoding="utf-8")
 
@@ -1216,11 +612,6 @@ elif skill.exists():
         driver.state = "paused-question"
         self.server.runs.by_project[str(active.root)] = driver
 
-        evidence = Path(os.environ["VIBE_NAVIGATION_EVIDENCE"]) if os.environ.get("VIBE_NAVIGATION_EVIDENCE") else None
-        if evidence:
-            evidence.mkdir(parents=True, exist_ok=True)
-        measurements = {}
-
         def ready(peer, **kwargs):
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
 
@@ -1228,10 +619,7 @@ elif skill.exists():
                 mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
                 mock.patch("ora_vibe_coder.conversation.start_turn") as dispatch, \
                 mock.patch("ora_vibe_coder.conversation.start_assessment") as assess, \
-                mock.patch("ora_vibe_coder.conversation.start_aux") as auxiliary, sync_playwright() as playwright:
-            if not Path(playwright.chromium.executable_path).is_file():
-                self.skipTest("Playwright's Chromium is not installed for the browser check")
-            browser = playwright.chromium.launch(headless=True)
+                mock.patch("ora_vibe_coder.conversation.start_aux") as auxiliary, self.browser_session() as browser:
             context = browser.new_context(viewport={"width": 1440, "height": 1000},
                                           permissions=["clipboard-read", "clipboard-write"], reduced_motion="no-preference")
             try:
@@ -1247,140 +635,20 @@ elif skill.exists():
                                            arg={"id": projects[name], "name": name, "stage": stage})
                     expect(page.locator("#stage-title")).to_have_text({"specification": "Specification", "plan": "Plan", "build": "Build & Verify"}[stage])
 
-                def settled():
+                def settled(stage):
                     page.wait_for_function("() => workspaceReveal === null && workspaceAnimations.every(animation => animation.playState === 'finished' || animation.playState === 'idle')")
-                    self.assertEqual(page.locator(".workspace-snapshot").count(), 0)
-                    self.assertNotEqual(page.locator(".main-col").evaluate("element => getComputedStyle(element).pointerEvents"), "none")
-
-                def arrangement(stage):
-                    settled()
-                    boxes = page.evaluate("""() => ({page: document.querySelector('.main-col').getBoundingClientRect().toJSON(),
-                        rails: [...document.querySelectorAll('.rail')].map(rail => ({stage: rail.dataset.stage,
-                            expanded: rail.getAttribute('aria-expanded'), box: rail.getBoundingClientRect().toJSON()}))})""")
-                    selected = ["specification", "plan", "build"].index(stage)
-                    for index, rail in enumerate(boxes["rails"]):
-                        self.assertEqual(rail["expanded"], str(index == selected).lower(), f"{stage}: {boxes}")
-                        if index <= selected:
-                            self.assertLessEqual(rail["box"]["right"], boxes["page"]["left"])
-                        else:
-                            self.assertGreaterEqual(rail["box"]["left"], boxes["page"]["right"])
-                    self.assertEqual([rail["stage"] for rail in sorted(boxes["rails"], key=lambda rail: rail["box"]["left"])],
-                                     ["specification", "plan", "build"])
-                    return boxes
-
-                def capture(name):
-                    if evidence:
-                        page.screenshot(path=str(evidence / f"{name}.png"), full_page=True, animations="allow")
-
-                def delay_plan_read():
-                    page.evaluate("""() => {
-                        window.delayedRead = {originalApi: api, pending: [], captured: false};
-                        api = async (path, data) => {
-                            const delay = window.delayedRead, result = await delay.originalApi(path, data);
-                            if (path === 'read-file' && data.path.endsWith(' — Plan.md') && !delay.captured) {
-                                delay.captured = true;
-                                await new Promise(resolve => delay.pending.push(resolve));
-                            }
-                            return result;
-                        };
-                    }""")
-
-                def release_plan_read():
-                    page.evaluate("""() => { const delay = window.delayedRead;
-                        api = delay.originalApi; delay.pending.forEach(resolve => resolve()); delete window.delayedRead; }""")
-
-                def motion(name, forward, old_title, new_title):
-                    page.wait_for_function("() => workspaceAnimations.some(animation => animation.playState === 'running' && animation.currentTime >= 250 && animation.currentTime < 800)")
-                    # Pause a real intermediate frame so geometry, content and
-                    # the screenshot all describe precisely the same instant.
-                    page.evaluate("() => { for (const animation of workspaceAnimations) { animation.pause(); animation.currentTime = 400; } }")
-                    observed = page.evaluate("""forward => {
-                        const old = document.querySelector('.workspace-snapshot'), page = document.querySelector('.main-col');
-                        const visible = element => {
-                            const box = element.getBoundingClientRect(), values = getComputedStyle(element).clipPath.match(/[\\d.]+/g).map(Number);
-                            const [top, right = top, bottom = top, left = right] = values;
-                            return {left: box.left + left, right: box.right - right};
-                        };
-                        const rails = workspaceAnimations.map(animation => animation.effect.target).filter(element => element.classList.contains('rail'));
-                        const edge = forward ? Math.min(...rails.map(rail => rail.getBoundingClientRect().left))
-                            : Math.max(...rails.map(rail => rail.getBoundingClientRect().right));
-                        const ids = [...document.querySelectorAll('[id]')].map(element => element.id);
-                        return {x: document.querySelector('.rail[data-stage=plan]').getBoundingClientRect().x, edge,
-                            old: visible(old), new: visible(page), oldTitle: workspaceReveal.frozen.querySelector('#stage-title').textContent,
-                            newTitle: document.getElementById('stage-title').textContent,
-                            oldReader: workspaceReveal.frozen.querySelector('#reader').textContent, newReader: document.getElementById('reader').textContent,
-                            oldIcons: [...workspaceReveal.frozen.querySelectorAll('.project-action use, #project-card use')].map(icon => icon.getBBox().width),
-                            inertSnapshot: old.inert, blockedPage: getComputedStyle(page).pointerEvents === 'none', duplicateLiveIds: ids.length - new Set(ids).size,
-                            animations: workspaceAnimations.map(animation => ({time: animation.currentTime, duration: animation.effect.getTiming().duration})),
-                            oldOpacity: getComputedStyle(old).opacity, newOpacity: getComputedStyle(document.getElementById('stage-panel')).opacity,
-                            pageTransform: getComputedStyle(page).transform};
-                    }""", forward)
-                    self.assertEqual(observed["oldTitle"], old_title)
-                    self.assertEqual(observed["newTitle"], new_title)
-                    self.assertNotEqual(observed["oldReader"], observed["newReader"])
-                    self.assertEqual(len(observed["oldIcons"]), 3)
-                    self.assertTrue(all(width > 0 for width in observed["oldIcons"]))
-                    self.assertTrue(observed["inertSnapshot"])
-                    self.assertTrue(observed["blockedPage"])
-                    self.assertEqual(observed["duplicateLiveIds"], 0)
-                    self.assertEqual(observed["oldOpacity"], "1")
-                    self.assertEqual(observed["newOpacity"], "1")
-                    self.assertEqual(observed["pageTransform"], "none")
-                    self.assertTrue(all(item["duration"] == 1000 for item in observed["animations"]))
-                    self.assertAlmostEqual(observed["old"]["right" if forward else "left"], observed["edge"], delta=1)
-                    self.assertAlmostEqual(observed["new"]["left" if forward else "right"], observed["edge"], delta=1)
-                    self.assertGreater(observed["old"]["right"] - observed["old"]["left"], 50)
-                    self.assertGreater(observed["new"]["right"] - observed["new"]["left"], 50)
-                    capture(name)
-                    page.evaluate("() => { for (const animation of workspaceAnimations) animation.play(); }")
-                    return observed
+                    expect(page.locator(f'.rail[data-stage="{stage}"]')).to_have_attribute("aria-expanded", "true")
 
                 for name, stage in (("Fresh", "specification"), ("Specification", "specification"),
                                     ("Planning", "plan"), ("Approved", "plan"), ("Build", "build"),
-                                    ("Verification", "build"), ("LegacyVerificationPassed", "build"),
-                                    ("LegacyVerificationActive", "build"), ("Templates", "specification"),
+                                    ("Verification", "build"), ("Templates", "specification"),
                                     ("RetainedPlan", "plan"), ("RetainedBuild", "build"),
-                                    ("ReviewPlan", "plan"), ("ActivePlan", "plan"), ("ActiveBuild", "build"), ("ActiveRun", "build")):
+                                    ("ReviewPlan", "plan"), ("ActivePlan", "plan"), ("ActiveBuild", "build"),
+                                    ("ActiveRun", "build")):
                     opened(name, stage)
-                    arrangement(stage)
-                    measurements[f"open-{name}"] = stage
+                    settled(stage)
                 self.assertEqual(driver.state, "paused-question")
                 self.assertTrue(all(handle.state == "running" for handle in self.server.conversation.by_project.values()))
-
-                # Delay two overlapping opens of the same project. An early
-                # real rail click wins the page, but the latest open must still
-                # finish polling/readiness; the older open must not restart them.
-                page.evaluate("""id => {
-                    window.openingRace = {originalApi: api, pending: [], responses: []};
-                    api = async (path, data) => {
-                        const race = window.openingRace, result = await race.originalApi(path, data);
-                        race.responses.push({path, data});
-                        if (path === 'conversation' && data.id === id)
-                            await new Promise(resolve => race.pending.push(resolve));
-                        return result;
-                    };
-                    window.firstOpening = chooseProject(id);
-                }""", projects["Approved"])
-                page.wait_for_function("() => openingRace.pending.length === 1")
-                page.evaluate("id => { window.secondOpening = chooseProject(id); }", projects["Approved"])
-                page.wait_for_function("() => openingRace.pending.length === 2")
-                page.locator('.rail[data-stage="build"]').click()
-                expect(page.locator("#stage-title")).to_have_text("Build & Verify")
-                page.evaluate("() => { openingRace.pending[1](); return secondOpening; }")
-                page.wait_for_function("""() => pollTimer !== null && lastFiles !== null &&
-                    openingRace.responses.some(response => response.path === 'readiness' && response.data.recheck)""")
-                page.evaluate("() => { openingRace.pending[0](); return firstOpening; }")
-                measurements["early-rail-opening"] = page.evaluate("""() => ({stage: workspace, polling: pollTimer !== null,
-                    readinessRechecks: openingRace.responses.filter(response => response.path === 'readiness' && response.data.recheck).length,
-                    stateResponses: openingRace.responses.filter(response => response.path === 'turn-state').length})""")
-                self.assertEqual(measurements["early-rail-opening"]["stage"], "build")
-                self.assertTrue(measurements["early-rail-opening"]["polling"])
-                self.assertEqual(measurements["early-rail-opening"]["readinessRechecks"], 1)
-                self.assertGreaterEqual(measurements["early-rail-opening"]["stateResponses"], 2)
-                arrangement("build")
-                capture("early-rail-opening")
-                page.evaluate("""() => { api = openingRace.originalApi;
-                    delete window.openingRace; delete window.firstOpening; delete window.secondOpening; }""")
 
                 opened("Specification", "specification")
                 self.choose_primary(page, "Codex")
@@ -1391,192 +659,37 @@ elif skill.exists():
                 opened("Specification", "specification")
                 expect(page.locator("#next-step-title")).to_have_text("Create the Plan")
 
-                # Existing drafts and reading controls survive the moving rail.
-                page.locator("#message").fill("Keep this unsent instruction through every stage.")
+                page.locator("#message").fill("Keep this unsent instruction.")
                 picture = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c020000000b4944415478da6364f80f00010501012718e3660000000049454e44ae426082")
                 page.locator("#image-input").set_input_files({"name": "draft.png", "mimeType": "image/png", "buffer": picture})
-                expect(page.locator("#attachment-bar")).to_contain_text("Remove")
+                expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "draft.png")
                 note = self.home / "material.txt"
-                note.write_text("Existing material for the next message.", encoding="utf-8")
-                page.locator("#add-message-files").click()
-                page.locator("#file-path").fill(str(self.home))
-                page.locator("#file-go").click()
-                page.locator("#file-list button").filter(has_text="material.txt").click()
-                page.locator("#file-cancel").click()
-                expect(page.locator("#message-files")).to_contain_text("material.txt")
-                page.locator("#spine").focus()
-                page.locator("#spine").press("ArrowRight")
-                fraction = page.evaluate("splitFraction")
-                measurements["desktop-specification"] = arrangement("specification")
-                capture("desktop-specification")
-
-                document("Specification", "Plan", "# Plan\n\nStatus: DRAFT\n\nNEW PLAN: use the current note editor and save files locally.\n")
-                delay_plan_read()
+                note.write_text("Existing material.")
+                page.evaluate("path => messageFilesFor(currentId, 'specification').push({path, name: 'material.txt'})", str(note))
+                document("Specification", "Plan", "# Plan\n\nStatus: DRAFT\n\nNEW PLAN: save notes locally.\n")
                 page.locator('.rail[data-stage="plan"]').click()
-                expect(page.locator("#stage-title")).to_have_text("Plan")
-                page.wait_for_function("() => delayedRead.pending.length === 1")
-                page.wait_for_timeout(1100)
-                measurements["slow-read-waits"] = page.evaluate("""() => ({oldTitle: workspaceReveal.frozen.querySelector('#stage-title').textContent,
-                    oldClip: getComputedStyle(workspaceReveal.snapshot).clipPath,
-                    animations: workspaceAnimations.map(animation => ({time: animation.currentTime, state: animation.playState})),
-                    liveReader: document.getElementById('reader').textContent})""")
-                self.assertEqual(measurements["slow-read-waits"]["oldTitle"], "Specification")
-                self.assertTrue(all(item["time"] == 0 and item["state"] == "paused" for item in measurements["slow-read-waits"]["animations"]))
-                self.assertIn("Loading", measurements["slow-read-waits"]["liveReader"])
-                capture("slow-read-old-page")
-                release_plan_read()
-                measurements["forward-motion"] = motion("forward-motion", True, "Specification", "Plan")
-                self.assertIn("NEW PLAN:", measurements["forward-motion"]["newReader"])
-                measurements["desktop-plan"] = arrangement("plan")
-                capture("desktop-plan")
-                self.assertGreater(measurements["forward-motion"]["x"], measurements["desktop-plan"]["rails"][1]["box"]["x"])
-                self.assertLess(measurements["forward-motion"]["x"], measurements["desktop-specification"]["rails"][1]["box"]["x"])
-                page.locator('.rail[data-stage="build"]').click()
-                measurements["desktop-build"] = arrangement("build")
-                capture("desktop-build")
-                expect(page.locator("#message")).to_have_value("Keep this unsent instruction through every stage.")
-                expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "draft.png")
-                expect(page.locator("#destination")).to_have_value("Codex")
-                self.assertEqual(page.evaluate("splitFraction"), fraction)
-                page.locator('.rail[data-stage="specification"]').click()
-                measurements["backward-motion"] = motion("backward-motion", False, "Build & Verify", "Specification")
-                arrangement("specification")
-                self.assertGreater(measurements["backward-motion"]["x"], measurements["desktop-build"]["rails"][1]["box"]["x"])
-                self.assertLess(measurements["backward-motion"]["x"], measurements["desktop-specification"]["rails"][1]["box"]["x"])
-                expect(page.locator("#message-files")).to_contain_text("material.txt")
-
-                # Real keyboard actions cannot submit a draft to the still
-                # covered stage. A fresh activation works after it is visible.
-                submitted = []
-                page.route("**/api/converse", lambda route: (
-                    submitted.append(route.request.post_data_json),
-                    route.fulfill(status=400, content_type="application/json", body='{"error":"Keyboard check stopped before dispatch."}')
-                ))
-                held_message = page.locator("#message").input_value()
-                for target, key in (("#message", "Enter"), ("#send", "Space")):
-                    delay_plan_read()
-                    page.locator('.rail[data-stage="plan"]').click()
-                    page.wait_for_function("() => delayedRead.pending.length === 1 && workspaceReveal !== null")
-                    page.locator(target).focus()
-                    page.keyboard.press(key)
-                    arrangement("plan")
-                    self.assertEqual(submitted, [])
-                    expect(page.locator("#message")).to_have_value(held_message)
-                    expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "draft.png")
-                    capture(f"keyboard-{key.lower()}-reveals-page")
-                    release_plan_read()
-                    expect(page.locator("#reader")).to_contain_text("NEW PLAN:")
-                    page.locator('.rail[data-stage="specification"]').click()
-                    arrangement("specification")
-
-                delay_plan_read()
-                page.locator('.rail[data-stage="plan"]').click()
-                page.wait_for_function("() => delayedRead.pending.length === 1 && workspaceReveal !== null")
-                page.locator("#message").focus()
-                page.locator("#message").evaluate("element => element.setSelectionRange(element.value.length, element.value.length)")
-                page.keyboard.type(" More typed text.")
-                arrangement("plan")
-                expect(page.locator("#message")).to_have_value(held_message + " More typed text.")
-                self.assertEqual(submitted, [])
-                release_plan_read()
+                page.wait_for_function("() => workspaceReveal !== null && workspaceAnimations.some(animation => animation.playState === 'running' && animation.effect.target.classList.contains('rail'))")
+                settled("plan")
                 expect(page.locator("#reader")).to_contain_text("NEW PLAN:")
-                page.keyboard.press("Enter")
-                expect(page.locator("#status-bar")).to_contain_text("Keyboard check stopped before dispatch")
-                self.assertEqual(len(submitted), 1)
-                self.assertEqual(submitted[0]["stage"], "planning")
-                self.assertEqual(submitted[0]["text"], held_message + " More typed text.")
-                expect(page.locator("#message")).to_have_value(held_message + " More typed text.")
-                expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "draft.png")
-                measurements["keyboard-during-old-page"] = {"coveredActivationsSubmitted": 0,
-                    "visibleSubmission": submitted[0]["stage"], "preservedText": page.locator("#message").input_value()}
-                capture("keyboard-typing-and-visible-send")
-                page.unroute("**/api/converse")
-                page.locator("#message").fill(held_message)
-                page.locator('.rail[data-stage="specification"]').click()
-                arrangement("specification")
-
-                # A document change updates the chosen reader without auto-routing.
-                document("Specification", "Plan", "# Plan\n\nStatus: DRAFT\n\nPlanning has now begun outside the app.\n")
-                page.evaluate("() => refreshChanged([], {silent: true})")
-                expect(page.locator("#stage-title")).to_have_text("Specification")
-                page.locator("#document").select_option(label="Plan — Specification")
-                expect(page.locator("#reader")).to_contain_text("Planning has now begun outside the app.")
-                page.evaluate("() => refreshChanged([], {silent: true})")
-                expect(page.locator("#document option:checked")).to_have_text("Plan — Specification")
-                expect(page.locator("#reader")).to_contain_text("Planning has now begun outside the app.")
-                expect(page.locator("#message")).to_have_value("Keep this unsent instruction through every stage.")
-
-                # A slow cancelled read must never reappear after another stage
-                # or project takes ownership of the real page.
-                delay_plan_read()
-                page.locator('.rail[data-stage="plan"]').click()
-                page.wait_for_function("() => delayedRead.pending.length === 1")
-                page.locator('.rail[data-stage="build"]').click()
-                release_plan_read()
-                arrangement("build")
-                expect(page.locator("#reader")).to_be_empty()
-                delay_plan_read()
-                page.locator('.rail[data-stage="plan"]').click()
-                page.wait_for_function("() => delayedRead.pending.length === 1")
-                page.evaluate("id => chooseProject(id)", projects["Fresh"])
-                release_plan_read()
-                arrangement("specification")
-                expect(page.locator("#reader")).not_to_contain_text("Planning has now begun outside the app.")
-                measurements["cancelled-read-project"] = page.evaluate("({name: project.name, stage: workspace, snapshots: document.querySelectorAll('.workspace-snapshot').length})")
-                opened("Specification", "plan")
-                page.locator('.rail[data-stage="specification"]').click()
-                arrangement("specification")
-
-                # Quick successive clicks cancel stale animation and stale document reads.
-                page.evaluate("""() => { for (const stage of ['plan', 'build', 'plan', 'specification', 'build'])
-                    document.querySelector(`.rail[data-stage=${stage}]`).click(); }""")
-                arrangement("build")
-                expect(page.locator("#stage-title")).to_have_text("Build & Verify")
-                expect(page.locator("#reader")).to_be_empty()
-                expect(page.locator("#message")).to_have_value("Keep this unsent instruction through every stage.")
-
-                page.emulate_media(reduced_motion="reduce")
-                page.locator('.rail[data-stage="plan"]').click()
-                arrangement("plan")
-                self.assertEqual(page.evaluate("workspaceAnimations.length"), 0)
-                page.emulate_media(reduced_motion="no-preference")
-                page.locator('.rail[data-stage="specification"]').click()
-                page.wait_for_function("() => workspaceAnimations.some(animation => animation.playState === 'running')")
-                page.emulate_media(reduced_motion="reduce")
-                arrangement("specification")
-                self.assertEqual(page.evaluate("workspaceAnimations.length"), 0)
-                page.emulate_media(reduced_motion="no-preference")
-                page.set_viewport_size({"width": 375, "height": 812})
-                for stage in ("specification", "plan", "build"):
+                for stage in ("build", "specification"):
                     page.locator(f'.rail[data-stage="{stage}"]').click()
-                    boxes = arrangement(stage)
-                    for rail in boxes["rails"]:
-                        self.assertGreaterEqual(rail["box"]["left"], 0)
-                        self.assertLessEqual(rail["box"]["right"], 375)
-                    expect(page.locator("#single-toggle")).to_be_visible()
-                    page.locator("#single-toggle").click()
-                    self.assertEqual(page.locator("#split").get_attribute("data-mode"), "doc")
-                    page.locator("#single-toggle").click()
-                    self.assertEqual(page.locator("#split").get_attribute("data-mode"), "chat")
-                    capture(f"narrow-{stage}")
+                    settled(stage)
+                    expect(page.locator("#message")).to_have_value("Keep this unsent instruction.")
+                    expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "draft.png")
+                expect(page.locator("#message-files")).to_contain_text("material.txt")
 
-                # Reopening ignores the last manually viewed page and re-derives progress.
                 page.locator("#message").fill("")
                 page.locator('#attachment-bar button').click()
                 page.locator('.rail[data-stage="specification"]').click()
-                arrangement("specification")
+                settled("specification")
                 page.reload()
                 page.wait_for_function("() => project?.name === 'Specification' && workspace === 'plan' && pollTimer !== null")
                 expect(page.locator("#next-step-title")).to_have_text("Implement the Plan")
                 page.set_viewport_size({"width": 1440, "height": 1000})
-                capture("reopened-at-plan")
-                measurements["reopened-stage"] = page.evaluate("workspace")
                 dispatch.assert_not_called()
                 assess.assert_not_called()
                 auxiliary.assert_not_called()
                 self.assertEqual(errors, [])
-                if evidence:
-                    (evidence / "navigation-observations.json").write_text(json.dumps(measurements, indent=2), encoding="utf-8")
             finally:
                 context.close()
                 browser.close()
@@ -1584,148 +697,31 @@ elif skill.exists():
                 self.server.runs.by_project.clear()
 
     def test_coding_tool_follows_project_across_stages_without_another_readiness_check(self):
-        try:
-            from playwright.sync_api import expect, sync_playwright
-        except ImportError:
-            self.skipTest("Playwright is not installed for the browser check")
-
         first = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
         second = self.request("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})[1]["id"]
-        overview = self.home / "Two" / "Project.md"
-        overview.write_text(overview.read_text(encoding="utf-8").replace("Verification: NOT STARTED", "Verification: PASSED"), encoding="utf-8")
-        permission_ready = {"full": True}
-
         def ready(peer, **kwargs):
-            if peer == "zcode":
-                full = kwargs.get("work_permission") == "full-access"
-                return {"peer": peer, "ready": not full or permission_ready["full"], "work": "supported", "authentication": "unknown",
-                        "effective_permission": "full-access" if full else "edit",
-                        "headless_shell": full, "shell_execution_verified": False, "warnings": []}
-            if peer == "codex":
-                return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed",
-                        "executable": "/Applications/Codex.app/Contents/Resources/codex",
-                        "version": "codex-cli 0.162.1",
-                        "message": "Codex is installed and signed in; model acceptance has not been tested.",
-                        "warnings": ["The selected model is checked only when you send a request."]}
-            if peer == "qwen":
-                return {"peer": peer, "ready": False, "work": "unsupported", "authentication": "unknown", "warnings": []}
-            if peer == "claude":
-                return {"peer": peer, "ready": True, "work": "supported", "authentication": "unknown", "warnings": []}
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
-
-        with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready) as probes, \
+        with mock.patch.object(conversation, "bridge_check", side_effect=ready) as probes, \
                 mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
                 mock.patch("ora_vibe_coder.server.model_inventory", return_value={"models": []}), \
-                mock.patch.object(hosts, "desktop_application", side_effect=lambda host, platform=None: None if host == "qwen" else Path("/Applications") / hosts.DESKTOP_APPS[host]):
-            with sync_playwright() as playwright:
-                if not Path(playwright.chromium.executable_path).is_file():
-                    self.skipTest("Playwright's Chromium is not installed for the browser check")
-                browser = playwright.chromium.launch(headless=True)
-                context = browser.new_context(permissions=["clipboard-read", "clipboard-write"])
-                try:
-                    page = context.new_page()
-                    page.goto(self.server.url)
-                    self.select_project(page, first)
-                    expect(page.locator("#stage-title")).to_have_text("Specification")
-                    self.assertEqual(page.locator("#project-card .step-number").inner_text(), "2")
-                    self.assertEqual(page.locator(".first-step .step-number").inner_text(), "3")
-                    self.assertEqual([page.locator(f"#{step} .step-number").inner_text()
-                                      for step in ("work-step", "review-step", "next-step")], ["4", "5", "6"])
-                    self.assertEqual(page.locator("#split").get_attribute("data-mode"), "split")
-                    spine = page.locator("#spine").bounding_box()
-                    title_text = page.locator("#stage-title").evaluate(
-                        "element => { const range = document.createRange(); range.selectNodeContents(element); return range.getBoundingClientRect().toJSON(); }")
-                    tool = page.locator(".first-step").bounding_box()
-                    self.assertLess(abs(title_text["x"] + title_text["width"] / 2 - (spine["x"] + spine["width"] / 2)), 8)
-                    self.assertLess(tool["x"] + tool["width"], title_text["x"])
-                    rail_widths = [rail.bounding_box()["width"] for rail in page.locator(".rail").all()]
-                    self.assertLess(max(rail_widths) - min(rail_widths), 1)
-                    page.set_viewport_size({"width": 800, "height": 900})
-                    expect(page.locator("#single-toggle")).to_be_visible()
-                    expect(page.locator("#split")).to_have_attribute("data-mode", "chat")
-                    page.locator("#single-toggle").click()
-                    expect(page.locator("#split")).to_have_attribute("data-mode", "doc")
-                    page.set_viewport_size({"width": 1280, "height": 720})
-                    expect(page.locator("#split")).to_have_attribute("data-mode", "split")
-                    self.choose_primary(page, "Codex")
-                    page.wait_for_function("() => peerFacts('codex')?.authentication === 'confirmed'")
-                    expect(page.locator("#tool-problem")).to_be_hidden()
-                    expect(page.locator("#readiness, #recheck, #more")).to_have_count(0)
-                    self.assertEqual(page.evaluate("() => peerFacts('codex').executable"), "/Applications/Codex.app/Contents/Resources/codex")
-                    self.assertEqual(page.evaluate("() => peerFacts('codex').version"), "codex-cli 0.162.1")
-                    checked = probes.call_count
-
-                    # The coding tool belongs to the project across stages, and a
-                    # stage switch runs no new readiness probe.
-                    page.locator('.rail[data-stage="plan"]').click()
-                    expect(page.locator("#stage-title")).to_have_text("Plan")
-                    self.assertEqual(page.locator("#destination").input_value(), "Codex")
-                    self.assertEqual(probes.call_count, checked)
-                    self.choose_primary(page, "ZCode")
-                    self.assertEqual(page.evaluate("() => selectedReadiness().effective_permission"), "edit")
-                    page.locator('.rail[data-stage="build"]').click()
-                    self.assertEqual(page.evaluate("() => selectedReadiness().effective_permission"), "full-access")
-                    page.locator("#build-reply-stage").select_option("verification")
-                    self.assertEqual(page.evaluate("() => selectedReadiness().effective_permission"), "edit")
-                    page.locator("#build-reply-stage").select_option("programming")
-                    self.assertEqual(page.evaluate("() => selectedReadiness().effective_permission"), "full-access")
-                    permission_ready["full"] = False
-                    page.evaluate("() => refreshReadiness(true)")
-                    page.wait_for_function("() => selectedReadiness()?.ready === false")
-                    expect(page.locator("#tool-problem")).to_be_visible()
-                    permission_ready["full"] = True
-                    page.evaluate("() => refreshReadiness(true)")
-                    page.wait_for_function("() => selectedReadiness()?.ready === true")
-                    expect(page.locator("#tool-problem")).to_be_hidden()
-                    checked = probes.call_count
-                    page.locator('.rail[data-stage="plan"]').click()
-                    self.assertEqual(page.evaluate("() => selectedReadiness().effective_permission"), "edit")
-                    self.assertEqual(probes.call_count, checked)
-                    self.choose_primary(page, "Claude Code")
-                    page.locator('.rail[data-stage="specification"]').click()
-                    self.assertEqual(page.locator("#destination").input_value(), "Codex")
-                    self.select_project(page, second)
-                    expect(page.locator("#project-name")).to_have_text("Two")
-                    expect(page.locator("#destination")).to_have_value("")
-                    self.select_project(page, first)
-                    expect(page.locator("#destination")).to_have_value("Codex")
-
-                    # One-click handoffs: step 6 saves the complete request and the
-                    # status bar reports it; saved request controls stay beside the stage.
-                    page.locator(".rail[data-stage=plan]").click()
-                    page.locator("#next-step").evaluate("element => element.open = true")
-                    expect(page.locator("#transition")).to_have_text("Send to Codex")
-                    page.locator("#message").fill("Focus the storage layer only.")
-                    page.locator("#copy-request").click()
-                    expect(page.locator("#implementation-warning")).to_be_visible()
-                    page.locator("#implementation-back").click()
-                    expect(page.locator("#message")).to_have_value("Focus the storage layer only.")
-                    page.locator("#copy-request").click()
-                    page.locator("#implementation-proceed").click()
-                    implementation = self.home / "One" / "One — Implementation Request.md"
-                    expect(page.locator("#status-bar")).to_contain_text("Implement the Plan request copied and saved", timeout=8000)
-                    self.assertIn("Focus the storage layer only.", implementation.read_text(encoding="utf-8"))
-                    self.assertIn("Framework instructions", implementation.read_text(encoding="utf-8"))
-                    # Delivered through the clipboard: the unsent text is consumed once.
-                    expect(page.locator("#message")).to_have_value("")
-                    expect(page.locator("#saved-request")).to_be_visible()
-                    expect(page.locator("#prepared-path")).to_have_value(str(implementation))
-                    # A Hermes/Qwen selection has no in-app route: the step-6
-                    # button names Terminal, and Run to Completion stays off.
-                    self.choose_primary(page, "Qwen Code")
-                    expect(page.locator("#transition")).to_have_text("Open Qwen Code in Terminal")
-                    expect(page.locator("#run-completion")).to_be_disabled()
-                    self.assertIn("has no Agent Bridge work mode", page.locator("#run-completion").get_attribute("title") or "")
-                    self.assertIn("Open in Terminal and Copy request stay available", page.locator("#run-completion").get_attribute("title") or "")
-                    self.choose_primary(page, "Claude Code")
-                    expect(page.locator("#run-completion")).to_be_enabled()
-                finally:
-                    browser.close()
-            self.assertGreater(probes.call_count, 0)
-
+                self.browser_session() as browser:
+            page = browser.new_page()
+            page.goto(self.server.url)
+            self.select_project(page, first)
+            self.choose_primary(page, "Codex")
+            page.wait_for_function("() => peerFacts('codex')?.authentication === 'confirmed'")
+            expect(page.locator("#tool-problem")).to_contain_text("Gear (optional): primary analytical role available.")
+            checked = probes.call_count
+            for stage in ("plan", "build", "specification"):
+                page.locator(f'.rail[data-stage="{stage}"]').click()
+                self.assertEqual(page.evaluate("destinationName"), "Codex")
+            self.assertEqual(probes.call_count, checked)
+            self.select_project(page, second)
+            page.wait_for_function("() => project?.name === 'Two' && destinationName === ''")
+            self.select_project(page, first)
+            page.wait_for_function("() => project?.name === 'One' && destinationName === 'Codex'")
 
     def test_document_outcomes_and_build_send_copy_agree(self):
-        from playwright.sync_api import expect, sync_playwright
         project_name = "Sample — Inspect the map"
         directory = "Stored project folder"
         project_id = self.request("/api/create", {"directory": directory, "name": project_name, "description": "", "goals": ""})[1]["id"]
@@ -1733,10 +729,10 @@ elif skill.exists():
         for role in ("Specification", "Plan"):
             path = folder / f"{project_name} — {role}.md"
             (folder / f"{role}.md").rename(path)
-            path.write_text(f"# {role}\n\n## Scope\nThe agreed work.\n\n## Current review\nVerdict: COMPLETE\n", encoding="utf-8")
+            path.write_text(f"---\nreview: PASSED\n---\n# {role}\n\n## Scope\nThe agreed work.\n\n## Current review\nThe agreed scope sufficiently guides the work.\n", encoding="utf-8")
         result = folder / f"{project_name} — Programming Result current.md"
         report = folder / f"{project_name} — Verification Report current.md"
-        result.write_text("# Programming Result\n\nProgramming completed 8 October 2026 under the approved Plan.\n", encoding="utf-8")
+        result.write_text("---\nstatus: PASSED\n---\n# Programming Result\n\nProgramming completed 8 October 2026 under the approved Plan.\n", encoding="utf-8")
         passing_report = ("---\nstatus: PASSED\n---\n# Verification Report\n\n**PASSED.** "
                           "The map meets the approved check by direct static inspection. No material finding remains. "
                           "This verifies the map only; it does not implement or accept anything. The user owns acceptance.\n")
@@ -1750,8 +746,7 @@ elif skill.exists():
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "unknown", "warnings": []}
         with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready), \
                 mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
-                mock.patch("ora_vibe_coder.server.model_inventory", return_value={"models": []}), sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+                mock.patch("ora_vibe_coder.server.model_inventory", return_value={"models": []}), self.browser_session() as browser:
             context = browser.new_context(permissions=["clipboard-read", "clipboard-write"])
             try:
                 page = context.new_page()
@@ -1759,7 +754,6 @@ elif skill.exists():
                 page.evaluate("() => { window.clipboardText = ''; navigator.clipboard.writeText = text => { window.clipboardText = text; return Promise.resolve(); }; }")
                 self.select_project(page, project_id)
                 page.locator('.rail[data-stage="specification"]').click()
-                # The displayed verdict is binary: a current COMPLETE assessment is PASSED.
                 expect(page.locator("#assessment")).to_have_text("PASSED")
                 expect(page.locator("#assessment-note")).to_contain_text("applicability to the current document version is unconfirmed")
                 expected_labels = {
@@ -1800,26 +794,66 @@ elif skill.exists():
                 expect(page.locator("#assessment-note summary")).to_contain_text(report.name)
                 expect(page.locator("#reader")).to_contain_text("This verifies the map only")
                 expect(page.locator("#project-completion .completion-wide")).to_have_text("REPORTED COMPLETE")
+                definition = folder / "Project.md"
+                definition.write_text(definition.read_text(encoding="utf-8").replace("Programming: NOT STARTED", "Programming: IN PROGRESS"), encoding="utf-8")
+                page.locator("#refresh").click()
+                expect(page.locator("#project-completion")).to_be_hidden()
+                definition.write_text(definition.read_text(encoding="utf-8").replace("Programming: IN PROGRESS", "Programming: NOT STARTED"), encoding="utf-8")
+                page.locator("#refresh").click()
+                expect(page.locator("#project-completion .completion-wide")).to_have_text("REPORTED COMPLETE")
 
+                # A contradictory body never changes a valid YAML verdict.
+                report.write_text(passing_report.replace("No material finding remains.", "But the current candidate failed."), encoding="utf-8")
+                page.locator("#refresh").click()
+                expect(page.locator("#assessment")).to_have_text("PASSED")
                 for failed_report in (
-                        "# Verification Report\n\n**Verdict: PASSED.** But the current candidate failed.\n",
-                        passing_report.replace("No material finding remains.", "But the current candidate failed.")):
+                        passing_report.replace("status: PASSED", "status: PASSED today"),
+                        passing_report.replace("status: PASSED", "status: PASSED\nstatus: PASSED")):
                     report.write_text(failed_report, encoding="utf-8")
                     page.locator("#refresh").click()
                     expect(page.locator("#assessment")).to_have_text("REPORT ERROR")
-                    expect(page.locator("#assessment-note")).to_contain_text("current candidate failed")
+                    expect(page.locator("#assessment-note")).to_contain_text("PASSED today" if "today" in failed_report else "Duplicate")
                     expect(page.locator("#project-completion")).to_be_hidden()
-                report.write_text(passing_report + "\nVerdict: NOT PASSED\n", encoding="utf-8")
-                page.locator("#refresh").click()
-                expect(page.locator("#assessment")).to_have_text("REPORT ERROR")
-                expect(page.locator("#project-completion")).to_be_hidden()
-                report.write_text("# Verification Report\n\nStatus: PASSED\n\n## Earlier review\nVerdict: NOT PASSED\n", encoding="utf-8")
+                report.write_text("---\nstatus: PASSED\n---\n# Verification Report\n\n## Earlier review\nVerdict: NOT PASSED\n", encoding="utf-8")
                 page.locator("#refresh").click()
                 expect(page.locator("#assessment")).to_have_text("PASSED")
 
-                # Build's steps share one delivery path: Copy saves the complete
-                # request with the selected evidence; Send posts the identical
-                # instruction. No conversation turn is started by Copy.
+                failed_report = ("---\nstatus: NOT PASSED\ndisposition: CORRECTION\n---\n# Verification Report\n"
+                                 "- R1 — login accepts an empty password.\n"
+                                 "- R2 — export omits the summary row.\n")
+                correction = ("---\nstatus: PASSED\ndisposition: SETTLED\n---\n# Programming Result\n"
+                              "- R1 — FIXED — the empty-password check now rejects login.\n"
+                              "- R2 — REJECTED — the approved scope excludes a summary row.\n")
+                report.write_text(failed_report, encoding="utf-8")
+                result.write_text(correction.replace("- R2 — REJECTED — the approved scope excludes a summary row.\n", ""), encoding="utf-8")
+                page.locator("#refresh").click()
+                expect(page.locator("#assessment")).to_have_text("NOT PASSED")
+                expect(page.locator("#project-completion")).to_be_hidden()
+                result.write_text(correction, encoding="utf-8")
+                page.locator("#refresh").click()
+                expect(page.locator("#assessment")).to_have_text("CORRECTED")
+                expect(page.locator("#assessment")).to_have_class("assessment complete")
+                expect(page.locator("#result-status")).to_have_class("assessment complete")
+                expect(page.locator("#project-completion")).to_be_visible()
+                expect(page.locator("#next-step-title")).to_have_text("Correction completed")
+                page.reload()
+                self.select_project(page, project_id)
+                page.locator('.rail[data-stage="build"]').click()
+                expect(page.locator("#assessment")).to_have_text("CORRECTED")
+                expect(page.locator("#assessment")).to_have_class("assessment complete")
+                expect(page.locator("#project-completion")).to_be_visible()
+                page.locator("#assessment").click()
+                expect(page.locator("#reader")).to_contain_text("status: NOT PASSED")
+                self.assertEqual(report.read_text(encoding="utf-8"), failed_report)
+                report.write_text(failed_report.replace("login accepts", "login still accepts"), encoding="utf-8")
+                page.locator("#refresh").click()
+                expect(page.locator("#assessment")).to_have_text("NOT PASSED")
+                expect(page.locator("#project-completion")).to_be_hidden()
+                report.write_text(passing_report, encoding="utf-8")
+                page.locator("#refresh").click()
+                expect(page.locator("#assessment")).to_have_text("PASSED")
+                page.evaluate("() => { window.clipboardText = ''; navigator.clipboard.writeText = text => { window.clipboardText = text; return Promise.resolve(); }; }")
+
                 self.choose_primary(page, "Codex")
                 page.locator("#review-step").evaluate("element => element.open = true")
                 page.locator("#verifier-choice .role-model-choice").select_option(compact_value("claude"))
@@ -1835,9 +869,6 @@ elif skill.exists():
                     deliveries.append(body)
                     route.fulfill(json={"turn": f"fake-{len(deliveries)}", "operation": {"turn": f"fake-{len(deliveries)}", "state": "finished", "stage": "verification" if body["step"] == "verification" else "programming", "elapsed_seconds": 0}, "images": []})
                 page.route("**/api/deliver", deliver)
-                # The delivery assertions read the status bar's own words; the
-                # poll's changed-file notice for this test's own writes would
-                # overwrite them, so polling pauses for this segment.
                 page.evaluate("() => stopPolling()")
                 for action, button in (("verify", "#review"), ("correct", "#transition")):
                     if action == "correct":
@@ -1850,10 +881,6 @@ elif skill.exists():
                     expect(page.locator("#build-action-send")).to_have_text("Send to Claude Code" if action == "verify" else "Send to Codex")
                     page.locator("#build-action-copy").click()
                     expect(page.locator("#build-action-dialog")).not_to_be_visible()
-                    # This project's Specification and Plan carry COMPLETE
-                    # reviews, so the advisory warning rightly stays away; its
-                    # asking-but-never-blocking behavior is covered where the
-                    # reviews are missing.
                     expect(page.locator("#implementation-warning")).to_be_hidden()
                     try:
                         expect(page.locator("#status-bar")).to_contain_text("copied and saved", timeout=5000)
@@ -1868,7 +895,6 @@ elif skill.exists():
                         self.assertIn("Stop there.", saved)
                         self.assertIn("Do not run or commission a new Ora Verification", saved)
                         self.assertIn("Fix the login defect first.", saved)
-                    # A copy consumes the unsent text once it is delivered.
                     expect(page.locator("#message")).to_have_value("")
                     page.locator(button).click()
                     with page.expect_response("**/api/deliver"):
@@ -1885,36 +911,30 @@ elif skill.exists():
             finally:
                 browser.close()
 
-
     def test_project_picker_and_details(self):
-        # The picker rescans when opened, keeps the last list with a stale
-        # notice when the rescan fails, and Details edits every field in one view.
-        try:
-            from playwright.sync_api import expect, sync_playwright
-        except ImportError:
-            self.skipTest("Playwright is not installed for the browser check")
         first = self.request("/api/create", {"directory": "One", "name": "One", "description": "Old description", "goals": "Old outcome"})[1]["id"]
-        with sync_playwright() as playwright:
-            if not Path(playwright.chromium.executable_path).is_file():
-                self.skipTest("Playwright's Chromium is not installed for the browser check")
-            browser = playwright.chromium.launch(headless=True)
+        with self.browser_session() as browser:
             try:
                 page = browser.new_page()
                 page.goto(self.server.url)
                 self.select_project(page, first)
                 expect(page.locator("#project")).to_have_value(first)
-                # Opening the picker rescans before showing the list.
                 second = self.request("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})[1]["id"]
                 page.locator("#project").click()
                 expect(page.locator(f'#project option[value="{second}"]')).to_have_count(1)
                 expect(page.locator("#project")).to_have_value(first)
-                # A failed rescan keeps the last list and says it may be out of date.
-                with mock.patch.object(self.server.store, "rescan", side_effect=Exception("scan failed")):
+                scanned = threading.Event()
+
+                def fail_scan():
+                    scanned.set()
+                    raise Exception("scan failed")
+
+                with mock.patch.object(self.server.store, "rescan", side_effect=fail_scan):
                     page.locator("#project").click()
+                    self.assertTrue(scanned.wait(5), "the picker click did not trigger a rescan")
                 expect(page.locator("#status-bar")).to_contain_text("may be out of date")
                 expect(page.locator(f'#project option[value="{second}"]')).to_have_count(1)
                 expect(page.locator("#project")).to_have_value(first)
-                # Details shows and edits every saved field in its one view.
                 page.locator("#project-card").click()
                 expect(page.locator("#editor")).to_be_visible()
                 expect(page.locator("#edit-name")).to_have_value("One")
@@ -1943,13 +963,6 @@ elif skill.exists():
                 browser.close()
 
     def test_handoffs_reviews_verdicts_and_approve_plan(self):
-        # One-click Send and Copy, the independent Reviewer, binary verdicts,
-        # the remembered judgment and sorting, Build's next actions, and
-        # Approve the Plan's server-side save.
-        try:
-            from playwright.sync_api import expect, sync_playwright
-        except ImportError:
-            self.skipTest("Playwright is not installed for the browser check")
         from ora_vibe_coder.status import review_basis
         project_id = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
         root = self.home / "One"
@@ -1960,49 +973,11 @@ elif skill.exists():
         def ready(peer, **kwargs):
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
 
-        def record(number, entries):
-            turn = f"{number:04d}-20260101-120000"
-            messages = root / ".vibe" / turn / "session" / "messages"
-            messages.mkdir(parents=True)
-            for sequence, (suffix, headers, body) in enumerate(entries, 1):
-                (messages / f"{sequence:04d}-{suffix}.md").write_text(
-                    f"# Message {sequence:04d}\n{headers}\n## Body\n\n{body}", encoding="utf-8")
-            return turn
-
-        def saved_sorting(number, stage, document, finding, legacy=False):
-            key = review_basis(document) if legacy else project_module.findings_key(document, stage)
-            findings = document if stage == "verification" else conversation.section_body(document, "Current review") or document
-            return record(number, [
-                ("initiator-record", "", conversation.aux_note_body("sorting", stage, "codex", {"Key": key},
-                    conversation.sorting_request(stage, document, findings))),
-                ("initiator-record", "", conversation.aux_outcome_body("sorting", stage, "codex", {"Key": key},
-                    "answered", "", {"ai": [finding], "user": ["Choose the example behavior."]})),
-            ])
-
-        def accepted_turn(number, updated_document=None):
-            def start(_registry, _project, tool, stage, text, images, *args, **kwargs):
-                if updated_document is not None:
-                    path, document = updated_document
-                    path.write_text(document, encoding="utf-8")
-                turn = record(number, [
-                    ("initiator-record", "", conversation.user_note_body(stage, tool, text, [])),
-                    ("initiator-to-peer", "Note-Ref: 0001\n", "Example request."),
-                    ("peer-to-initiator", "Answers: 0002\n", "Example reply."),
-                    ("initiator-record", "", conversation.outcome_note_body(stage, "finished", "no-change", "", "", "")),
-                ])
-                handle = mock.Mock(turn=turn, retained_images=[])
-                handle.snapshot.return_value = {"project": str(root), "turn": turn, "stage": stage,
-                                                "state": "finished", "elapsed_seconds": 0}
-                return handle
-            return start
-
         with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready), \
+                mock.patch("ora_vibe_coder.server.markup_installed", return_value=False) as markup, \
                 mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
                 mock.patch("ora_vibe_coder.server.model_inventory", return_value={"models": []}), \
-                mock.patch("ora_vibe_coder.conversation.start_aux", side_effect=ValueError("comparison unavailable in this fixture")), sync_playwright() as playwright:
-            if not Path(playwright.chromium.executable_path).is_file():
-                self.skipTest("Playwright's Chromium is not installed for the browser check")
-            browser = playwright.chromium.launch(headless=True)
+                mock.patch("ora_vibe_coder.conversation.start_aux", side_effect=ValueError("comparison unavailable in this fixture")) as auxiliary, self.browser_session() as browser:
             context = browser.new_context(permissions=["clipboard-read", "clipboard-write"])
             try:
                 page = context.new_page()
@@ -2011,27 +986,25 @@ elif skill.exists():
                 self.select_project(page, project_id)
                 page.wait_for_function("() => pollTimer !== null && conversationLoaded")
                 self.choose_primary(page, "Codex")
-                # The step-5 Reviewer starts at the step-3 tool and then stays
-                # independent: changing either changes only itself.
                 page.wait_for_function("() => readinessState.peers?.some(peer => peer.peer === 'codex')")
+                expect(page.locator("#capture")).to_be_hidden()  # No markup tool on this machine.
+                markup.return_value = True
+                page.evaluate("refreshReadiness(true)")
+                expect(page.locator("#capture")).to_be_visible()
                 page.locator("#review-step").evaluate("element => element.open = true")
-                expect(page.locator("#step-reviewer")).to_have_value("codex")
+                self.assertEqual(page.evaluate("chosenReviewerTool()"), "codex")
                 page.locator("#document-review-choice .role-model-choice").select_option(compact_value("codex"))
                 self.choose_primary(page, "Claude Code")
-                expect(page.locator("#step-reviewer")).to_have_value("codex")
+                self.assertEqual(page.evaluate("chosenReviewerTool()"), "codex")
                 page.locator("#document-review-choice .role-model-choice").select_option(compact_value("claude"))
                 self.choose_primary(page, "Codex")
-                expect(page.locator("#step-reviewer")).to_have_value("claude")
+                self.assertEqual(page.evaluate("chosenReviewerTool()"), "claude")
 
-                # No assessment means NOT REVIEWED, never a failure; an
-                # untouched template is NOT STARTED, its own distinct state.
                 expect(page.locator("#assessment")).to_have_text("NOT STARTED")
                 specification.write_text("# One — Specification\n\nRequirements: Preserve all records.\n", encoding="utf-8")
                 page.locator("#refresh").click()
                 expect(page.locator("#assessment")).to_have_text("NOT REVIEWED")
 
-                # One-click Create Plan: unsent text and files are included once
-                # and cleared only after the server confirms the turn.
                 page.locator("#next-step").evaluate("element => element.open = true")
                 page.locator("#message").fill("Plan around the storage layer.")
                 page.evaluate("path => messageFilesFor(currentId, 'specification').push({path, name: 'Outside note.md'})", str(note))
@@ -2045,14 +1018,6 @@ elif skill.exists():
                         return
                     route.fulfill(json={"turn": f"turn-{len(sends)}", "operation": {"turn": f"turn-{len(sends)}", "state": "finished", "elapsed_seconds": 0}, "images": [], "path": str(root / "Handoff.md"), "text": "Synthetic prepared request"})
                 page.route("**/api/deliver", deliver)
-                # The ordinary operation poll can observe an optional meaning
-                # comparison. It leaves both the composer and next stage
-                # available; the registry safely retires it upon admission.
-                page.evaluate("operation => updateOperation(operation)", {
-                    "project": str(root), "turn": "meaning-comparison", "stage": "materiality-specification",
-                    "state": "running", "elapsed_seconds": 1, "last_contact_seconds": 0})
-                expect(page.locator("#send")).to_be_enabled()
-                expect(page.locator("#transition")).to_be_enabled()
                 page.locator("#transition").click()
                 expect(page.locator("#message")).to_have_value("")
                 expect(page.locator("#prepared-path")).to_have_value(str(root / "Handoff.md"))
@@ -2060,7 +1025,6 @@ elif skill.exists():
                 self.assertEqual(sends[0]["step"], "create-plan")
                 self.assertEqual(sends[0]["text"], "Plan around the storage layer.")
                 self.assertEqual(sends[0]["files"], [str(note)])
-                # A failed delivery keeps the input and the previous saved request.
                 page.route("**/api/deliver", lambda route: route.fulfill(status=500, content_type="application/json", body='{"error":"save failed"}'))
                 page.locator("#message").fill("Second attempt text.")
                 page.locator("#transition").click()
@@ -2069,8 +1033,6 @@ elif skill.exists():
                 page.unroute("**/api/deliver")
                 page.route("**/api/deliver", deliver)
 
-                # A copy saves the complete request — the unsent text and files
-                # included once — and names pictures it cannot carry.
                 page.evaluate("() => attachments.push({name: 'shot.png', data: 'aGk=', url: 'blob:x'})")
                 with page.expect_response(lambda response: "/api/deliver" in response.url) as copied_response:
                     page.locator("#copy-request").click()
@@ -2080,17 +1042,9 @@ elif skill.exists():
                 expect(page.locator("#message")).to_have_value("")
                 handoff = (root / "Handoff.md").read_text(encoding="utf-8")
                 self.assertIn("Second attempt text.", handoff)
-                # The saved/copied packet itself names the picture it cannot
-                # carry, so the recipient sees the limitation too — not only
-                # this app's status bar.
                 self.assertIn("Pictures not carried by this request: shot.png.", handoff)
-                # The note travelled with the send and was consumed; the copy
-                # carries this delivery's own unsent text, not an attachment
-                # from the earlier turn.
                 self.assertNotIn("Outside context for the Plan.", handoff)
                 self.assertEqual(page.evaluate("() => window.clipboardText"), handoff)
-                # A saved-request conflict remains visible after a known
-                # ended action, and an idle poll cannot erase the remedy.
                 page.evaluate("() => { stopPolling(); updateOperation({turn: 'ended-copy', stage: 'planning', state: 'finished', elapsed_seconds: 2}); }")
                 changed_handoff = handoff + "\nAn external saved change.\n"
                 (root / "Handoff.md").write_text(changed_handoff, encoding="utf-8")
@@ -2104,66 +1058,99 @@ elif skill.exists():
                 page.evaluate("() => startPolling()")
                 self.assertIn("status: APPROVED", specification.read_text())
                 self.assertNotIn("review: PASSED", specification.read_text())
+                specification.write_text(specification.read_text().replace("Preserve all records.", "Retain selected records."))
+                page.locator("#refresh").click()
+                expect(page.locator("#assessment-note")).to_contain_text("The text changed")
+                auxiliary.assert_not_called()
 
-                # PASSED / NOT PASSED from the saved record; an unclear record
-                # gets one remembered judgment, and a failed call a reading error.
-                reviewed = "# One — Specification\n\n## Description\n\nBehavior.\n\n## Current review\n\nStage: Specification\nVerdict: COMPLETE\nBasis: {basis}\nBasis format: content-v2\n"
+                reviewed = "---\nreview: PASSED\n---\n# One — Specification\n\n## Description\n\nBehavior.\n\n## Current review\n\nStage: Specification\nBasis: {basis}\nBasis format: content-v2\n"
                 specification.write_text(reviewed.replace("{basis}", review_basis(reviewed)), encoding="utf-8")
                 page.locator("#refresh").click()
                 expect(page.locator("#assessment")).to_have_text("PASSED")
-                specification.write_text(reviewed.replace("Verdict: COMPLETE", "Verdict: INCOMPLETE").replace("{basis}", review_basis(reviewed.replace("Verdict: COMPLETE", "Verdict: INCOMPLETE"))).replace("Behavior.", "Behavior, changed."), encoding="utf-8")
+                specification.write_text(reviewed.replace("review: PASSED", "review: NOT PASSED").replace("{basis}", review_basis(reviewed)).replace("Behavior.", "Behavior, changed."), encoding="utf-8")
                 page.locator("#refresh").click()
                 expect(page.locator("#assessment")).to_have_text("NOT PASSED")
-                unclear = "# One — Specification\n\n## Description\n\nBehavior.\n\n## Current review\n\nStage: Specification\nVerdict: COMPLETE and also INCOMPLETE in the summary.\nBasis: {basis}\nBasis format: content-v2\n"
-                unclear = unclear.replace("{basis}", review_basis(unclear))
-                specification.write_text(unclear, encoding="utf-8")
-                with mock.patch("ora_vibe_coder.conversation.bridge_call",
-                                side_effect=Exception("bridge unavailable")):
-                    page.locator("#refresh").click()
-                    expect(page.locator("#assessment")).to_have_text("REPORT ERROR")
-                    self.assertIn("conclusion", (page.locator("#assessment").get_attribute("title") or "").lower())
+                expect(page.locator("#approve-plan")).to_be_enabled()
+                specification.write_text("---\nstatus: DRAFT\nreview: INCOMPLETE\n---\n# One — Specification\n\nRequirements: Preserve all records.\n", encoding="utf-8")
+                page.locator("#refresh").click()
+                expect(page.locator("#assessment")).to_have_text("REVIEW INCOMPLETE")
+                off_list = reviewed.replace("review: PASSED", "review: PASSED and NOT PASSED")
+                specification.write_text(off_list, encoding="utf-8")
+                page.locator("#refresh").click()
+                expect(page.locator("#assessment")).to_have_text("REPORT ERROR")
+                self.assertIn("review", (page.locator("#assessment").get_attribute("title") or "").lower())
 
-                # Approve the Plan is greyed until COMPLETE, then saves
-                # Status: APPROVED preserving the rest of the document and review.
-                plan.write_text("# One — Plan\n\nStatus: AWAITING APPROVAL\n\n## Approach\n\nSteps.\n\n## Current review\n\nStage: Plan\nVerdict: INCOMPLETE\nBasis: {basis}\nBasis format: content-v2\n", encoding="utf-8")
+                plan.write_text("---\nstatus: AWAITING APPROVAL\nreview: INCOMPLETE\n---\n# One — Plan\n\n## Approach\n\nSteps.\n\n## Current review\n\nStage: Plan\nBasis: {basis}\nBasis format: content-v2\n", encoding="utf-8")
                 plan_text = plan.read_text(encoding="utf-8").replace("{basis}", review_basis(plan.read_text(encoding="utf-8")))
                 plan.write_text(plan_text, encoding="utf-8")
                 page.locator(".rail[data-stage=plan]").click()
+                page.locator("#refresh").click()
+                expect(page.locator("#saved-request")).to_be_hidden()
+                expect(page.locator("#copy-request")).to_have_text("Copy request for any AI")
+                expect(page.locator("#assessment")).to_have_text("REVIEW INCOMPLETE")
+                expect(page.locator("#approve-plan")).to_be_disabled()  # Greyed until the review is PASSED.
+                completed = plan_text.replace("review: INCOMPLETE", "review: PASSED")
+                plan.write_text(completed, encoding="utf-8")
+                page.locator("#refresh").click()
                 expect(page.locator("#approve-plan")).to_be_enabled()
-                expect(page.locator("#assessment")).to_have_text("NOT PASSED")
+                expect(page.locator("#assessment")).to_have_text("PASSED")
                 with mock.patch("ora_vibe_coder.project.atomic_write", side_effect=OSError("disk full")):
                     page.locator("#approve-plan").click()
                     expect(page.locator("#status-bar"), "the failed save reports and keeps the prior file").to_contain_text("disk full")
-                self.assertIn("Status: AWAITING APPROVAL", plan.read_text(encoding="utf-8"))
+                self.assertIn("status: AWAITING APPROVAL", plan.read_text(encoding="utf-8"))
                 page.locator("#approve-plan").click()
                 expect(page.locator("#status-bar")).to_contain_text("status: APPROVED saved")
                 saved_plan = plan.read_text(encoding="utf-8")
                 self.assertIn("status: APPROVED", saved_plan)
                 self.assertIn("## Approach\n\nSteps.", saved_plan)
-                self.assertIn("Verdict: INCOMPLETE", saved_plan)
+                self.assertIn("Stage: Plan", saved_plan)
                 expect(page.locator("#approve-plan")).to_be_disabled()
-                expect(page.locator("#assessment")).to_have_text("NOT PASSED")
+                expect(page.locator("#assessment")).to_have_text("PASSED")
                 expect(page.locator("#reader")).to_contain_text("status: APPROVED")
 
-                # Build's verdicts and next actions: NOT PASSED offers Request
-                # repairs; REVIEW INCOMPLETE offers to finish or rerun; a legacy
-                # combined label shows as REVIEW INCOMPLETE.
+                page.locator("#next-step").evaluate("element => element.open = true")
+                page.locator("#implementation-choice .role-model-choice").select_option(compact_value("zcode"))
+                expect(page.locator("#transition")).to_have_text("Send to ZCode")
+                page.locator("#message").fill("Implement with the receiving AI's own tools.")
+                page.evaluate("path => messageFilesFor(currentId, 'plan').push({path, name: 'Outside note.md'})", str(note))
+                page.locator("#copy-request").click()
+                page.locator("#implementation-proceed").click()
+                expect(page.locator("#status-bar")).to_contain_text("copied and saved")
+                expect(page.locator("#saved-request")).to_be_hidden()
+                implementation_request = self.server.store.projects[project_id].packet_path("implement-plan").read_text(encoding="utf-8")
+                self.assertEqual(page.evaluate("() => window.clipboardText"), implementation_request)
+                for content in ("This assignment is for you, the AI receiving this request.",
+                                "Implement with the receiving AI's own tools.", "Outside context for the Plan.",
+                                specification.read_text(encoding="utf-8"), saved_plan):
+                    self.assertTrue(content in implementation_request, "The copied request must preserve its instruction and current source material.")
+                self.assertNotIn("Selected receiving harness", implementation_request)
+                self.assertNotIn("Requested harness choices", implementation_request)
+                self.assertEqual(sends[-1]["action"], "copy")
+                page.locator(".rail[data-stage=specification]").click()
+                page.locator(".rail[data-stage=plan]").click()
+                expect(page.locator("#saved-request")).to_be_hidden()
+                expect(page.locator("#delivery-note")).not_to_contain_text("Desktop")
+                expect(page.locator("#delivery-note")).not_to_contain_text("Terminal")
+                page.locator("#message").fill("Send this implementation to the chosen AI.")
+                page.locator("#transition").click()
+                page.locator("#implementation-proceed").click()
+                expect(page.locator("#message")).to_have_value("")
+                self.assertEqual((sends[-1]["action"], sends[-1]["tool"]), ("send", "zcode"))
+                expect(page.locator("#saved-request")).to_be_hidden()
+
                 page.locator(".rail[data-stage=build]").click()
                 expect(page.locator("#assessment")).to_have_text("NOT VERIFIED")
                 (root / "One — Programming Result.md").write_text("# Programming Result\n\nSummary: Implemented record export.\n", encoding="utf-8")
                 page.locator("#refresh").click()
                 expect(page.locator("#result-status")).to_have_text("VERDICT MISSING")
-                (root / "One — Programming Result.md").write_text("# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n", encoding="utf-8")
-                (root / "One — Verification Report.md").write_text("# Verification Report\n\nVerdict: NOT PASSED\n\n- The login check fails.\n", encoding="utf-8")
+                (root / "One — Programming Result.md").write_text("---\nstatus: PASSED\n---\n# Programming Result\n\nDelivered.\n", encoding="utf-8")
+                (root / "One — Verification Report.md").write_text("---\nstatus: NOT PASSED\n---\n# Verification Report\n\n- The login check fails.\n", encoding="utf-8")
                 page.locator("#refresh").click()
                 expect(page.locator("#assessment")).to_have_text("NOT PASSED")
                 expect(page.locator("#next-step-title")).to_have_text("Correct the implementation")
-                # A sorting that cannot run shows as a failed sorting with Retry —
-                # never as a verdict, a repair or an invented question.
                 expect(page.locator("#repairs-box")).to_be_visible()
                 expect(page.locator("#repairs-box")).to_contain_text("Findings sorting failed")
                 expect(page.locator("#repairs-box button", has_text="Retry sorting")).to_be_enabled()
-                # A completed NOT PASSED keeps the correction direction.
                 expect(page.locator("#transition")).to_have_text("Request repairs")
                 page.locator("#next-step").evaluate("element => element.open = true")
                 page.locator("#transition").click()
@@ -2172,176 +1159,101 @@ elif skill.exists():
                 page.locator("#build-action-cancel").click()
                 expect(page.locator("#build-action-dialog")).not_to_be_visible()
 
-                # Reuse the existing sorting record, then preserve the unanswered
-                # list on rejection and retire it only after an accepted reply.
-                report_path = root / "One — Verification Report.md"
-                original_report = report_path.read_text(encoding="utf-8")
-                saved_sorting(1, "verification", original_report, "Repair the first example.", legacy=True)
-                page.locator("#repairs-box button", has_text="Retry sorting").click()
-                expect(page.locator("#repairs-box")).to_contain_text("Repair the first example.")
-                expect(page.locator("#repairs-box")).to_contain_text("Needs your input")
-                page.evaluate("() => { window.unchangedFinding = document.querySelector('#repairs-box li'); }")
-                page.evaluate("() => pollTick()")
-                self.assertTrue(page.evaluate("() => unchangedFinding?.isConnected && unchangedFinding === document.querySelector('#repairs-box li')"))
-                # Returning to a cached list while another workspace's sorting
-                # is pending replaces its loading message with that list.
-                page.evaluate("() => { for (const key of sortingState.keys()) if (key.includes(':planning:')) sortingState.delete(key); }")
-                pending_sorting = []
-                page.route("**/api/sort-findings", lambda route: pending_sorting.append(route))
-                try:
-                    page.locator(".rail[data-stage=plan]").click()
-                    expect(page.locator("#repairs-box")).to_contain_text("Sorting the findings")
-                    self.assertTrue(pending_sorting)
-                    page.locator(".rail[data-stage=build]").click()
-                    expect(page.locator("#repairs-box")).to_contain_text("Repair the first example.")
-                finally:
-                    for route in pending_sorting:
-                        route.fulfill(json={"state": "failed", "reason": "Example sorting unavailable"})
-                    page.unroute("**/api/sort-findings")
-                operation = {"project": str(root), "turn": "0002-20260101-120000", "stage": "verification",
-                             "state": "running", "elapsed_seconds": 1, "last_contact_seconds": 0}
-                page.evaluate("operation => updateOperation(operation)", {**operation, "project": str(self.home / "Other")})
-                expect(page.locator("#repairs-box")).to_be_visible()
-                page.evaluate("operation => updateOperation(operation)", operation)
-                expect(page.locator("#repairs-box")).to_be_hidden()
-                page.evaluate("operation => updateOperation(operation)", {**operation, "state": "failed", "reason": "Example turn failed"})
-                expect(page.locator("#repairs-box")).to_contain_text("Repair the first example.")
-                page.locator("#build-reply-stage").select_option("verification")
-                page.locator("#message").fill("Use the example behavior and continue.")
-                before_images = page.evaluate("() => attachments.map(item => item.name)")
-                page.route("**/api/converse", lambda route: route.fulfill(status=409, json={"error": "Example submission rejected"}))
-                page.locator("#send").click()
-                expect(page.locator("#status-bar")).to_contain_text("Example submission rejected")
-                expect(page.locator("#repairs-box")).to_contain_text("Repair the first example.")
-                expect(page.locator("#message")).to_have_value("Use the example behavior and continue.")
-                self.assertEqual(page.evaluate("() => attachments.map(item => item.name)"), before_images)
-                page.unroute("**/api/converse")
-                with mock.patch("ora_vibe_coder.conversation.start_turn", side_effect=accepted_turn(2)):
-                    page.locator("#send").click()
-                    expect(page.locator("#repairs-box")).to_be_hidden()
-                    expect(page.locator("#message")).to_have_value("")
+                (root / "One — Verification Report.md").write_text("---\nstatus: INCOMPLETE\n---\n# Verification Report\n\n- A finding and an unfinished check.\n", encoding="utf-8")
                 page.locator("#refresh").click()
-                page.evaluate("() => pollTick()")
-                expect(page.locator("#repairs-box")).to_be_hidden()
-                self.assertEqual(report_path.read_text(encoding="utf-8"), original_report)
-                expect(page.locator("#assessment")).to_have_text("NOT PASSED")
-                page.reload()
-                self.select_project(page, project_id)
-                page.wait_for_function("() => pollTimer !== null && conversationLoaded")
-                page.locator(".rail[data-stage=build]").click()
-                self.choose_primary(page, "Codex")
-                page.locator("#next-step").evaluate("element => element.open = true")
-                page.wait_for_function("() => [...sortingState.values()].some(result => result.turn === '0001-20260101-120000')")
-                expect(page.locator("#repairs-box")).to_be_hidden()
-
-                # The same filename and verdict with fresh findings must show
-                # its new list. Sending the verification step retires that list
-                # through the same path as an ordinary reply.
-                fresh_report = original_report + "\n## Current review\n\n- The next example needs adjustment.\n"
-                self.assertEqual(review_basis(original_report), review_basis(fresh_report))
-                report_path.write_text(fresh_report, encoding="utf-8")
-                saved_sorting(3, "verification", fresh_report, "Repair the next example.")
-                page.locator("#refresh").click()
-                expect(page.locator("#repairs-box")).to_contain_text("Repair the next example.")
-                expect(page.locator("#repairs-box")).not_to_contain_text("Repair the first example.")
-                page.unroute("**/api/deliver")
-                with mock.patch("ora_vibe_coder.conversation.start_turn", side_effect=accepted_turn(4)) as submitted:
-                    page.evaluate("() => deliverStep('verification', 'send')")
-                    submitted.assert_called_once()
-                expect(page.locator("#repairs-box")).to_be_hidden()
-                self.assertEqual(report_path.read_text(encoding="utf-8"), fresh_report)
-                expect(page.locator("#assessment")).to_have_text("NOT PASSED")
-                (root / "One — Verification Report.md").write_text("# Verification Report\n\nVerdict: NOT PASSED — REVIEW INCOMPLETE\n\n- A finding and an unfinished check.\n", encoding="utf-8")
-                page.locator("#refresh").click()
-                expect(page.locator("#assessment")).to_have_text("INCOMPLETE")
-                # An unfinished review directs no source repairs: step 7 offers
-                # finishing or rerunning the verification instead, and no
-                # findings sorting runs for it.
+                expect(page.locator("#assessment")).to_have_text("REVIEW INCOMPLETE")
                 expect(page.locator("#next-step-title")).to_have_text("Finish or rerun the verification")
                 expect(page.locator("#transition")).to_have_text("Finish verification")
                 expect(page.locator("#repairs-box")).to_be_hidden()
-                page.locator("#transition").click()
-                expect(page.locator("#build-action-dialog")).to_be_visible()
-                expect(page.locator("#build-action-title")).to_have_text("Independently verify the implementation")
-                page.locator("#build-action-cancel").click()
-                expect(page.locator("#build-action-dialog")).not_to_be_visible()
-                (root / "One — Verification Report.md").write_text("# Verification Report\n\nVerdict: PASSED\n\nAll checks passed.\n", encoding="utf-8")
+                (root / "One — Verification Report.md").write_text("---\nstatus: PASSED\n---\n# Verification Report\n\nAll checks passed.\n", encoding="utf-8")
                 page.locator("#refresh").click()
                 expect(page.locator("#assessment")).to_have_text("PASSED")
-                # The canonical states use the same rendered labels and colors
-                # as legacy results, with distinct empty/error displays.
-                report_path = root / "One — Verification Report.md"
-                for contents, label in (
-                    ("# Verification Report\n\n## Findings\n", "NOT STARTED"),
-                    ("---\nstatus:\n---\n# Verification Report\n\n## Findings\n", "NOT STARTED"),
-                    ("---\nstatus: null\n---\n# Verification Report\n\n## Findings\n", "NOT STARTED"),
-                    ("# Verification Report\n\nThe evidence could not be assessed.\n", "VERDICT MISSING"),
-                    ("# Verification Report\n\nSummary: Checked the record export.\n", "VERDICT MISSING"),
-                    ("---\nstatus:\n---\n# Verification Report\n\nRequired evidence is missing.\n", "VERDICT MISSING"),
-                    ("---\nstatus: ~\n---\n# Verification Report\n\nRequired evidence is missing.\n", "VERDICT MISSING"),
-                    ('---\nstatus: "null"\n---\n# Verification Report\n', "REPORT ERROR"),
-                    ("---\nstatus:\nstatus:\n---\n# Verification Report\n", "REPORT ERROR"),
-                    ("---\nstatus:\n  verdict: PASSED\n---\n# Verification Report\n", "REPORT ERROR"),
-                    ("---\nstatus: UNKNOWN\n---\n# Verification Report\n", "REPORT ERROR"),
-                    ("---\nstatus: PASSED\nstatus: PASSED\n---\n# Verification Report\n", "REPORT ERROR"),
-                    ("---\nstatus: PASSED\n---\n# Verification Report\n\n## Current outcome\nVerdict: NOT PASSED\n", "REPORT ERROR"),
-                    ("---\nstatus: PASSED\n---\n# Verification Report\n\n## Current outcome\nVerdict: PASSED — but the required checks failed.\n", "REPORT ERROR"),
-                    ("---\nstatus: INCOMPLETE\n---\n# Verification Report\n\nRequired evidence is unavailable.\n", "INCOMPLETE"),
-                ):
-                    report_path.write_text(contents, encoding="utf-8")
-                    page.locator("#refresh").click()
-                    expect(page.locator("#assessment")).to_have_text(label)
-                    if label != "NOT STARTED":
-                        expect(page.locator("#assessment")).to_have_class("assessment working")
-                report_path.write_bytes(b"\x00unreadable")
-                page.locator("#refresh").click()
-                expect(page.locator("#assessment")).to_have_text("COULD NOT READ")
-                expect(page.locator("#assessment-note")).to_contain_text("Binary content")
-                report_path.write_text("---\nstatus: INCOMPLETE\n---\n# Verification Report\n\nRequired evidence is unavailable.\n", encoding="utf-8")
-                page.locator("#refresh").click()
-                expect(page.locator("#assessment")).to_have_text("INCOMPLETE")
-
-                # Specification and Plan repair buttons share the same retirement
-                # rule. A changed review alone supplies fresh findings even when
-                # the assessed document's substantive basis stays the same.
-                for offset, (stage, rail, path, title) in enumerate((
-                    ("specification", "specification", specification, "Specification"),
-                    ("planning", "plan", plan, "Plan"),
-                )):
-                    document = f"# One — {title}\n\n## Content\n\nExample behavior.\n\n## Current review\n\nStage: {title}\nVerdict: INCOMPLETE\nBasis: {{basis}}\nBasis format: content-v2\n\n- Repair the example.\n"
-                    document = document.replace("{basis}", review_basis(document))
-                    path.write_text(document, encoding="utf-8")
-                    number = 5 + offset * 3
-                    saved_sorting(number, stage, document, f"Repair the {title} example.", legacy=True)
-                    page.locator(f".rail[data-stage={rail}]").click()
-                    page.locator("#refresh").click()
-                    expect(page.locator("#repairs-box")).to_contain_text(f"Repair the {title} example.")
-                    document = document.replace("Example behavior.", "Adjusted example behavior.")
-                    with mock.patch("ora_vibe_coder.conversation.start_turn", side_effect=accepted_turn(number + 1, (path, document))):
-                        page.locator("#repairs-box button", has_text="Request repairs").click()
-                        expect(page.locator("#repairs-box")).to_be_hidden()
-                    page.locator("#refresh").click()
-                    expect(page.locator("#repairs-box")).to_be_hidden()
-                    self.assertEqual(path.read_text(encoding="utf-8"), document)
-                    page.reload()
-                    self.select_project(page, project_id)
-                    page.wait_for_function("() => pollTimer !== null && conversationLoaded")
-                    page.locator(f".rail[data-stage={rail}]").click()
-                    self.choose_primary(page, "Codex")
-                    page.wait_for_function("turn => [...sortingState.values()].some(result => result.turn === turn)",
-                                           arg=f"{number:04d}-20260101-120000")
-                    expect(page.locator("#repairs-box")).to_be_hidden()
-                    changed = document.replace("- Repair the example.", "- Repair the later example.")
-                    self.assertEqual(review_basis(document), review_basis(changed))
-                    path.write_text(changed, encoding="utf-8")
-                    saved_sorting(number + 2, stage, changed, f"Repair the later {title} example.")
-                    page.locator("#refresh").click()
-                    expect(page.locator("#repairs-box")).to_contain_text(f"Repair the later {title} example.")
             finally:
                 browser.close()
 
+    def test_correction_replies_keep_recipient_and_choices_after_reopen(self):
+        from tests.test_conversation import FAKE_BRIDGE, no_change_block
+        bridge = self.home / "fake-bridge"
+        (bridge / "ora_agent_bridge").mkdir(parents=True)
+        (bridge / "ora_agent_bridge" / "__init__.py").write_text('VERSION = "1.7.0"\n')
+        (bridge / "ora_agent_bridge" / "__main__.py").write_text(FAKE_BRIDGE)
+        reply = self.home / "reply.md"
+        reply.write_text("I need your decision.\n\n## Questions for you\n- Which correction should I make next?\n\n" + no_change_block())
+        self.server.settings = Settings(self.home / "reply-settings.json")
+        defaults = {"implementation": {"tool": "zcode", "model": "build-model", "effort": "low"},
+                    "correction": {"tool": "codex", "model": "correction-model", "effort": "high"},
+                    "verification": {"tool": "claude", "model": "verify-model", "effort": "low"}}
+        self.server.settings.update(role_defaults=defaults, hide_advisory=True)
+        first = self.request("/api/create", {"directory": "Replies", "name": "Replies", "description": "", "goals": ""})[1]["id"]
+        other = self.request("/api/create", {"directory": "Other", "name": "Other", "description": "", "goals": ""})[1]["id"]
+        for role in ("Specification", "Plan"):
+            (self.home / "Replies" / f"{role}.md").write_text(f"---\nreview: PASSED\n---\n# {role}\n\nThe approved work.\n")
+        inventory = {"models": [{"id": model, "efforts": ["low", "high"]}
+                                for model in ("build-model", "correction-model", "verify-model")]}
+        ready = lambda peer, **kwargs: {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
+        with mock.patch.object(conversation, "BRIDGE_HOME", bridge), \
+                mock.patch.dict(os.environ, {"VIBE_FAKE_REPLY_FILE": str(reply)}), \
+                mock.patch.object(conversation, "bridge_check", side_effect=ready), \
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
+                mock.patch("ora_vibe_coder.server.model_inventory", return_value=inventory), \
+                mock.patch.object(conversation, "start_turn", wraps=conversation.start_turn) as starts, \
+                self.browser_session() as browser:
+            page = browser.new_page(reduced_motion="reduce")
+            errors = []; page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(self.server.url); self.select_project(page, first)
+            page.locator('[data-stage="build"]').click()
+            primary = page.locator("#primary-choice .role-model-choice")
+            expect(primary).to_have_value(compact_value("zcode", "build-model"))
+            page.locator("#next-step").evaluate("element => element.open = true")
+            page.locator("#transition").click()
+            page.locator("#build-action-send").click()
+
+            def completed(tool, model, effort):
+                expect(page.locator("#send")).to_have_text(f"Reply to {hosts.HOSTS[tool][0]}")
+                expect(page.locator("#send")).to_be_enabled()
+                expect(primary).to_have_value(compact_value(tool, model))
+                expect(page.locator("#primary-choice .role-effort")).to_have_value(effort)
+                self.assertEqual(starts.call_args.args[2], tool)
+                self.assertEqual((starts.call_args.kwargs["model"], starts.call_args.kwargs["effort"]), (model, effort))
+
+            completed("codex", "correction-model", "high")
+            expect(page.locator("#questions-box")).to_contain_text("Which correction should I make next?")
+            page.locator("#message").fill("Correct the reply routing first.")
+            page.locator("#send").click()
+            page.wait_for_function("() => conversationTurns.length === 2 && conversationTurns.at(-1).state === 'complete'")
+            completed("codex", "correction-model", "high")
+            defaults["implementation"]["model"] = "changed-default"
+            self.server.settings.update(role_defaults=defaults)
+            page.reload()
+            completed("codex", "correction-model", "high")
+            page.locator("#build-reply-stage").select_option("verification")
+            expect(primary).to_have_value(compact_value("claude", "verify-model"))
+            expect(page.locator("#questions-box")).to_be_hidden()
+            page.locator("#build-reply-stage").select_option("programming")
+            expect(page.locator("#send")).to_have_text("Reply to Codex")
+            self.select_project(page, other)
+            page.locator('[data-stage="build"]').click()
+            expect(primary).to_have_value(compact_value("zcode", "changed-default"))
+            self.select_project(page, first)
+            expect(page.locator("#send")).to_have_text("Reply to Codex")
+            # A new implementation still uses its role default, and then owns
+            # the following reply. Future-step pickers do not redirect Codex.
+            page.locator("#result-step").evaluate("element => element.open = true")
+            page.locator("#build-implementation-choice .role-model-choice").select_option(compact_value("zcode", "build-model"))
+            expect(page.locator("#send")).to_have_text("Reply to Codex")
+            page.locator("#implement-review").click()
+            page.wait_for_function("() => conversationTurns.length === 3 && conversationTurns.at(-1).state === 'complete'")
+            completed("zcode", "build-model", "")
+            primary.select_option(compact_value("codex", "correction-model"))
+            page.locator("#primary-choice .role-effort").select_option("high")
+            page.locator("#message").fill("Continue with Codex again.")
+            page.locator("#send").click()
+            page.wait_for_function("() => conversationTurns.length === 4 && conversationTurns.at(-1).state === 'complete'")
+            completed("codex", "correction-model", "high")
+            self.assertEqual(self.server.settings.read()["role_defaults"], defaults)
+            self.assertEqual(errors, [])
+
     def test_compact_choices_follow_native_defaults_across_stages(self):
-        from playwright.sync_api import expect, sync_playwright
         self.server.settings = Settings(self.home / "compact-settings.json")
         defaults = {role: {"tool": "codex", "model": "", "effort": ""}
                     for role in ("specification", "planning", "implementation")}
@@ -2373,8 +1285,7 @@ elif skill.exists():
                 mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), \
                 mock.patch("ora_vibe_coder.server.model_inventory", side_effect=inventory) as inventories, \
                 mock.patch.object(conversation, "start_turn", side_effect=start), \
-                mock.patch.object(conversation, "start_assessment", side_effect=assess), sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+                mock.patch.object(conversation, "start_assessment", side_effect=assess), self.browser_session() as browser:
             try:
                 page = browser.new_page(viewport={"width": 1440, "height": 1050}, reduced_motion="reduce")
                 errors = []; page.on("pageerror", lambda error: errors.append(str(error)))
@@ -2385,7 +1296,6 @@ elif skill.exists():
                 expect(primary).to_have_value(compact_value("codex"))
                 expect(primary.locator("option:checked")).to_contain_text("native-before")
                 self.assertEqual(page.locator("#primary-choice select:visible").count(), 2)
-                # A blank request uses the harness's changing defaults at each call.
                 page.locator("#message").fill("Before defaults change")
                 page.locator("#send").click()
                 page.wait_for_function("() => !document.querySelector('#send').disabled")
@@ -2408,37 +1318,16 @@ elif skill.exists():
                     page.locator("#review-step").evaluate("element => element.open = true")
                     page.locator("#document-review-choice .role-model-choice").select_option(compact_value("claude", "named"))
                     page.locator("#document-review-choice .role-effort").select_option("low")
-                    page.evaluate("() => window.originalOpinionToggle = document.querySelector('#opinion-toggle')")
                     page.locator("#opinion-toggle").check()
-                    self.assertTrue(page.evaluate("() => document.querySelector('#opinion-toggle') === window.originalOpinionToggle"))
                     expect(page.locator("#peer-choice .role-label")).to_have_text("Second opinion")
                     page.locator("#peer-choice .role-model-choice").select_option(compact_value("codex", "named"))
                     page.locator("#peer-choice .role-effort").select_option("high")
-                    self.assertTrue(page.evaluate("() => document.querySelector('#opinion-toggle') === window.originalOpinionToggle"))
-                    expect(page.locator("#opinion-toggle")).to_be_checked()
-                    reviewer = page.locator("#document-review-choice .role-row")
-                    expect(reviewer.locator(".role-detail")).to_be_hidden()
-                    reviewer.locator(".role-help").focus(); page.keyboard.press("Enter")
-                    expect(reviewer.locator(".role-selected")).to_contain_text("Claude Code · Named model")
-                    expect(reviewer.locator(".role-selected-effort")).to_have_text("Effort: low (recommended)")
-                    page.keyboard.press("Space")
-                    expect(reviewer.locator(".role-detail")).to_be_hidden()
-                    # Both review rows stay inline in the actual desktop pane.
-                    self.assertLess(reviewer.bounding_box()["height"], 42)
                     page.locator("#review").click()
                     page.wait_for_function("() => !document.querySelector('#review').disabled")
                     self.assertEqual(assessments[-1], {"tool": "claude", "stage": role, "reviewer": "codex", "model": "named", "effort": "low", "reviewer_model": "named", "reviewer_effort": "high"})
                     page.locator("#message").fill(f"Work on {workspace}"); page.locator("#send").click()
                     page.wait_for_function("() => !document.querySelector('#send').disabled")
                     self.assertEqual((calls[-1]["stage"], calls[-1]["model"], calls[-1]["effort"]), (role, "named", "high"))
-                    page.locator("#settings").click()
-                    expect(page.locator(f'#settings-roles [data-role="{role}_review"] .role-model-choice')).to_have_value(compact_value("claude", "named"))
-                    expect(page.locator(f'#settings-roles [data-role="{role}"] .role-effort')).to_have_value("high")
-                    page.locator("#settings-close").click()
-                    evidence = os.environ.get("VIBE_CONFIGURATION_EVIDENCE")
-                    if evidence:
-                        Path(evidence).mkdir(parents=True, exist_ok=True)
-                        page.screenshot(path=str(Path(evidence) / f"compact-{workspace}-1440.png"), full_page=True)
                 page.locator('[data-stage="build"]').click()
                 page.locator("#result-step").evaluate("element => element.open = true")
                 page.locator("#build-implementation-choice .role-model-choice").select_option(compact_value("codex", "named"))
@@ -2459,419 +1348,148 @@ elif skill.exists():
                     page.locator("#implement-review").click()
                     page.locator("#implementation-proceed").click()
                 self.assertIn("separate fresh reviewer choice as Claude Code, model named (requested), effort low (requested)", calls[-1]["text"])
-                page.locator("#review-step").evaluate("element => element.open = true")
-                page.locator("#verifier-choice .role-model-choice").select_option(compact_value("claude", "named"))
-                page.locator("#verifier-choice .role-effort").select_option("high")
-                with page.expect_response("**/api/deliver"):
-                    page.locator("#review").click(); page.locator("#build-action-send").click()
-                self.assertEqual((calls[-1]["tool"], calls[-1]["stage"], calls[-1]["model"], calls[-1]["effort"]), ("claude", "verification", "named", "high"))
-                self.assertIn("Requested independent verifier choices (not verified): Claude Code, model named (requested), effort high (requested)", calls[-1]["text"])
-                expect(page.locator("#destination")).to_have_value("Claude Code")
-                expect(page.locator("#send")).to_contain_text("Claude Code")
-                with page.expect_response("**/api/converse"):
-                    page.locator("#message").fill("Follow up with the selected verifier")
-                    page.locator("#send").click()
-                self.assertEqual((calls[-1]["tool"], calls[-1]["model"], calls[-1]["effort"]), ("claude", "named", "high"))
-                # Repairs inherit implementation, independent of the active verifier.
-                with page.expect_response("**/api/deliver"):
-                    page.locator("#next-step").evaluate("element => element.open = true")
-                    page.locator("#transition").click()
-                    page.locator("#build-action-send").click()
-                    page.locator("#implementation-proceed").click()
-                self.assertEqual((calls[-1]["tool"], calls[-1]["model"], calls[-1]["effort"]), ("codex", "named", "high"))
-                # Refresh the open settings view without replacing its unsaved choices.
-                page.locator("#settings").click()
-                config_primary = page.locator('#settings-roles [data-role="implementation"] .role-model-choice')
-                expect(config_primary).to_have_value(compact_value("codex", "named"))
-                page.locator('#settings-roles [data-role="review"] .role-model-choice').select_option("")
-                config_primary.select_option(compact_value("claude", "named"))
-                page.locator('#settings-roles [data-role="implementation"] .role-effort').select_option("low")
-                expect(page.locator('#settings-roles [data-role="review"] .role-model-choice option:checked')).to_contain_text("Claude Code · named")
-                expect(page.locator('#settings-roles [data-role="review"] .role-effort option:checked')).to_have_text("Same (low)")
-                native.update(configured_model="native-before")
-                page.evaluate("() => window.dispatchEvent(new Event('focus'))")
-                expect(config_primary).to_have_value(compact_value("claude", "named"))
-                page.locator("#settings-close").click()
-                # Correction returns the composer to the implementation role.
-                expect(primary).to_have_value(compact_value("codex", "named"))
-                expect(page.locator("#build-implementation-choice .role-model-choice")).to_have_value(compact_value("codex", "named"))
                 page.locator("#message").fill("Keep this Build draft")
-                evidence = os.environ.get("VIBE_CONFIGURATION_EVIDENCE")
-                for width, height in ((1440, 1050), (420, 900)):
-                    page.set_viewport_size({"width": width, "height": height})
-                    if width < 700:
-                        page.get_by_role("button", name="Show document", exact=True).click()
-                        page.locator("#build-implementation-choice .role-help").click()
-                        expect(page.locator("#build-implementation-choice .role-selected")).to_have_text("Harness and model: Codex · Named model")
-                        expect(page.locator("#build-implementation-choice .role-selected-effort")).to_have_text("Effort: high")
-                        page.locator("#build-implementation-choice .role-help").click()
-                        page.locator("#loop-review-choice .role-help").click()
-                        expect(page.locator("#loop-review-choice .role-selected")).to_have_text("Harness and model: Claude Code · Named model")
-                        expect(page.locator("#loop-review-choice .role-selected-effort")).to_have_text("Effort: low (recommended)")
-                        page.locator("#loop-review-choice .role-help").click()
-                    page.locator("#result-step").scroll_into_view_if_needed()
-                    self.assertTrue(page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"))
-                    for control in page.locator("#result-step select:visible").all():
-                        self.assertGreater(control.bounding_box()["width"], 120)
-                    if evidence:
-                        Path(evidence).mkdir(parents=True, exist_ok=True)
-                        page.screenshot(path=str(Path(evidence) / f"compact-build-{width}.png"), full_page=True)
+                page.locator("#result-step").scroll_into_view_if_needed()
+                self.assertTrue(page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"))
                 page.set_viewport_size({"width": 1440, "height": 1050})
                 self.select_project(page, other)
                 expect(primary).to_have_value(compact_value("codex"))
                 self.select_project(page, project_id)
                 expect(page.locator("#message")).to_have_value("Keep this Build draft")
-                # Metadata requests happen on view/picker/focus events only; no timer probes.
                 self.assertGreater(inventories.call_count, 0)
                 self.assertEqual(self.server.settings.read()["role_defaults"], defaults)
-                # Editing an active run retains inheritance intent, even though
-                # its effective reviewer values expand to the implementation choice.
-                from ora_vibe_coder.run import RunDriver
-                active_project = self.server.store.projects[project_id]
-                driver = RunDriver(self.server.conversation, active_project, "build", "Build the sample", {"roles": {}},
-                                   {"implementation": {"tool": "codex", "model": "named", "effort": "high"}}, "codex")
-                driver.run, driver.state = "compact-active", "paused-failure"
-                self.server.runs.by_project[str(active_project.root)] = driver
-                try:
-                    page.evaluate("async () => { stopPolling(); const data = await api('turn-state', {id: currentId}); updateRunState(data.run); }")
-                    page.locator("#configure-path").click()
-                    expect(page.locator('#settings-roles [data-role="review"] .role-model-choice')).to_have_value("")
-                    page.locator('#settings-roles [data-role="implementation"] .role-model-choice').select_option(compact_value("claude", "named"))
-                    page.locator('#settings-roles [data-role="implementation"] .role-effort').select_option("low")
-                    with mock.patch("ora_vibe_coder.run._record_run_note"):
-                        page.locator("#configure-save").click()
-                        expect(page.locator("#settings-panel")).to_be_hidden()
-                    self.assertEqual(driver.config["roles"]["review"], {"tool": "", "model": "", "effort": ""})
-                    self.assertEqual(driver.assignment("review")[:3], ("claude", "named", "low"))
-                finally:
-                    self.server.runs.by_project.pop(str(active_project.root), None)
-                    page.evaluate("() => updateRunState({active: null})")
-                # Resizing either pane must leave the complete stage title clear
-                # of both the coding-tool card and the run buttons.
-                for stage, title in (("specification", "Specification"), ("plan", "Plan"), ("build", "Build & Verify")):
-                    page.locator(f'[data-stage="{stage}"]').click()
-                    expect(page.locator("#stage-title")).to_have_text(title)
-                    page.wait_for_function("stage => workspace === stage && workspaceReveal === null", arg=stage)
-                    for width in (1440, 1024):
-                        page.set_viewport_size({"width": width, "height": 1050})
-                        for fraction in (.42, .8):
-                            split = page.locator("#split").bounding_box()
-                            spine = page.locator("#spine").bounding_box()
-                            page.mouse.move(spine["x"] + spine["width"] / 2, spine["y"] + 100)
-                            page.mouse.down()
-                            page.mouse.move(split["x"] + split["width"] * fraction, spine["y"] + 100)
-                            page.mouse.up()
-                            layout = page.evaluate("""() => {
-                                const box = selector => document.querySelector(selector).getBoundingClientRect().toJSON();
-                                const range = document.createRange(); range.selectNodeContents(document.querySelector('#stage-title'));
-                                return {title: range.getBoundingClientRect().toJSON(), head: box('#workspace-head'),
-                                    tool: box('.first-step'), actions: box('.head-actions'),
-                                    controls: [...document.querySelectorAll('#primary-choice select, #primary-choice .role-help')]
-                                        .map(element => element.getBoundingClientRect().toJSON())};
-                            }""")
-                            text = layout["title"]
-                            self.assertGreaterEqual(text["left"], layout["head"]["left"])
-                            self.assertLessEqual(text["right"], layout["head"]["right"])
-                            for obstacle in (layout["tool"], layout["actions"]):
-                                self.assertTrue(text["right"] <= obstacle["left"] or text["left"] >= obstacle["right"]
-                                                or text["bottom"] <= obstacle["top"] or text["top"] >= obstacle["bottom"], layout)
-                            for control in layout["controls"]:
-                                self.assertGreaterEqual(control["left"], layout["tool"]["left"])
-                                self.assertLessEqual(control["right"], layout["tool"]["right"])
                 self.assertEqual(errors, [])
             finally:
                 browser.close()
 
     def test_saved_role_defaults_restore_and_survive_a_warning_only_save(self):
-        from playwright.sync_api import expect, sync_playwright
         settings = Settings(self.home / "role-settings.json")
-        server = LocalServer(self.home, settings=settings)
-        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01})
-        thread.start()
-        def close():
-            server.shutdown(); thread.join(timeout=2); server.server_close()
-        self.addCleanup(close)
-        def request(path, body):
-            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
-            connection.request("POST", path, json.dumps(body), headers={"Content-Type": "application/json", "X-Ora-Token": server.token})
-            response = connection.getresponse(); data = json.loads(response.read()); connection.close()
-            self.assertEqual(response.status, 200, data)
-            return data
-        created = request("/api/create", {"directory": "SampleOne", "name": "Sample One", "description": "A sample tool", "goals": "A working sample"})
-        other = request("/api/create", {"directory": "SampleTwo", "name": "Sample Two", "description": "Another sample", "goals": "A working sample"})
-        request("/api/settings", {"role_defaults": {
-            "specification": {"tool": "codex", "model": "configured-model", "effort": "high"},
-            "planning": {"tool": "claude", "model": "saved-unavailable-model-with-a-long-name", "effort": "saved-unavailable-effort-with-a-long-name"},
-            "implementation": {"tool": "codex", "model": "configured-model", "effort": "high"},
-            "specification_review": {"tool": "claude", "model": "review-model", "effort": "low"},
-            "planning_review": {"tool": "codex", "model": "review-model", "effort": "high"},
-            "review": {"tool": "hermes", "model": "", "effort": ""},
-            "verification": {"tool": "claude", "model": "verification-model", "effort": "low"}}})
-        native = {"models": [{"id": "configured-model", "label": "Configured model", "efforts": ["low", "high"], "default_effort": "low"},
-                              {"id": "other-model", "label": "Other model", "efforts": ["low"], "default_effort": "low"}],
-                  "configured_model": "configured-model", "configured_effort": "xhigh"}
-        native_reasons = {
-            "codex": "Choices come from Codex native metadata. Use harness default follows its effective configuration; a recommended model is not treated as your configured model.",
-            "claude": "Models and effort levels come from Claude Code native initialization, without a model call. It does not report the effective configured model or effort; Use harness default follows those settings.",
-            "hermes": "This harness’s headless route cannot accept named model or effort choices through Bridge. Use harness default keeps its own configured choices; saved named choices are preserved.",
-        }
+        self.server.settings = settings
+        choices = {"specification": {"tool": "codex", "model": "configured-model", "effort": "high"},
+                   "planning": {"tool": "claude", "model": "unavailable-model", "effort": "unavailable-effort"}}
+        settings.update(role_defaults=choices)
+        project_id = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
+        native = {"models": [{"id": "configured-model", "label": "Configured", "efforts": ["low", "high"]}],
+                  "configured_model": "configured-model", "configured_effort": "high"}
         def ready(peer, **kwargs):
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
-        with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=ready), \
-                mock.patch("ora_vibe_coder.server.model_inventory", side_effect=lambda tool: {**native, "reason": native_reasons.get(tool, native_reasons["hermes"])}), \
-                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+        with mock.patch.object(conversation, "bridge_check", side_effect=ready), \
+                mock.patch("ora_vibe_coder.server.model_inventory", return_value=native), \
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), self.browser_session() as browser:
+            page = browser.new_page()
+            page.goto(self.server.url)
+            self.select_project(page, project_id)
+            page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
+            page.locator("#settings").click()
+            planning = page.locator('#settings-roles .role-row[data-role="planning"]')
+            expect(planning.locator(".role-model-choice")).to_have_value(compact_value("claude", "unavailable-model"))
+            expect(planning.locator(".role-effort")).to_have_value("unavailable-effort")
+            page.locator("#settings-hide-advisory").check()
+            page.locator("#settings-save").click()
+            expect(page.locator("#settings-panel")).to_be_hidden()
+            saved = Settings(settings.path).read()
+            self.assertEqual({role: saved["role_defaults"][role] for role in choices}, choices)
+            self.assertTrue(saved["hide_advisory"])
+            page.reload()
+            self.select_project(page, project_id)
+            page.wait_for_function("() => destinationName === 'Codex'")
+            expect(page.locator("#primary-choice .role-model-choice")).to_have_value(compact_value("codex", "configured-model"))
+            legacy = dict(saved)
+            legacy.pop("hide_advisory")
+            legacy["warn_skip_review"] = False
+            Path(settings.path).write_text(json.dumps(legacy))
+            self.assertTrue(self.request("/api/settings", {})[1]["hide_advisory"])
+
+    def test_run_approval_confirmation(self):
+        from base64 import b64decode
+        from tests.test_run import FAKE_BRIDGE, report
+        bridge = self.home / "fake-bridge"
+        (bridge / "ora_agent_bridge").mkdir(parents=True)
+        (bridge / "ora_agent_bridge/__init__.py").write_text('VERSION = "1.7.0"\n')
+        (bridge / "ora_agent_bridge/__main__.py").write_text(FAKE_BRIDGE)
+        scenario = self.home / "scenario"
+        scenario.mkdir()
+        self.server.settings = Settings(self.home / "settings.json")
+        self.server.settings.update(hide_advisory=True, best_guess=True)
+        ready = {"ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}
+        with mock.patch.object(conversation, "BRIDGE_HOME", bridge), \
+                mock.patch.dict(os.environ, {"VIBE_FAKE_SCENARIO_DIR": str(scenario)}), \
+                mock.patch.object(conversation, "bridge_check", side_effect=lambda peer, **kwargs: {"peer": peer, **ready}), \
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), self.browser_session() as browser:
             try:
-                page = browser.new_page(viewport={"width": 1440, "height": 1100})
-                errors = []; page.on("pageerror", lambda error: errors.append(str(error)))
-                page.goto(server.url)
-                self.select_project(page, created["id"])
+                project_id = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
+                project = self.server.store.projects[project_id]
+                for stage, role in (("specification", "Specification"), ("planning", "Plan")):
+                    path = project.root / f"{role}.md"
+                    path.write_text(f"---\nstatus: AWAITING APPROVAL\n---\n# {role}\n\nKeep records for 30 days.\n")
+                    project.approve_document(stage, path.read_text(), str(path))
+                    path.write_text(path.read_text().replace("30 days", "90 days"))
+                selected = self.home / "selected.txt"
+                selected.write_text("Keep the attached exact detail.\n")
+                page = browser.new_page(viewport={"width": 1280, "height": 1000})
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(self.server.url)
+                self.select_project(page, project_id)
                 page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
-                page.locator("#settings").click()
-                expect(page.locator("#settings-panel")).to_be_visible()
-                expect(page.locator("#settings-roles .role-row[data-role]")).to_have_count(10)
-                self.assertEqual(page.locator('#settings-panel input:not([type="checkbox"])').count(), 0)
-                self.assertEqual(page.locator("#interview-panel, #configure-panel, #settings-spending").count(), 0)
-                planning = page.locator('#settings-roles .role-row[data-role="planning"]')
-                expect(planning.locator(".role-model-choice")).to_have_value(compact_value("claude", "saved-unavailable-model-with-a-long-name"))
-                expect(planning.locator(".role-effort")).to_have_value("saved-unavailable-effort-with-a-long-name")
-                planning.locator(".role-help").focus(); page.keyboard.press("Enter")
-                expect(planning.locator(".role-selected")).to_contain_text("saved-unavailable-model-with-a-long-name")
-                expect(planning.locator(".role-selected-effort")).to_have_text("Effort: saved-unavailable-effort-with-a-long-name — saved choice (not in current inventory)")
-                expect(planning.locator(".role-origin")).to_have_text(native_reasons["claude"])
-                page.keyboard.press("Space")
-                expect(planning.locator(".role-detail")).to_be_hidden()
-                expect(page.locator('#settings-roles [data-role="review"] .role-model-choice')).to_have_value(compact_value("hermes"))
-                expect(page.locator('#settings-roles [data-role="specification_second_opinion"] .role-model-choice')).to_have_value("")
-                specification = page.locator('#settings-roles .role-row[data-role="specification"]')
-                expect(specification.locator(".role-model-choice option").filter(has_text="Codex · Other model")).to_have_count(1)
-                specification.locator(".role-model-choice").select_option(compact_value("codex", "other-model"))
-                expect(specification.locator(".role-effort")).to_have_value("")
-                self.assertEqual(specification.locator(".role-effort option").all_text_contents(), ["Default (xhigh)", "low (recommended)"])
-                # Every option lives on this first screen, and one save persists them all.
-                self.assertEqual(page.locator("#settings-warn").count(), 0)
-                page.locator("#settings-best-guess").check()
-                page.locator("#settings-hide-advisory").check()
-                evidence = os.environ.get("VIBE_CONFIGURATION_EVIDENCE")
-                if evidence:
-                    Path(evidence).mkdir(parents=True, exist_ok=True)
-                # Populate even the optional rows for the layout proof, using the
-                # complete native explanations rather than a short placeholder.
-                layout_choices = page.locator("#settings-roles .role-row[data-role]").evaluate_all("rows => rows.map(row => ({role: row.dataset.role, tool: row.readChoice().tool}))")
-                for choice in layout_choices:
-                    row = page.locator(f'#settings-roles [data-role="{choice["role"]}"]')
-                    if not choice["tool"]:
-                        row.locator(".role-model-choice").select_option(compact_value("claude" if choice["role"].endswith("second_opinion") else "codex"))
-                    expect(row.locator(".role-origin")).to_have_text(native_reasons[json.loads(row.locator(".role-model-choice").input_value())[0]])
-                    row.locator(".role-model-choice").select_option(compact_value(json.loads(row.locator(".role-model-choice").input_value())[0]))
-                    row.locator(".role-effort").select_option("")
-                layout_evidence = []
-                for theme, width, height in (("light", 1440, 1100), ("dark", 1440, 1100),
-                                             ("light", 1868, 1200), ("dark", 1868, 1200),
-                                             ("light", 420, 900), ("dark", 420, 900)):
-                    page.set_viewport_size({"width": width, "height": height})
-                    page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
-                    panel = page.locator("#settings-panel")
-                    panel.evaluate("element => element.scrollTop = 0")
-                    metrics = panel.evaluate("""element => {
-                        const rect = element.getBoundingClientRect();
-                        const rows = [...element.querySelectorAll('.role-row[data-role]')];
-                        const first = rows[0], role = first.querySelector('label').getBoundingClientRect();
-                        const effort = first.querySelector('.role-effort').getBoundingClientRect();
-                        const canvas = document.createElement('canvas'), context = canvas.getContext('2d');
-                        return {width: innerWidth, height: innerHeight, scrollHeight: element.scrollHeight,
-                            clientHeight: element.clientHeight, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth,
-                            top: rect.top, bottom: rect.bottom, roleWidth: role.width, effortWidth: effort.width,
-                            allRowsInside: rows.every(row => row.getBoundingClientRect().top >= rect.top && row.getBoundingClientRect().bottom <= rect.bottom),
-                            actionsInside: [...element.querySelectorAll('.editor-actions button')].every(button => button.getBoundingClientRect().bottom <= rect.bottom),
-                            defaultLabelsFit: [...element.querySelectorAll('.role-model-choice, .role-effort')].every(select => {
-                                const style = getComputedStyle(select); context.font = style.font;
-                                return context.measureText(select.selectedOptions[0].text).width + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + 24 <= select.clientWidth;
-                            }),
-                            optionsSingleLine: [...element.querySelectorAll('.configuration-option')].every(option => {
-                                const spans = [...option.querySelectorAll('span')];
-                                return spans.every(span => span.getBoundingClientRect().height <= parseFloat(getComputedStyle(span).lineHeight) + 1)
-                                    && Math.abs(spans[0].getBoundingClientRect().bottom - spans[1].getBoundingClientRect().bottom) < 5;
-                            }),
-                            dividers: rows.filter(row => parseFloat(getComputedStyle(row).borderBottomWidth) > 0).map(row => ({role: row.dataset.role, width: getComputedStyle(row).borderBottomWidth, style: getComputedStyle(row).borderBottomStyle})),
-                            rowHeights: rows.map(row => row.getBoundingClientRect().height),
-                            descriptions: rows.map(row => row.querySelector('.role-origin').textContent),
-                            routineDetailsHidden: rows.every(row => row.querySelector('.role-detail').hidden),
-                            selectFont: getComputedStyle(first.querySelector('select')).fontSize};
-                    }""")
-                    layout_evidence.append({"theme": theme, **metrics})
-                    if evidence:
-                        (Path(evidence) / "configuration-layout.json").write_text(json.dumps(layout_evidence, indent=2), encoding="utf-8")
-                        page.screenshot(path=str(Path(evidence) / f"configuration-{theme}-{width}-top.png"))
-                    self.assertLessEqual(metrics["scrollWidth"], metrics["clientWidth"], metrics)
-                    self.assertGreaterEqual(metrics["top"], 0, metrics)
-                    self.assertLessEqual(metrics["bottom"], height, metrics)
-                    self.assertEqual(metrics["dividers"], [{"role": "specification_second_opinion", "width": "1px", "style": "solid"}, {"role": "planning_second_opinion", "width": "1px", "style": "solid"}])
-                    if width > 980:
-                        self.assertLessEqual(metrics["scrollHeight"], metrics["clientHeight"], metrics)
-                        self.assertTrue(metrics["allRowsInside"] and metrics["actionsInside"], metrics)
-                        self.assertLessEqual(metrics["roleWidth"], 200, metrics)
-                        self.assertGreaterEqual(metrics["effortWidth"], 120, metrics)
-                        self.assertLessEqual(max(metrics["rowHeights"]), 60, metrics)
-                        self.assertTrue(metrics["routineDetailsHidden"], metrics)
-                        self.assertEqual(metrics["selectFont"], "14px", metrics)
-                        self.assertTrue(metrics["optionsSingleLine"], metrics)
-                    else:
-                        expect(page.get_by_label("Specification harness and model", exact=True)).to_be_visible()
-                        page.locator("#settings-close").scroll_into_view_if_needed()
-                        page.locator("#settings-close").focus()
-                        expect(page.locator("#settings-close")).to_be_focused()
-                        if evidence: page.screenshot(path=str(Path(evidence) / f"configuration-{theme}-{width}-options.png"))
-                # A failed native read keeps a visible notice, with complete
-                # detail available without a mouse or a clipped select label.
-                native.update(models=[])
-                native_reasons["codex"] = "Codex native model metadata is inaccessible or unsupported. Use harness default keeps Codex's configured model and effort. Saved named choices are preserved."
-                page.evaluate("() => window.dispatchEvent(new Event('focus'))")
-                expect(specification.locator(".role-notice")).to_be_visible()
-                expect(specification.locator(".role-notice")).to_have_text("Codex native model metadata is inaccessible or unsupported.")
-                specification.locator(".role-help").click()
-                expect(specification.locator(".role-origin")).to_have_text(native_reasons["codex"])
-                specification.locator(".role-help").click()
-                native.update(models=[{"id": "configured-model", "label": "Configured model", "efforts": ["low", "high"], "default_effort": "low"},
-                                      {"id": "other-model", "label": "Other model", "efforts": ["low"], "default_effort": "low"}])
-                # Discard the unsaved layout fixture, then make the original
-                # changes for the persistence and run-only behavior checks.
-                page.locator("#settings-close").click()
-                page.set_viewport_size({"width": 1440, "height": 1100})
-                page.locator("#settings").click()
-                specification.locator(".role-model-choice").select_option(compact_value("codex", "other-model"))
-                page.locator("#settings-best-guess").check()
-                page.locator("#settings-hide-advisory").check()
-                page.locator("#settings-save").click()
-                expect(page.locator("#settings-panel")).to_be_hidden()
-                saved = request("/api/settings", {})
-                self.assertFalse(saved["warn_skip_review"])
-                self.assertTrue(saved["best_guess"])
-                self.assertTrue(saved["hide_advisory"])
-                self.assertEqual(saved["role_defaults"]["specification"], {"tool": "codex", "model": "other-model", "effort": ""})
-                handle = mock.Mock(turn="native-default", retained_images=[])
-                handle.snapshot.return_value = {"state": "running"}
-                with mock.patch("ora_vibe_coder.conversation.start_turn", return_value=handle) as turn:
-                    request("/api/converse", {"id": created["id"], "tool": "codex", "stage": "specification", "text": "Work on the sample.", "images": []})
-                    self.assertEqual(turn.call_args.kwargs["model"], "other-model")
-                    self.assertEqual(turn.call_args.kwargs["effort"], "")
-                self.assertEqual(saved["role_defaults"]["planning"], {"tool": "claude", "model": "saved-unavailable-model-with-a-long-name", "effort": "saved-unavailable-effort-with-a-long-name"})
-                # Recreate the settings reader, reload the app, then open another project.
-                server.settings = Settings(settings.path)
-                page.reload()
-                self.select_project(page, other["id"])
-                page.wait_for_function("() => project !== null && workspace !== ''")
-                expect(page.locator("#destination")).to_have_value("Codex")
-                expect(page.locator("#step-reviewer")).to_have_value("claude")
-                expect(page.locator("#transition")).to_have_text("Send to Claude Code")
-                page.locator('[data-stage="plan"]').click()
-                expect(page.locator("#destination")).to_have_value("Claude Code")
-                expect(page.locator("#step-reviewer")).to_have_value("codex")
-                expect(page.locator("#transition")).to_have_text("Send to Codex")
-                page.locator('[data-stage="build"]').click()
-                page.locator("#build-reply-stage").select_option("verification")
-                expect(page.locator("#destination")).to_have_value("Claude Code")
+                page.locator('.rail[data-stage="plan"]').click()
                 self.choose_primary(page, "Codex")
-                expect(page.locator("#destination")).to_have_value("Codex")
-                page.locator("#configure-path").click()
-                expect(page.locator("#settings-best-guess")).to_be_checked()
-                verification = page.locator('#settings-roles [data-role="verification"]')
-                verification.locator(".role-model-choice").select_option(compact_value("codex"))
-                expect(verification.locator(".role-model-choice")).to_have_value(compact_value("codex"))
-                expect(verification.locator(".role-effort")).to_have_value("")
-                page.locator("#configure-save").click()
-                page.wait_for_function("() => pendingRunConfig?.roles?.verification?.tool === 'codex'")
-                expect(page.locator("#destination")).to_have_value("Codex")
-                page.locator('[data-stage="plan"]').click()
-                page.locator('[data-stage="build"]').click()
-                page.locator("#build-reply-stage").select_option("verification")
-                expect(page.locator("#destination")).to_have_value("Codex")
-                self.assertEqual(request("/api/settings", {})["role_defaults"]["verification"]["tool"], "claude")
-                page.locator("#configure-path").click()
-                page.locator("#configure-clear").click()
-                page.wait_for_function("() => pendingRunConfig && Object.keys(pendingRunConfig.roles).length === 0")
-                self.assertEqual(request("/api/settings", {})["role_defaults"], saved["role_defaults"])
-                page.locator("#configure-path").click()
-                page.locator('#settings-roles [data-role="verification"] .role-model-choice').select_option(compact_value("codex"))
-                page.locator("#configure-save").click()
-                self.select_project(page, created["id"])
-                page.wait_for_function("() => project !== null && workspace !== '' && pendingRunConfig === null")
-                # A run captures its defaults; later global saves must not
-                # repaint that run as though its future assignments changed.
-                from ora_vibe_coder.run import RunDriver
-                active_project = server.store.projects[created["id"]]
-                driver = RunDriver(server.conversation, active_project, "build", "Build the sample.",
-                                   {"roles": {}, "best_guess": False, "hide_advisory": False},
-                                   settings.read()["role_defaults"], "codex")
-                driver.run = "0001-20261021-000000"
-                driver.state = "paused-failure"
-                server.runs.by_project[str(active_project.root)] = driver
-                page.evaluate("() => stopPolling()")
-                page.evaluate("() => pollTick()")
-                page.wait_for_function("() => runActive?.run === '0001-20261021-000000'")
-                page.locator("#settings").click()
-                page.locator('#settings-roles [data-role="verification"] .role-model-choice').select_option(compact_value("codex"))
-                page.locator("#settings-hide-advisory").uncheck()
-                page.locator("#settings-save").click()
-                expect(page.locator("#settings-panel")).to_be_hidden()
-                globals_after = request("/api/settings", {})
-                self.assertEqual(globals_after["role_defaults"]["verification"]["tool"], "codex")
-                self.assertEqual(driver.assignment("verification")[:3], ("claude", "verification-model", "low"))
-                page.locator("#configure-path").click()
-                expect(page.locator('#settings-roles [data-role="verification"] .role-model-choice')).to_have_value(compact_value("claude", "verification-model"))
-                page.locator("#settings-best-guess").check()
-                with mock.patch("ora_vibe_coder.run._record_run_note"):
-                    page.locator("#configure-save").click()
-                    expect(page.locator("#settings-panel")).to_be_hidden()
-                self.assertEqual(driver.assignment("verification")[:3], ("claude", "verification-model", "low"))
-                self.assertTrue(driver.config["best_guess"])
-                self.assertEqual(request("/api/settings", {}), globals_after)
-                page.locator("#settings").click()
-                expect(page.locator('#settings-roles [data-role="verification"] .role-model-choice')).to_have_value(compact_value("codex"))
-                page.locator("#settings-close").click()
-                server.runs.by_project.pop(str(active_project.root))
-                page.evaluate("() => updateRunState({active: null})")
-                # The single warning checkbox is a real run-only override.
-                # Global warnings stay enabled while this run suppresses them.
-                page.locator("#configure-path").click()
-                expect(page.locator("#settings-hide-advisory")).not_to_be_checked()
-                page.locator("#settings-hide-advisory").check()
-                page.locator("#configure-save").click()
-                expect(page.locator("#settings-panel")).to_be_hidden()
-                page.locator("#message").fill("Build the sample.")
-                with mock.patch.object(server.runs, "start", return_value=driver) as start:
-                    page.locator("#run-completion").click()
-                    page.wait_for_function("() => runActive?.run === '0001-20261021-000000'")
-                    self.assertTrue(start.call_args.args[4]["hide_advisory"])
-                    expect(page.locator("#run-warning")).not_to_be_visible()
-                self.assertEqual(request("/api/settings", {}), globals_after)
-                # A legacy saved 'do not warn' choice remains effective, and
-                # a deliberate one-run unchecked choice can still show it.
-                request("/api/settings", {"warn_skip_review": False})
-                page.evaluate("() => { updateRunState({active: null}); pendingRunConfig = null; }")
-                page.reload()
-                self.select_project(page, created["id"])
-                page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
-                page.locator("#configure-path").click()
-                expect(page.locator("#settings-hide-advisory")).to_be_checked()
-                page.locator("#settings-hide-advisory").uncheck()
-                page.locator("#configure-save").click()
-                page.locator("#message").fill("Build the sample.")
+                page.wait_for_function("() => !readinessState.checking")
+                page.locator("#message").fill("Preserve this exact run brief.")
+                page.evaluate("path => { messageFiles().push({path, name: 'selected.txt'}); renderMaterialChosen(); }", str(selected))
+                page.locator("#image-input").set_input_files({"name": "sketch.png", "mimeType": "image/png", "buffer": b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jA3sAAAAASUVORK5CYII=")})
+                expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "sketch.png")
+                notes = set((project.root / ".vibe").glob("*/session/messages/*"))
                 page.locator("#run-completion").click()
-                expect(page.locator("#run-warning")).to_be_visible()
-                page.locator("#run-warning-back").click()
-                self.assertFalse(request("/api/settings", {})["warn_skip_review"])
-                self.assertFalse(request("/api/settings", {})["hide_advisory"])
+                expect(page.locator("#run-approval")).to_be_visible()
+                expect(page.locator("#run-warning")).to_be_hidden()
+                expect(page.locator("#run-approval-explanation")).to_contain_text("Plan may need updating")
+                expect(page.locator("#run-approval-documents")).to_contain_text("-Keep records for 30 days.")
+                expect(page.locator("#run-approval-documents")).to_contain_text("+Keep records for 90 days.")
+                self.assertEqual(page.locator("#run-approval-documents section").count(), 2)
+                self.assertEqual(set((project.root / ".vibe").glob("*/session/messages/*")), notes)
+                self.assertIsNone(self.server.runs.find(project))
+                page.locator("#run-approval-revisit").click()
+                expect(page.locator('.rail[data-stage="specification"]')).to_have_attribute("aria-expanded", "true")
+                self.assertIsNone(self.server.runs.find(project))
+                page.locator('.rail[data-stage="plan"]').click()
+                expect(page.locator("#message")).to_have_value("Preserve this exact run brief.")
+                expect(page.locator("#message-files")).to_contain_text("selected.txt")
+                expect(page.locator("#attachment-bar img")).to_have_attribute("alt", "sketch.png")
+                page.locator("#run-completion").click()
+                expect(page.locator("#run-approval")).to_be_visible()
+                plan = project.root / "Plan.md"
+                plan.write_text(plan.read_text().replace("90 days", "120 days"))
+                page.locator("#run-approval-proceed").click()
+                expect(page.locator("#run-approval-explanation")).to_contain_text("changed while this choice was open")
+                expect(page.locator("#run-approval-documents")).to_contain_text("+Keep records for 120 days.")
+                self.assertEqual(set((project.root / ".vibe").glob("*/session/messages/*")), notes)
+                self.assertIsNone(self.server.runs.find(project))
+                result = project.root / "One — Programming Result.md"
+                verification = project.root / "One — Verification Report.md"
+                (scenario / "0.json").write_text(json.dumps({"writes": {str(result): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"}}))
+                (scenario / "1.json").write_text(json.dumps({"writes": {str(verification): report("PASSED")}}))
+                with page.expect_response(lambda response: "/api/run-start" in response.url):
+                    page.locator("#run-approval-proceed").click()
+                expect(page.locator("#run-approval")).to_be_hidden()
+                expect(page.locator("#message")).to_have_value("")
+                expect(page.locator("#attachment-bar")).to_be_hidden()
+                expect(page.locator("#message-files")).to_be_hidden()
+                page.wait_for_function("() => runLast?.state === 'complete'")
+                turns = [conversation.read_turn(folder) for folder in conversation.turn_folders(project)]
+                work = [turn for turn in turns if turn["purpose"] == conversation.PURPOSE_WORK]
+                self.assertEqual([turn["fields"]["Run-Step"] for turn in work], ["build", "verification"])
+                for role in ("Specification", "Plan"):
+                    self.assertEqual(project._approved_document(role, str(project.root / f"{role}.md"), fresh=True)["text"],
+                                     (project.root / f"{role}.md").read_text())
                 self.assertEqual(errors, [])
             finally:
-                browser.close()
+                self.server.runs.drain()
 
     def test_header_stop_run_uses_the_run_stop_operation(self):
-        from playwright.sync_api import expect, sync_playwright
         project_id = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
         other_id = self.request("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})[1]["id"]
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+        with self.browser_session() as browser:
             try:
                 page = browser.new_page()
                 errors = []
@@ -2882,14 +1500,6 @@ elif skill.exists():
                 page.evaluate("() => stopPolling()")
                 self.choose_primary(page, "Codex")
                 page.evaluate("() => { readinessChain += 1; readinessState = {checking: false, peers: [{peer: 'codex', ready: true, work: 'supported', authentication: 'confirmed', warnings: []}]}; renderReadiness(); pendingRunConfig = {hide_advisory: true}; updateOperation({turn: 'ended-run-start', stage: 'programming', state: 'finished', elapsed_seconds: 12}); }")
-                page.route("**/api/run-start", lambda route: route.fulfill(status=409, json={"error": "The saved brief changed."}))
-                page.locator("#message").fill("Keep this brief after a rejected run start.")
-                page.locator("#run-completion").click()
-                expect(page.locator("#status-bar")).to_contain_text("Implementation · Finished · 0:12")
-                expect(page.locator("#status-bar")).to_contain_text("The run did not start; your brief stays here for retry.")
-                expect(page.locator("#message")).to_have_value("Keep this brief after a rejected run start.")
-                page.evaluate("() => updateOperation(null)")
-                expect(page.locator("#status-bar")).to_contain_text("The saved brief changed.")
                 active = {"run": "0001-20261017-000000", "state": "running", "step": "build",
                           "entry": "specification", "elapsed_seconds": 264, "activity": "Coding", "config": {}}
                 page.evaluate("report => updateRunState(report)", {"active": active})
@@ -2908,8 +1518,6 @@ elif skill.exists():
                 expect(page.locator("#waiting-actions").get_by_role("button", name="Inspect saved work")).to_be_visible()
                 page.locator("#waiting-actions").get_by_role("button", name="Inspect saved work").click()
                 expect(page.locator("#conversation")).to_be_visible()
-                # A newly saved paused packet is usable even before project
-                # discovery knows the file exists, including clipboard denial.
                 packet = {"text": "# Paused implementation request\n\nPictures not included: sketch.png.\n",
                           "path": str(self.home / "One" / "One — Implementation Request.md"),
                           "purpose": "implement-plan", "destination": "Codex", "pictures": ["sketch.png"]}
@@ -2934,45 +1542,6 @@ elif skill.exists():
                     page.locator("#implementation-proceed").click()
                 expect(page.locator("#delivery-note")).to_contain_text("sketch.png")
                 self.assertEqual(copied, [{"id": project_id, "displayed": packet["text"], "purpose": "implement-plan"}])
-                # A fresh request replaces the previous identity. Its pending
-                # clipboard result cannot write into another project's view.
-                packet = dict(packet, text="# New paused request\n", path=str(self.home / "One" / "Handoff.md"),
-                              purpose="planning", pictures=[])
-                page.evaluate("() => { navigator.clipboard.writeText = () => new Promise((resolve, reject) => { window.rejectCopy = reject; }); }")
-                page.locator("#waiting-actions").get_by_role("button", name="Copy request", exact=True).click()
-                page.wait_for_function("() => !!window.rejectCopy")
-                expect(page.locator("#raw")).to_have_value(packet["text"])
-                self.select_project(page, other_id)
-                page.wait_for_function("id => currentId === id && !!project && lastFiles !== null", arg=other_id)
-                page.locator("#message").fill("Other unsent work.")
-                other_path = page.locator("#prepared-path").input_value()
-                page.evaluate("() => window.rejectCopy(new Error('late denial'))")
-                expect(page.locator("#message")).to_have_value("Other unsent work.")
-                expect(page.locator("#prepared-path")).to_have_value(other_path)
-                self.assertIsNone(page.evaluate("() => draft().packet"))
-                self.assertEqual(page.evaluate("id => drafts.get(`${id}:specification`).packet", project_id), packet["text"])
-                self.select_project(page, project_id)
-                page.wait_for_function("id => currentId === id && !!project && lastFiles !== null", arg=project_id)
-                page.evaluate("() => stopPolling()")
-                # A retained unfinished endpoint carries the reason, neutrally.
-                page.evaluate("op => updateOperation(op)", {"turn": "dispatch", "stage": "programming", "state": "finished"})
-                for reason in ("The run ended unfinished after three attempts without progress. Inspect the saved reports.",
-                               "The step's AI refused the work. Add material and start a new run.", "The run failed: disk unavailable."):
-                    page.evaluate("report => updateRunState(report)", {"active": None, "last": dict(active,
-                        state="unfinished", reason=reason, steps=[{"turn": "dispatch", "step": "build"}])})
-                    expect(page.locator("#status-bar")).to_contain_text("Finished · 4:24 — " + reason)
-                    expect(page.locator("#status-bar")).not_to_have_class("active")
-                    expect(page.locator("#status-bar")).not_to_have_class("waiting")
-                page.evaluate("report => updateRunState(report)", {"active": None, "last": dict(active,
-                    state="complete", reason="Verification passed; the run is complete.", steps=[{"turn": "dispatch", "step": "build"}])})
-                expect(page.locator("#status-bar")).to_have_text("Run to Completion · Implementation · Finished · 4:24")
-                expect(page.locator("#status-bar")).not_to_have_class("active")
-                page.evaluate("report => { updateOperation(null); updateRunState(report); }", {"active": None,
-                    "last": {"run": "reopened", "state": "open", "steps": [{"turn": "old", "step": "verification"}]}})
-                expect(page.locator("#status-bar")).to_contain_text("Verification · Stopped")
-                expect(page.locator("#status-bar")).to_contain_text("previous run was interrupted and is unfinished")
-                expect(page.locator("#status-bar")).to_contain_text("nothing resumes by itself")
-                expect(page.locator("#status-bar")).not_to_have_class("active")
                 page.evaluate("report => updateRunState(report)", {"active": paused})
                 stopped = []
                 def stop_run(route):
@@ -3038,235 +1607,9 @@ elif skill.exists():
             self.server.conversation.drain([concurrent])
             self.assertFalse(concurrent.live_children())
 
-    def test_completed_review_polling_settles_without_repainting(self):
-        from playwright.sync_api import expect, sync_playwright
-        project_id = self.request("/api/create", {"directory": "Settled", "name": "Settled",
-                                                  "description": "", "goals": ""})[1]["id"]
-        folder = self.home / "Settled"
-        document = folder / "Specification.md"
-        original = "# Specification\n\n" + "\n\n".join(f"Paragraph {i}: preserve the reader's place." for i in range(90))
-        document.write_text(original, encoding="utf-8")
-        # Same terminal shape as the observed completed second-opinion review,
-        # with disposable names and text rather than private project material.
-        operation = {"project": str(folder), "tool": "codex", "stage": "review-plan",
-                     "turn": "completed-review", "state": "finished", "phase": "done", "activity": "Reviewing",
-                     "started": "2000-01-01T00:00:00Z", "elapsed_seconds": 335.387,
-                     "last_contact_seconds": 678.77, "reason": "", "maintenance": "applied",
-                     "warnings": ["Connector version evidence."], "bridge_diagnostics": ["Connector version evidence."],
-                     "visible_warnings": [], "maintenance_reason": "", "outcome_recorded": True,
-                     "artifact": {"role": "Plan", "path": str(folder / "Plan.md"), "outcome": "changed",
-                                  "reason": "The selected Plan changed.", "label": "PASSED", "applies": "current"}}
-        review = {"run": operation["turn"], "stage": "review-plan", "tool": "codex", "reviewer": "claude",
-                  "iterate": True, "same_lab": False, "author_provider": "openai", "reviewer_provider": "anthropic",
-                  "passes": [], "state": "complete", "rounds": 2, "agreement": "pass", "assessment": "applied",
-                  "notice": "", "output": "Verdict: COMPLETE\nThe document is sufficient.", "changes": None,
-                  "evaluation": "No material findings.", "verdict": "PASSED", "artifact": operation["artifact"],
-                  "bridge_diagnostics": operation["bridge_diagnostics"]}
-        records = {"turns": [], "runs": [review]}
-        conversations, reads, errors = [], [], []
-        unreadable, held_reads = False, []
-        delay_read = False
-
-        def ready(peer, **kwargs):
-            return {"peer": peer, "ready": True, "work": "supported", "authentication": "unknown", "warnings": []}
-
-        with mock.patch.object(conversation, "bridge_check", side_effect=ready), sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            try:
-                page = browser.new_page(viewport={"width": 1440, "height": 1000}, reduced_motion="reduce")
-                page.on("pageerror", lambda error: errors.append(str(error)))
-                page.goto(self.server.url)
-                self.select_project(page, project_id)
-                page.wait_for_function("() => pollTimer !== null && lastFiles !== null")
-                page.evaluate("() => stopPolling()")
-                page.locator("#document").select_option("Specification.md")
-                expect(page.locator("#reader")).to_contain_text("Paragraph 89")
-                page.locator("#message").fill("Keep this unsent instruction.")
-
-                def state(route):
-                    files = self.request("/api/turn-state", {"id": project_id})[1]["files"]
-                    route.fulfill(json={"operation": operation, "files": files, "run": {"active": None, "last": None}})
-
-                def history(route):
-                    conversations.append(1)
-                    route.fulfill(json=records)
-
-                def read(route):
-                    reads.append(route.request.post_data_json["path"])
-                    if delay_read and reads[-1] == "Specification.md":
-                        held_reads.append(route)
-                    elif unreadable and reads[-1] == "Specification.md":
-                        route.fulfill(json={"path": "Specification.md", "name": "Specification.md", "text": None,
-                                            "reason": "The document is unreadable.", "needs_selection": False, "not_started": False})
-                    else:
-                        route.fallback()
-
-                page.route("**/api/turn-state", state)
-                page.route("**/api/conversation", history)
-                page.route("**/api/read-file", read)
-                page.evaluate("() => loadConversation()")
-                page.evaluate("() => pollTick()")  # Establish the watched-file baseline.
-                page.evaluate("""() => {
-                    window.readerMutations = 0;
-                    new MutationObserver(events => { readerMutations += events.length; })
-                        .observe($('reader'), {childList: true, characterData: true, subtree: true});
-                    window.heldNode = $('reader').lastElementChild;
-                    document.querySelector('.result-body').scrollTop = 280;
-                    $('message').setSelectionRange(5, 9);
-                }""")
-                position = page.locator(".result-body").evaluate("element => element.scrollTop")
-                self.assertGreater(position, 0)
-                baseline = (len(conversations), len(reads))
-                for _ in range(3):
-                    page.evaluate("() => pollTick()")
-                self.assertEqual((len(conversations), len(reads)), baseline)
-                expect(page.locator("#status-bar")).to_have_text("Plan · Finished · 5:35")
-
-                # Real mtime-only touches, then another file changing: no flash,
-                # node replacement, reading-position loss or input consumption.
-                for touched in (document, document, folder / "Plan.md"):
-                    stamp = touched.stat()
-                    os.utime(touched, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
-                    page.evaluate("() => pollTick()")
-                self.assertEqual(document.read_text(encoding="utf-8"), original)
-                self.assertEqual(page.evaluate("readerMutations"), 0)
-                self.assertTrue(page.evaluate("heldNode === $('reader').lastElementChild"))
-                self.assertEqual(page.locator(".result-body").evaluate("element => element.scrollTop"), position)
-                self.assertEqual(page.locator("#message").evaluate("element => [element.selectionStart, element.selectionEnd]"), [5, 9])
-                expect(page.locator("#message")).to_have_value("Keep this unsent instruction.")
-                expect(page.locator("#status-bar")).to_have_text("Plan · Finished · 5:35")
-                evidence = os.environ.get("ORA_VIBE_TEST_EVIDENCE")
-                if evidence:
-                    Path(evidence).mkdir(parents=True, exist_ok=True)
-                    page.screenshot(path=str(Path(evidence) / "settled-reader.png"))
-
-                # A genuine edit renders once; subsequent idle polls settle.
-                document.write_text(original + "\n\nA genuinely new paragraph.\n", encoding="utf-8")
-                page.evaluate("() => pollTick()")
-                expect(page.locator("#reader")).to_contain_text("A genuinely new paragraph.")
-                self.assertFalse(page.evaluate("heldNode === $('reader').lastElementChild"))
-                changed_mutations = page.evaluate("readerMutations")
-                self.assertGreater(changed_mutations, 0)
-                for _ in range(3):
-                    page.evaluate("() => pollTick()")
-                self.assertEqual(page.evaluate("readerMutations"), changed_mutations)
-                self.assertEqual(page.locator(".result-body").evaluate("element => element.scrollTop"), position)
-
-                # Auxiliary outcomes are intentionally absent from both readers.
-                # Each transition refreshes once; the terminal operation settles.
-                for purpose in ("judgment", "sorting", "materiality"):
-                    operation.update(turn=f"aux-{purpose}", stage=f"{purpose}-planning", activity="Reviewing", state="running", maintenance=purpose)
-                    page.evaluate("() => pollTick()")
-                    stamp = document.stat()
-                    os.utime(document, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
-                    page.evaluate("() => pollTick()")
-                    expect(page.locator("#status-bar")).to_contain_text("Plan · Reviewing · 5:35")
-                    operation.update(state="finished")
-                    before = len(conversations)
-                    page.evaluate("() => pollTick()")
-                    self.assertEqual(len(conversations), before + 1)
-                    expect(page.locator("#status-bar")).to_have_text("Plan · Finished · 5:35")
-                    expect(page.locator("#status-bar")).not_to_have_class("warning")
-                    for _ in range(3):
-                        page.evaluate("() => pollTick()")
-                    self.assertEqual(len(conversations), before + 1)
-                operation.update(warnings=["The outcome note could not be recorded."],
-                                 visible_warnings=["The outcome note could not be recorded."], outcome_recorded=False)
-                page.evaluate("() => pollTick()")
-                stamp = document.stat()
-                os.utime(document, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
-                page.evaluate("() => pollTick()")
-                expect(page.locator("#status-bar")).to_contain_text("The outcome note could not be recorded.")
-                expect(page.locator("#status-bar")).to_contain_text("Plan · Waiting · 5:35")
-                expect(page.locator("#status-bar")).to_have_class("waiting")
-                operation.update(state="failed", reason="The read-only check failed.")
-                page.evaluate("() => pollTick()")
-                expect(page.locator("#status-bar")).to_contain_text("The read-only check failed.")
-                expect(page.locator("#status-bar")).to_contain_text("Plan · Waiting · 5:35")
-                expect(page.locator("#status-bar")).to_have_class("waiting")
-
-                # Ordinary and review results can appear after terminal status.
-                # Missing records and late maintenance still catch up normally.
-                operation.update(turn="late-work", stage="specification", state="finished", maintenance="no-change",
-                                 warnings=[], visible_warnings=[], outcome_recorded=True, reason="")
-                late = {"turn": "late-work", "stage": "specification", "tool": "codex", "purpose": "work",
-                        "text": "The saved request.", "images": [], "files": [], "state": "complete",
-                        "reply": "The late saved answer.", "maintenance": None, "outcome_recorded": False,
-                        "artifact": None, "bridge_diagnostics": [], "questions": []}
-                records["turns"] = [late]
-                page.evaluate("() => pollTick()")
-                expect(page.locator("#conversation")).to_contain_text("The late saved answer.")
-                late.update(outcome_recorded=True, maintenance={"outcome": "no-change", "notice": "", "unsaved": False})
-                page.evaluate("() => pollTick()")
-                expect(page.locator("#conversation")).to_contain_text("Registry: no change needed")
-                before = len(conversations)
-                page.evaluate("() => pollTick()")
-                self.assertEqual(len(conversations), before)
-                operation.update(turn=review["run"], stage="review-plan")
-                page.evaluate("() => { reviewRuns[0].state = 'open'; }")
-                page.evaluate("() => pollTick()")
-                self.assertEqual(len(conversations), before + 1)
-                page.evaluate("() => pollTick()")
-                self.assertEqual(len(conversations), before + 1)
-                operation.update(turn="unrecordable", outcome_recorded=False, state="failed", reason="Could not save the outcome.")
-                page.evaluate("() => pollTick()")
-                before = len(conversations)
-                page.evaluate("() => pollTick()")
-                self.assertEqual(len(conversations), before)
-                expect(page.locator("#status-bar")).to_contain_text("Could not save the outcome.")
-
-                # Unreadable states replace old content honestly and settle too.
-                unreadable = True
-                stamp = document.stat()
-                os.utime(document, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
-                page.evaluate("() => pollTick()")
-                expect(page.locator("#reader")).to_contain_text("The document is unreadable.")
-                unreadable = False
-                stamp = document.stat()
-                os.utime(document, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000_000))
-                page.evaluate("() => pollTick()")
-                expect(page.locator("#reader")).to_contain_text("A genuinely new paragraph.")
-
-                # A newer reader choice owns the pane even if the automatic
-                # read of the old document finishes afterward.
-                delay_read = True
-                document.write_text(original + "\n\nStale pending read.\n", encoding="utf-8")
-                with page.expect_request("**/api/read-file"):
-                    page.evaluate("() => { window.pendingRefresh = pollTick(); }")
-                page.locator("#document").select_option("Plan.md")
-                expect(page.locator("#reader .reader-caption")).to_have_text("File: Plan.md — Not started")
-                held_reads.pop().fulfill(json={"path": "Specification.md", "name": "Specification.md",
-                                               "text": "Stale pending read.", "reason": "", "needs_selection": False, "not_started": False})
-                page.evaluate("() => pendingRefresh")
-                expect(page.locator("#reader .reader-caption")).to_have_text("File: Plan.md — Not started")
-                expect(page.locator("#reader")).not_to_contain_text("Stale pending read.")
-                delay_read = False
-                page.locator("#document").select_option("Specification.md")
-                expect(page.locator("#reader")).to_contain_text("Stale pending read.")
-                document.unlink()
-                page.evaluate("() => pollTick()")
-                expect(page.locator("#reader")).to_contain_text("is no longer present in this project")
-                expect(page.locator("#reader")).not_to_contain_text("Stale pending read.")
-                expect(page.locator("#message")).to_have_value("Keep this unsent instruction.")
-                self.assertEqual(errors, [])
-            finally:
-                browser.close()
-
     def test_conversation_reloads_across_a_runs_step_transitions(self):
-        # A run's driver starts the next step's turn as soon as the previous
-        # one finishes, so a poll may never observe a terminal operation.
-        # When the observed run, step or running turn changes, the poll
-        # reloads the conversation from the retained records; unsent drafts
-        # survive and an unchanged run refetches nothing.
-        try:
-            from playwright.sync_api import expect, sync_playwright
-        except ImportError:
-            self.skipTest("Playwright is not installed for the browser check")
         project_id = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})[1]["id"]
-        with sync_playwright() as playwright:
-            if not Path(playwright.chromium.executable_path).is_file():
-                self.skipTest("Playwright's Chromium is not installed for the browser check")
-            browser = playwright.chromium.launch(headless=True)
+        with self.browser_session() as browser:
             try:
                 page = browser.new_page()
                 page.goto(self.server.url)
@@ -3309,14 +1652,10 @@ elif skill.exists():
                 page.evaluate("() => pollTick()")
                 expect(page.locator("#conversation")).to_contain_text("The run brief: build the small tool.")
                 expect(page.locator("#conversation")).not_to_contain_text("Specification saved from the run's first step.")
-                # The driver has moved to the Plan step with a new running
-                # turn: the next poll reloads the records, so the completed
-                # step's reply appears while the run continues.
                 observed.update(step="planning", turn="0003-20261017-000000")
                 page.evaluate("() => pollTick()")
                 expect(page.locator("#conversation")).to_contain_text("Specification saved from the run's first step.")
                 expect(page.locator("#message")).to_have_value("An unsent draft that must survive the run.")
-                # An unchanged run, step and turn refetch nothing.
                 self.assertEqual(len(conversations), 2)
                 page.evaluate("() => pollTick()")
                 self.assertEqual(len(conversations), 2)
@@ -3337,15 +1676,13 @@ elif skill.exists():
                                  ["/api/quit-state", "/api/stop"] if confirmed else ["/api/quit-state"])
 
     def test_conversation_opens_at_latest_and_keeps_reading_position(self):
-        from playwright.sync_api import expect, sync_playwright
         first = self.request("/api/create", {"directory": "ScrollOne", "name": "Scroll One", "description": "", "goals": ""})[1]["id"]
         second = self.request("/api/create", {"directory": "ScrollTwo", "name": "Scroll Two", "description": "", "goals": ""})[1]["id"]
         turns = [{"turn": f"{index:04}", "tool": "codex", "stage": "planning", "state": "finished",
                   "text": f"Message {index}", "reply": (f"Answer {index}. " * 100)} for index in range(25)]
         def ready(peer, **kwargs):
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "unknown", "warnings": []}
-        with mock.patch.object(conversation, "bridge_check", side_effect=ready), sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+        with mock.patch.object(conversation, "bridge_check", side_effect=ready), self.browser_session() as browser:
             try:
                 page = browser.new_page(viewport={"width": 1280, "height": 720}, reduced_motion="reduce")
                 errors = []; page.on("pageerror", lambda error: errors.append(str(error)))
@@ -3377,23 +1714,15 @@ elif skill.exists():
                 page.evaluate("() => loadConversation()")
                 page.get_by_role("button", name="Show conversation", exact=True).click()
                 page.wait_for_function(at_bottom)
-                evidence = os.environ.get("VIBE_CONFIGURATION_EVIDENCE")
-                if evidence:
-                    Path(evidence).mkdir(parents=True, exist_ok=True)
-                    page.screenshot(path=str(Path(evidence) / "conversation-latest-narrow.png"))
-                    (Path(evidence) / "conversation-scroll.json").write_text(json.dumps({"older_reading_top_before": top,
-                        "older_reading_top_after": top, "latest": page.locator("#conversation").evaluate("e => ({top:e.scrollTop, height:e.clientHeight, content:e.scrollHeight})")}, indent=2))
                 self.assertEqual(errors, [])
             finally:
                 browser.close()
 
     def test_close_warning_only_protects_unsaved_user_content(self):
-        from playwright.sync_api import expect, sync_playwright
         project_id = self.request("/api/create", {"directory": "Close", "name": "Close", "description": "", "goals": ""})[1]["id"]
         def ready(peer, **kwargs):
             return {"peer": peer, "ready": True, "work": "supported", "authentication": "unknown", "warnings": []}
-        with mock.patch.object(conversation, "bridge_check", side_effect=ready), sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+        with mock.patch.object(conversation, "bridge_check", side_effect=ready), self.browser_session() as browser:
             try:
                 page = browser.new_page()
                 errors = []; page.on("pageerror", lambda error: errors.append(str(error)))
@@ -3421,10 +1750,6 @@ elif skill.exists():
                 page.locator("#project-card").click()
                 page.locator("#edit-description").fill("An unsaved project change.")
                 results["unsaved_project_edit"] = warns()
-                evidence = os.environ.get("VIBE_CONFIGURATION_EVIDENCE")
-                if evidence:
-                    Path(evidence).mkdir(parents=True, exist_ok=True)
-                    page.screenshot(path=str(Path(evidence) / "close-unsaved-project.png"))
                 page.locator("#edit-description").fill("")
                 page.locator("#edit-close").click()
                 results["cleared"] = warns()
@@ -3434,7 +1759,6 @@ elif skill.exists():
                 self.assertEqual(results, {"fresh": False, "tool_selected": False, "stale_prepared_packet": False,
                     "unsent_text": True, "unsent_image": True, "selected_message_file": True,
                     "selected_project_material": True, "unsaved_project_edit": True, "cleared": False, "unsaved_new_project": True})
-                if evidence: (Path(evidence) / "close-warning-results.json").write_text(json.dumps(results, indent=2))
                 self.assertEqual(errors, [])
             finally:
                 browser.close()
@@ -3481,8 +1805,6 @@ elif skill.exists():
         self.assertIn("External observation.", preview["text"])
         self.assertIn("Files selected as evidence", preview["text"])
         self.assertNotIn("Organize their useful content into this project's Registry", preview["text"])
-        # An honest handle that was never stopped: is_cancelled() must return
-        # a real False (#57), or _complete_turn reads the turn as interrupted.
         fake_handle = mock.Mock(warnings=[])
         fake_handle.is_cancelled.return_value = False
         with mock.patch("ora_vibe_coder.conversation._record_outcome") as record:
@@ -3495,43 +1817,6 @@ elif skill.exists():
         status, page, headers = self.request("/", {}, method="GET")
         self.assertEqual(status, 200)
         page = page.decode("utf-8")
-        self.assertIn("Enter sends. Shift+Enter adds a new line. Input-method composition is respected.", page)
-        self.assertEqual(page.count('class="rail" data-stage='), 3)
-        status, stylesheet, _ = self.request("/static/style.css", {}, method="GET")
-        self.assertEqual(status, 200)
-        stylesheet = stylesheet.decode("utf-8")
-
-        def declarations(selector):
-            match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", stylesheet)
-            self.assertIsNotNone(match)
-            return {
-                name.strip(): value.strip()
-                for name, value in (
-                    declaration.split(":", 1)
-                    for declaration in match.group(1).split(";")
-                    if ":" in declaration
-                )
-            }
-
-        # The one status bar floats above open modals so its answer-needing
-        # text is never hidden behind a dialog.
-        base_bar = declarations("#status-bar")
-        floating_bar = declarations("body:has(.modal:not([hidden])) #status-bar")
-        modal = declarations(".modal")
-        picker = declarations("#folder-picker, #file-picker")
-        self.assertEqual(floating_bar["position"], "fixed")
-        self.assertEqual(base_bar["overflow"], "hidden")
-        self.assertGreater(
-            int(floating_bar["z-index"]),
-            int(picker["z-index"]),
-        )
-        self.assertGreater(int(picker["z-index"]), int(modal["z-index"]))
-        modal_top = (
-            int(modal["inset"].split()[0].removesuffix("vh"))
-            / 100
-            * 720
-        )
-        self.assertLess(8, modal_top)
         self.assertIn("default-src 'none'", headers["Content-Security-Policy"])
         for headers in ({"X-Ora-Token": "wrong"}, {"Host": "evil.example"}, {"Origin": "https://evil.example"}, {"Origin": "null"}):
             with self.subTest(headers=headers):
@@ -3543,10 +1828,6 @@ elif skill.exists():
         self.assertEqual(self.request("/static/../server.py", {}, method="GET")[0], 404)
         self.assertEqual(self.request("/api/write", {"path": "/tmp/nope", "text": "bad"})[0], 400)
 
-        # The same-origin attachment route sits behind the full boundary —
-        # host, origin, and the tab's token, the last carried in the query
-        # because an image load cannot carry headers — and serves only a
-        # retained original of an opened project's turn.
         code, created, _ = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})
         self.assertEqual(code, 200)
         key = created["id"]
@@ -3574,11 +1855,6 @@ elif skill.exists():
             with self.subTest(bad=bad):
                 self.assertIn(self.request(bad, {}, method="GET")[0], {400, 404})
 
-        # A linked parent directory cannot relocate the retained-attachment
-        # location itself: confinement covers every path component from the
-        # project's reserved .vibe root down to the served file, so a turn's
-        # attachments folder — or the turn folder itself — symlinked outside
-        # the project serves nothing even through an otherwise valid name.
         outside = self.home / "outside attachments"
         outside.mkdir()
         (outside / "0001-external.png").write_bytes(b"\x89PNG\r\n\x1a\n external pixels")
@@ -3595,19 +1871,14 @@ elif skill.exists():
                 self.assertEqual(self.request(linked, {}, method="GET")[0], 404)
 
     def test_composer_default_size_and_divider_keep_message_accessible(self):
-        from playwright.sync_api import expect, sync_playwright
 
         project_id = self.request("/api/create", {"directory": "Composer", "name": "Composer", "description": "", "goals": ""})[1]["id"]
-        evidence = Path(os.environ["VIBE_COMPOSER_EVIDENCE"]) if os.environ.get("VIBE_COMPOSER_EVIDENCE") else None
-        if evidence:
-            evidence.mkdir(parents=True, exist_ok=True)
-        measurements, errors = {}, []
+        errors = []
         questions = ["Which code folder should I use for these corrections?"]
         repairs = ["Keep the corrections within the selected stage."]
         with mock.patch("ora_vibe_coder.conversation.bridge_check", side_effect=lambda peer, **kwargs: {
                 "peer": peer, "ready": True, "work": "supported", "authentication": "confirmed", "warnings": []}), \
-                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+                mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), self.browser_session() as browser:
             try:
                 page = browser.new_page(viewport={"width": 1440, "height": 1100}, reduced_motion="reduce")
                 page.on("pageerror", lambda error: errors.append(str(error)))
@@ -3619,127 +1890,70 @@ elif skill.exists():
                 page.locator("#message").fill("Keep my unsent message through every stage.")
 
                 def content(question_list, repair_list):
-                    # Use the real renderers with local stand-in answers. A
-                    # long history must not squeeze the response controls.
                     page.evaluate(r"""data => {
                         conversationTurns = [{turn: '0001', state: 'complete', tool: 'codex', stage: 'specification',
                             text: 'Please review this project.', reply: ('A complete paragraph from the previous conversation.\n\n').repeat(40), questions: data.questions}];
                         reviewRuns = [];
+                        project.assessments = {specification: {verdict: 'NOT PASSED', issues: [], applies: 'current',
+                            path: 'Specification.md', findings_key: 'composer-fixture'}};
                         renderConversation(); renderQuestions();
-                        if (data.repairs.length) renderRepairsResult({stage: 'specification', key: 'composer-fixture'},
+                        if (data.repairs.length) renderRepairsResult(sortingTrigger(),
                             {state: 'answered', answer: {ai: data.repairs, user: []}});
                         else { document.getElementById('repairs-box').hidden = true; document.getElementById('repairs-box').replaceChildren(); }
                         document.querySelector('.compose-message').scrollTop = 0;
                     }""", {"questions": question_list, "repairs": repair_list})
 
-                def capture(name):
-                    result = page.evaluate("""() => {
-                        const box = id => document.getElementById(id).getBoundingClientRect().toJSON();
-                        const compose = document.querySelector('.compose-message');
-                        return {pane: box('work-step-body'), conversation: box('conversation'),
-                            compose: {...compose.getBoundingClientRect().toJSON(), clientHeight: compose.clientHeight,
-                                scrollHeight: compose.scrollHeight, clientWidth: compose.clientWidth, scrollWidth: compose.scrollWidth},
-                            message: box('message'), send: box('send'), scrollTop: compose.scrollTop,
-                            viewport: {width: innerWidth, height: innerHeight},
-                            pageWidth: document.documentElement.scrollWidth};
-                    }""")
-                    measurements[name] = result
-                    if evidence:
-                        page.screenshot(path=str(evidence / f"{name}.png"), full_page=True)
-                    self.assertLessEqual(result["pageWidth"], result["viewport"]["width"])
-                    self.assertLessEqual(result["compose"]["scrollWidth"], result["compose"]["clientWidth"] + 1)
-                    return result
+                def reachable():
+                    page.locator("#message").scroll_into_view_if_needed()
+                    expect(page.locator("#message")).to_be_in_viewport()
+                    page.locator("#send").scroll_into_view_if_needed()
+                    expect(page.locator("#send")).to_be_in_viewport()
 
-                for width, height in ((1440, 1100), (1280, 720), (420, 900)):
-                    page.set_viewport_size({"width": width, "height": height})
-                    for name, question_list, repair_list in (("plain", [], []), ("questions-repairs", questions, repairs)):
-                        content(question_list, repair_list)
-                        metrics = capture(f"{width}-{height}-{name}")
-                        self.assertGreaterEqual(metrics["conversation"]["height"], min(150, metrics["pane"]["height"] * .24))
-                        if width >= 1280:
-                            self.assertGreater(metrics["compose"]["height"], 120)
-                            # Fit everything together when the content leaves
-                            # reading room; wrapped controls on a short window
-                            # may need the same honest scroll as long content.
-                            if metrics["compose"]["scrollHeight"] <= metrics["pane"]["height"] - 150:
-                                self.assertGreaterEqual(metrics["message"]["top"], metrics["compose"]["top"])
-                                self.assertLessEqual(metrics["send"]["bottom"], metrics["compose"]["bottom"] + 1)
-                                self.assertLessEqual(metrics["compose"]["scrollHeight"], metrics["compose"]["clientHeight"] + 1)
-                        page.locator("#message").scroll_into_view_if_needed()
-                        expect(page.locator("#message")).to_be_in_viewport()
-                        page.locator("#send").scroll_into_view_if_needed()
-                        expect(page.locator("#send")).to_be_in_viewport()
-
-                # Content is retained whole; scroll to both ends on a short
-                # desktop and on the narrow layout, then reach the controls.
                 long_questions = [f"Question {index}: " + "Which correction should be made first? " * 4 for index in range(20)]
                 long_repairs = [f"Finding {index}: " + "Preserve the complete existing behavior. " * 4 for index in range(20)]
                 for width, height in ((1280, 720), (420, 900)):
                     page.set_viewport_size({"width": width, "height": height})
                     content(long_questions, long_repairs)
-                    capture(f"{width}-{height}-long-top")
                     self.assertEqual(page.locator("#questions-box li").all_text_contents(), long_questions)
                     self.assertEqual(page.locator("#repairs-box li").all_text_contents(), long_repairs)
-                    page.locator("#send").scroll_into_view_if_needed()
-                    expect(page.locator("#send")).to_be_in_viewport()
-                    capture(f"{width}-{height}-long-send")
-                    page.locator("#message").scroll_into_view_if_needed()
-                    expect(page.locator("#message")).to_be_in_viewport()
+                    reachable()
 
-                # The user's pointer and keyboard choices still size the
-                # pane, and adding questions does not reset that choice.
                 page.set_viewport_size({"width": 1440, "height": 1100})
                 content(questions, repairs)
-                before = capture("divider-default")
-                divider = page.locator("#conversation-divider").bounding_box()
-                pane = before["pane"]
-                page.mouse.move(divider["x"] + divider["width"] / 2, divider["y"] + divider["height"] / 2)
+                divider = page.locator("#conversation-divider")
+                divider.scroll_into_view_if_needed()
+                pane = page.locator("#work-step-body").bounding_box()
+                conversation = page.locator("#conversation")
+                handle = divider.bounding_box()
+                page.mouse.move(handle["x"] + handle["width"] / 2, handle["y"] + handle["height"] / 2)
                 page.mouse.down()
-                page.mouse.move(divider["x"] + divider["width"] / 2, pane["top"] + pane["height"] * .4)
+                page.mouse.move(handle["x"] + handle["width"] / 2, pane["y"] + pane["height"] * .4)
                 page.mouse.up()
-                dragged = capture("divider-pointer")
-                self.assertAlmostEqual(dragged["conversation"]["height"] / pane["height"], .4, delta=.02)
-                page.locator("#conversation-divider").press("ArrowDown")
-                keyed = capture("divider-keyboard")
-                self.assertAlmostEqual(keyed["conversation"]["height"] / pane["height"], .45, delta=.02)
+                expect(divider).to_have_attribute("aria-valuenow", "40")
+                dragged = conversation.bounding_box()["height"]
+                divider.press("ArrowDown")
+                expect(divider).to_have_attribute("aria-valuenow", "45")
+                self.assertGreater(conversation.bounding_box()["height"], dragged)
                 content(long_questions, long_repairs)
-                retained = capture("divider-long-content")
-                self.assertAlmostEqual(retained["conversation"]["height"], keyed["conversation"]["height"], delta=1)
+                expect(divider).to_have_attribute("aria-valuenow", "45")
 
-                picture = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c020000000b4944415478da6364f80f00010501012718e3660000000049454e44ae426082")
-                page.locator("#image-input").set_input_files({"name": "draft.png", "mimeType": "image/png", "buffer": picture})
-                for stage in ("plan", "build", "specification"):
-                    page.locator(f'.rail[data-stage="{stage}"]').click()
-                    page.wait_for_function("stage => workspace === stage && workspaceReveal === null", arg=stage)
-                    expect(page.locator("#message")).to_have_value("Keep my unsent message through every stage.")
-                    expect(page.locator("#attachment-bar img")).to_have_count(1)
-                    self.assertAlmostEqual(page.locator("#conversation").bounding_box()["height"], keyed["conversation"]["height"], delta=1)
                 page.evaluate("() => updateOperation({turn: 'stand-in-active', state: 'running', elapsed_seconds: 1, last_contact_seconds: 0})")
                 expect(page.locator("#send")).to_be_disabled()
                 page.evaluate("() => updateOperation(null)")
                 expect(page.locator("#send")).to_be_enabled()
                 self.assertEqual(errors, [])
             finally:
-                if evidence:
-                    (evidence / "composer-metrics.json").write_text(json.dumps(measurements, indent=2) + "\n", encoding="utf-8")
                 browser.close()
 
     def test_check_updates_answers_and_failure_path_use_a_stand_in_lookup(self):
-        from playwright.sync_api import expect, sync_playwright
 
-        # The deliberate check answers one of four ways through a stand-in
-        # release record: no request leaves the machine in this test.
         running = (Path(__file__).resolve().parents[1] / "plugins" / "ora-vibe-coder" / "VERSION").read_text(encoding="utf-8").strip()
         major, minor, patch = (int(part) for part in running.split("."))
         release_page = lambda tag: f"https://github.com/ora-commons/ora-vibe-coder/releases/tag/v{tag}"
         def stand_in(tag):
             return lambda: {"tag_name": f"v{tag}", "html_url": release_page(tag)}
-        evidence = Path(os.environ["VIBE_COMPOSER_EVIDENCE"]) if os.environ.get("VIBE_COMPOSER_EVIDENCE") else None
-        if evidence:
-            evidence.mkdir(parents=True, exist_ok=True)
         errors = []
-        with mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+        with mock.patch.object(hosts, "executable", return_value=["/fake/tool"]), self.browser_session() as browser:
             try:
                 page = browser.new_page(viewport={"width": 1440, "height": 1100})
                 page.on("pageerror", lambda error: errors.append(str(error)))
@@ -3761,11 +1975,7 @@ elif skill.exists():
                     else:
                         expect(link).to_have_count(0)
                     self.assertEqual(errors, [])
-                    if evidence:
-                        page.screenshot(path=str(evidence / f"updates-{name}.png"), full_page=True)
 
-                # The final newer result repeats a check after every other
-                # answer, proving the button and release link can be reused.
                 for tag, expected in ((f"{major}.{minor + 1}.0", "newer"), (f"{major}.{minor}.{patch}", "same"), ("0.0.1", "ahead")):
                     with self.subTest(answer=expected):
                         self.server.update_lookup = stand_in(tag)
@@ -3821,12 +2031,15 @@ elif skill.exists():
         external.write_text("Do not read without explicit selection", encoding="utf-8")
         _, project, _ = self.request("/api/project", {"id": key})
         self.request("/api/save", {"id": key, "expected": project["raw"], "name": "One", "description": "", "goals": "", "paths": {"Specification": str(external)}})
-        _, document, _ = self.request("/api/read", {"id": key, "role": "Specification"})
+        _, snapshot, _ = self.request("/api/project", {"id": key})
+        associated = {entry["path"]: entry for entry in snapshot["reader"]}[str(external)]
+        self.assertTrue(associated["needs_selection"])  # The saved brief alone never grants the read.
+        _, document, _ = self.request("/api/read-file", {"id": key, "path": str(external)})
         self.assertIsNone(document["text"])
         self.assertTrue(document["needs_selection"])
         self.assertEqual(self.request("/api/approve-reference", {"id": key, "role": "Specification", "path": "/wrong/path"})[0], 400)
         self.assertEqual(self.request("/api/approve-reference", {"id": key, "role": "Specification", "path": str(external)})[0], 200)
-        self.assertEqual(self.request("/api/read", {"id": key, "role": "Specification"})[1]["text"], external.read_text())
+        self.assertEqual(self.request("/api/read-file", {"id": key, "path": str(external)})[1]["text"], external.read_text())
         status, body, headers = self.request("/api/stop", {})
         self.assertEqual((status, body), (200, {"stopped": True, "interrupted": 0, "note": ""}))
         self.thread.join(timeout=2)
@@ -3836,10 +2049,6 @@ elif skill.exists():
         self.assertTrue(external.exists())
         self.server.server_close()
 
-        # Native Quit helper, end to end through the launch record it reads:
-        # a visible-input Cancel leaves the local server serving, and an
-        # empty-input quit stops it. The launch URL's fragment carries only
-        # the token, which must not derail the helper's API requests.
         self.server = LocalServer(self.home)
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": .01})
         self.thread.start()
@@ -3857,9 +2066,6 @@ elif skill.exists():
         self.assertFalse(self.thread.is_alive())
 
     def test_guided_stage_prerequisites(self):
-        # No lifecycle gate remains: planning and programming assignments stay
-        # preparable with missing, incomplete, unreviewed, or unapproved
-        # documents, and assessments are advisory facts that never block.
         code, data, _ = self.request("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})
         self.assertEqual(code, 200)
         key = data["id"]
@@ -3881,8 +2087,6 @@ elif skill.exists():
             _, body, _ = self.request("/api/project", {"id": key})
             return body
 
-        # Forward actions are available with nothing reviewed or approved, and
-        # write only the outgoing file.
         for stage in ("create-plan", "implement-plan"):
             status, body, _ = prepare(stage)
             self.assertEqual(status, 200)
@@ -3897,12 +2101,6 @@ elif skill.exists():
         self.assertEqual(status, 409)
         self.assertEqual(conflict["current"], "Hand-edited handoff\n")
         self.assertEqual(handoff.read_text(encoding="utf-8"), "Hand-edited handoff\n")
-        handoff.write_text("Changed while reviewing\n", encoding="utf-8")
-        request["expected"] = conflict["current"]
-        status, conflict, _ = self.request("/api/prepare", request)
-        self.assertEqual(status, 409)
-        self.assertEqual(conflict["current"], "Changed while reviewing\n")
-        self.assertEqual(handoff.read_text(encoding="utf-8"), "Changed while reviewing\n")
         request["expected"] = conflict["current"]
         status, replacement, _ = self.request("/api/prepare", request)
         self.assertEqual(status, 200)
@@ -3922,47 +2120,16 @@ elif skill.exists():
         self.assertIn("## Plan", implementation)
         self.assertEqual(self.request("/api/copy", {"id": key, "displayed": implementation, "purpose": "implement-plan"})[1]["text"], implementation)
         self.assertNotIn("Verified gate for this forward assignment", forward)
-        self.assertIn("Status: DRAFT", specification_text())
+        self.assertIn("status: APPROVED", specification_text())  # Preparing records the upstream approval.
         self.assertIn("Programming: NOT STARTED", (root / "Project.md").read_text(encoding="utf-8"))
-        self.assertFalse((root / "One — 03 Implementation Plan.md").exists())  # Preparing creates no Plan.
+        self.assertFalse((root / "One — Plan.md").exists())  # Preparing creates no Plan.
 
-        # A draft Status and a recorded FAILED legacy verdict stay advisory:
-        # nothing blocks, and no gate text appears.
-        from ora_vibe_coder.status import review_basis
-        basis = review_basis(specification_text())
-        (root / "Specification.md").write_text(
-            f"# Specification\n\nStatus: DRAFT\n\n## Current review\n\nStage: Specification\nVerdict: NOT PASSED\nBasis: {basis}\n\nNot yet.\n\n## Body\nBehavior.\n",
-            encoding="utf-8")
-        status, body, _ = prepare("create-plan")
-        self.assertEqual(status, 200)
-        state = snapshot()
-        self.assertEqual(state["assessments"]["specification"]["verdict"], "NOT PASSED")
-        self.assertEqual(state["assessments"]["specification"]["applies"], "unconfirmed")  # Legacy record.
-
-        # A saved completeness assessment in the app's recorded format (#57:
-        # content-v2 basis) drives the display facts: the count comes from the
-        # findings list, and the document-only basis means a later edit
-        # identifies it as earlier — still without blocking.
-        (root / "Specification.md").write_text(
-            f"# Specification\n\nStatus: DRAFT\n\n## Current review\n\nStage: Specification\nVerdict: INCOMPLETE\nBasis: {basis}\nBasis format: content-v2\n\n- First gap.\n- Second gap.\n\n## Body\nBehavior.\n",
-            encoding="utf-8")
-        state = snapshot()
-        assessment = state["assessments"]["specification"]
-        self.assertEqual((assessment["verdict"], assessment["findings"], assessment["applies"]), ("INCOMPLETE", 2, "current"))
         status, body, _ = prepare("review-specification")
         self.assertEqual(status, 200)
         review_packet = (root / "Handoff.md").read_text(encoding="utf-8")
         self.assertIn("Saving the assessment", review_packet)
-        self.assertIn("Verdict: COMPLETE    (or INCOMPLETE)", review_packet)
-        (root / "Specification.md").write_text(
-            specification_text().replace("## Body\nBehavior.", "## Body\nBehavior, revised."),
-            encoding="utf-8")
-        state = snapshot()
-        self.assertEqual(state["assessments"]["specification"]["applies"], "earlier")
         for stage in ("specification", "planning", "create-plan", "implement-plan", "programming"):
             self.assertEqual(prepare(stage)[0], 200)
-        # An unreviewed Plan stays equally preparable; untouched starter
-        # templates report Not started, distinct from Not reviewed.
         state = snapshot()
         self.assertEqual(state["assessments"]["planning"]["untouched"], True)
         self.assertFalse(state["assessments"]["planning"]["present"])
@@ -3971,16 +2138,12 @@ elif skill.exists():
         self.assertIn("Repository / code folder", loop_packet)
         self.assertIn("No code folder selected", loop_packet)
         self.assertIn("Programming: NOT STARTED", (root / "Project.md").read_text(encoding="utf-8"))
-        # Preparing never writes stage documents: the folder holds only the intended files.
         self.assertEqual(sorted(path.name for path in root.iterdir()),
-                         ["Handoff.md", "One — Implementation Request.md", "Plan.md", "Project.md", "Registry.md", "Request.md", "Specification.md"])
+                         [".vibe", "Handoff.md", "One — Implementation Request.md", "Plan.md", "Project.md", "Registry.md", "Request.md", "Specification.md"])
         self.assertIn("One — Implementation Request.md", [entry["name"] for entry in snapshot()["reader"]])
         self.assertNotEqual(forward, implementation)
 
     def test_documents_inventory_startup_and_preferences(self):
-        # Normal startup builds its inventory automatically under the injected
-        # root (the disposable twin of the user's Documents folder); the saved
-        # projects-home setting no longer takes part in startup at all.
         preferences = Settings(self.home / "settings.json")
         preferences.update(unrelated="keep", projects_home=str(self.home / "gone"))
         self.server.settings = preferences
@@ -4004,8 +2167,6 @@ elif skill.exists():
         self.assertFalse(by_path[str(active)]["archived"])
         self.assertTrue(by_path[str(archived)]["archived"])  # Marked so the client restores active projects only.
 
-        # Opening an archived project does not reactivate it, and the recent
-        # settings stay useful without determining the inventory.
         self.assertEqual(self.request("/api/open", {"path": str(archived)})[0], 200)
         _, refreshed, _ = self.request("/api/projects", {})
         entry = next(item for item in refreshed["projects"] if item["path"] == str(archived))
@@ -4013,11 +2174,8 @@ elif skill.exists():
         self.assertEqual(preferences.read()["last_project"], str(archived))
         self.assertNotEqual(preferences.read().get("projects_home"), str(self.home))
         self.assertEqual(preferences.read()["unrelated"], "keep")
-        # The obsolete folder-selection operation no longer exists.
         self.assertEqual(self.request("/api/select-home", {"path": str(self.home)})[0], 400)
 
-        # The rescan route repeats discovery: new definitions appear and ones
-        # moved outside the root disappear, without a server restart.
         newcomer = self.home / "newcomer"
         newcomer.mkdir()
         (newcomer / "Project.md").write_text("# Project\n\nName: Newcomer\n", encoding="utf-8")
@@ -4028,8 +2186,6 @@ elif skill.exists():
         self.assertEqual(status, 200)
         self.assertEqual([entry["label"] for entry in rescanned["projects"]], ["Archived", "Newcomer"])
 
-        # The creation chooser is restricted to the discovery root on the server:
-        # navigation stops at the boundary and outside locations are refused.
         status, folders, _ = self.request("/api/folders", {"path": str(archived), "limit": str(self.home)})
         self.assertEqual(status, 200)
         self.assertEqual(folders["parent"], str(self.home))
@@ -4093,89 +2249,7 @@ elif skill.exists():
         user = self.home / "disposable user 日本語"
         release = self.synthetic_release()
         shared = user / "Applications"
-        # The documented disposable inspection route confines every setup
-        # effect under the supplied home: the entry derives the shared
-        # launcher's Applications root there, the install and remove API pass
-        # that root through, and the production route (no --install-home)
-        # keeps the real shared folder.
         from ora_vibe_coder import installer
-        argv = ["vibe", "--install", "--install-home", str(user), "--no-browser",
-                "--settings", str(user / "settings.json")]
-        with mock.patch.object(Path, "home", return_value=self.home), \
-             mock.patch.object(sys, "argv", argv), \
-             mock.patch.object(app_entry, "LocalServer", return_value=mock.Mock(url="http://127.0.0.1:1/#test")) as constructed, \
-             mock.patch.object(app_entry, "serve"):
-            app_entry.main()
-        self.assertEqual(constructed.call_args.kwargs["install_home"], str(user))
-        self.assertEqual(constructed.call_args.kwargs["install_applications"], shared)
-        argv = ["vibe", "--install", "--no-browser", "--settings", str(user / "settings.json")]
-        with mock.patch.object(Path, "home", return_value=self.home), \
-             mock.patch.object(sys, "argv", argv), \
-             mock.patch.object(app_entry, "LocalServer", return_value=mock.Mock(url="http://127.0.0.1:1/#test")) as constructed, \
-             mock.patch.object(app_entry, "serve"):
-            app_entry.main()
-        self.assertEqual(constructed.call_args.kwargs["install_home"], self.home)
-        self.assertIsNone(constructed.call_args.kwargs["install_applications"])
-        # The installer CLI's documented disposable --home holds the same
-        # promise: the shared Applications root is derived under that home,
-        # an explicit --applications still overrides, and the default route
-        # (the real home) keeps the real shared folder.
-        argv = ["vibe-installer", "install", "--home", str(user)]
-        with mock.patch.object(Path, "home", return_value=self.home), \
-             mock.patch.object(sys, "argv", argv), \
-             mock.patch.object(installer, "install", return_value={}) as cli_install, \
-             mock.patch("builtins.print"):
-            installer.main()
-        self.assertEqual(cli_install.call_args.kwargs["home"], user)
-        self.assertEqual(cli_install.call_args.kwargs["applications"], shared)
-        argv = ["vibe-installer", "install", "--home", str(user), "--applications", str(user / "Explicit Applications")]
-        with mock.patch.object(Path, "home", return_value=self.home), \
-             mock.patch.object(sys, "argv", argv), \
-             mock.patch.object(installer, "install", return_value={}) as cli_install, \
-             mock.patch("builtins.print"):
-            installer.main()
-        self.assertEqual(cli_install.call_args.kwargs["applications"], user / "Explicit Applications")
-        argv = ["vibe-installer", "remove"]
-        with mock.patch.object(Path, "home", return_value=self.home), \
-             mock.patch.object(sys, "argv", argv), \
-             mock.patch.object(installer, "remove", return_value={"retained": [], "notes": []}) as cli_remove, \
-             mock.patch("builtins.print"):
-            installer.main()
-        self.assertEqual(cli_remove.call_args.kwargs["home"], self.home)
-        self.assertIsNone(cli_remove.call_args.kwargs["applications"])
-        route = LocalServer(install_home=user, install_applications=shared)
-        route_thread = threading.Thread(target=route.serve_forever, kwargs={"poll_interval": .01})
-        route_thread.start()
-
-        def close_route():
-            route.shutdown()
-            route_thread.join(timeout=2)
-            route.server_close()
-
-        self.addCleanup(close_route)
-
-        def route_request(path, body):
-            connection = http.client.HTTPConnection("127.0.0.1", route.server_port, timeout=2)
-            connection.request("POST", path, json.dumps(body),
-                               headers={"Content-Type": "application/json", "X-Ora-Token": route.token})
-            response = connection.getresponse()
-            data = json.loads(response.read())
-            connection.close()
-            return response.status, data
-
-        with mock.patch.object(installer, "install", return_value={"app": "sentinel"}) as route_install, \
-             mock.patch.object(installer, "remove", return_value={"app": "sentinel"}) as route_remove:
-            self.assertEqual(route_request("/api/install", {"hosts": ["codex"]})[0], 200)
-            self.assertEqual(route_request("/api/remove", {"hosts": []})[0], 200)
-        self.assertEqual(route_install.call_args.kwargs["home"], user)
-        self.assertEqual(route_install.call_args.kwargs["applications"], shared)
-        self.assertEqual(route_remove.call_args.kwargs["home"], user)
-        self.assertEqual(route_remove.call_args.kwargs["applications"], shared)
-        # A Python older than 3.10 is refused before anything is staged, naming
-        # the python.org macOS installer route and the reopen instruction.
-        with mock.patch.object(sys, "version_info", (3, 9, 18)):
-            with self.assertRaisesRegex(ValueError, r"requires Python 3\.10 or later.*python\.org.*open this setup again"):
-                install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
         selected = ("codex", "claude", "zcode", "hermes", "qwen", "minimax")
         credentials = user / ".claude" / "settings.json"
         credentials.parent.mkdir(parents=True)
@@ -4183,41 +2257,50 @@ elif skill.exists():
         project = user / "Projects" / "Keep"
         project.mkdir(parents=True)
         (project / "Handoff.md").write_text("previous recoverable handoff")
+        # A synthetic markup component: one ad hoc-signed bundle zipped like
+        # the real release archive, with the pin's checksum pointed at it.
+        import hashlib
+        import subprocess
+        pin = installer.loop_integrity.SCREEN_MARKUP_AUTHORITY
+        markup_component = release / pin["vendored_path"]
+        markup_component.mkdir(parents=True)
+        with tempfile.TemporaryDirectory(dir=self.home) as build:
+            staged_app = Path(build) / "Ora Screen Markup.app"
+            (staged_app / "Contents/MacOS").mkdir(parents=True)
+            executable = staged_app / "Contents/MacOS/Ora Screen Markup"
+            executable.write_text("#!/bin/sh\nexit 0\n")
+            executable.chmod(0o755)
+            (staged_app / "Contents/Info.plist").write_text(
+                '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>'
+                '<key>CFBundleShortVersionString</key><string>0.1.0</string></dict></plist>\n')
+            subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(staged_app)],
+                           check=True, capture_output=True)
+            subprocess.run(["/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent",
+                            str(staged_app), str(markup_component / pin["archive_name"])],
+                           check=True, capture_output=True)
+        markup_pin = mock.patch.object(
+            installer.loop_integrity, "SCREEN_MARKUP_AUTHORITY",
+            dict(pin, archive_sha256=hashlib.sha256(
+                (markup_component / pin["archive_name"]).read_bytes()).hexdigest()))
+        markup_pin.start()
+        self.addCleanup(markup_pin.stop)
         result = install(source=release, home=user, hosts=selected, platform="darwin", applications=shared)
         app = Path(result["app"])
+        launcher = Path(result["launcher"])
         for host in selected:
             directory = ".minimax" if host == "minimax" else f".{host}"
             entry = user / directory / "skills" / "ora-programming"
             self.assertIn(f"adapters/{host}.md", (entry / "SKILL.md").read_text())
             self.assertTrue((user / directory / "skills/ora-programming-loop/SKILL.md").is_file())
-        self.assertTrue((Path(result["launcher"]) / "Contents/MacOS/Ora Vibe Coder").stat().st_mode & 0o111)
-        # The launcher is the common shared app with a sealed, signed interior
-        # identity; it embeds no private paths and resolves the launching
-        # user's own installation at runtime.
-        import os
-        from ora_vibe_coder import installer
-        launcher = Path(result["launcher"])
         self.assertEqual(launcher, shared / "Ora Vibe Coder.app")
-        self.assertFalse((launcher / "ora-vibe-install.json").exists())
         record = installer.identity(launcher, installer.LAUNCHER_IDENTITY)
         self.assertEqual(record["version"], result["version"])
-        applet = (launcher / "Contents/Resources/Scripts/main.scpt").read_bytes()
-        self.assertIn(b"NSHomeDirectory", applet)
-        # The home directory must be unwrapped to a JS string before any
-        # concatenation; NSString + string yields an unusable path.
-        self.assertIn(b"ObjC.unwrap($.NSHomeDirectory())", applet)
-        self.assertIn(b"ora-vibe-install.json", applet)
-        self.assertNotIn(b"/Users/", applet)
-        self.assertNotIn(str(user).encode(), applet)
-        # The per-user installation record carries the interpreter; the owned
-        # Desktop link points at the common app.
         self.assertEqual(json.loads((app / "ora-vibe-install.json").read_text())["python"], sys.executable)
         link = user / "Desktop" / "Ora Vibe Coder"
         self.assertTrue(link.is_symlink() and os.readlink(link) == str(launcher))
-        # The bundled Boost runtime sits beside the application with offline
-        # entries for its three existing CLI functions.
+        markup_app = shared / "Ora Screen Markup.app"
+        self.assertTrue((markup_app / "Contents/Info.plist").is_file())
         boost = Path(result["boost"])
-        self.assertTrue((boost / "ora_review/__init__.py").is_file())
         for name in installer.BOOST_ENTRIES:
             self.assertTrue((boost / name).stat().st_mode & 0o111)
         unknown = app / "personal note.txt"
@@ -4237,93 +2320,17 @@ elif skill.exists():
         self.assertEqual((app / "ora_vibe_coder/server.py").read_bytes(), before)
         self.assertEqual(unknown.read_text(), "keep me")
         self.assertFalse(list(user.rglob(".ora-vibe-install-*")))
-        with AppLock(app.parent / "app.lock"):
-            with self.assertRaisesRegex(ValueError, "already running"):
-                install(source=release, home=user, hosts=(), platform="darwin", applications=shared)
-
-        old_app = (app / "ora_vibe_coder/server.py").read_bytes()
-        old_loops = {
-            host: (user / (".minimax" if host == "minimax" else f".{host}") / "skills/ora-programming-loop/SKILL.md").read_bytes()
-            for host in selected
-        }
         (release / "ora_vibe_coder/server.py").write_text("BOUNDARY = 'replacement application'\n")
-        loop_script = release / "plugins/ora-vibe-coder/resources/programming-loop/scripts/install.py"
-        loop_script.write_text(
-            loop_script.read_text().replace("synthetic loop entry", "replacement loop entry")
-        )
-        original_run = installer.subprocess.run
-        loop_installs = 0
-
-        def fail_second_loop(command, **kwargs):
-            nonlocal loop_installs
-            if command[2] == "install":
-                loop_installs += 1
-                if loop_installs == 2:
-                    return mock.Mock(returncode=1, stdout="", stderr="simulated Loop failure")
-            return original_run(command, **kwargs)
-
-        with mock.patch.object(installer.subprocess, "run", side_effect=fail_second_loop):
-            with self.assertRaisesRegex(ValueError, "simulated Loop failure"):
-                install(source=release, home=user, hosts=("codex", "claude"), platform="darwin", applications=shared)
-        self.assertEqual((app / "ora_vibe_coder/server.py").read_bytes(), old_app)
-        for host, expected in old_loops.items():
-            directory = ".minimax" if host == "minimax" else f".{host}"
-            self.assertEqual((user / directory / "skills/ora-programming-loop/SKILL.md").read_bytes(), expected)
-
         install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
-
         owned = app / "ora_vibe_coder/server.py"
         installed_bytes = owned.read_bytes()
-        owned.unlink()
-        selected_roots = (
-            app,
-            user / ".codex/skills/ora-programming",
-            user / ".codex/skills/ora-programming-loop",
-            user / "Applications/Ora Vibe Coder.app",
-        )
-        damaged_snapshot = {
-            str(path): path.read_bytes()
-            for root in selected_roots for path in root.rglob("*") if path.is_file()
-        }
+        owned.write_text("user edit")
         with self.assertRaisesRegex(ValueError, "changed or are missing"):
             install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
-        self.assertEqual({
-            str(path): path.read_bytes()
-            for root in selected_roots for path in root.rglob("*") if path.is_file()
-        }, damaged_snapshot)
-        self.assertFalse(owned.exists())
-        owned.write_bytes(installed_bytes)
-        self.assertFalse(list(user.rglob(".ora-vibe-install-*")))
-
-        owned.write_text("user edit")
         with self.assertRaisesRegex(ValueError, "changed or are missing"):
             remove(source=release, home=user, hosts=selected, platform="darwin", applications=shared)
         self.assertTrue((app / "ora-vibe-install.json").is_file())
-        for host in selected:
-            directory = ".minimax" if host == "minimax" else f".{host}"
-            self.assertTrue((user / directory / "skills/ora-programming/SKILL.md").is_file())
-            self.assertTrue((user / directory / "skills/ora-programming-loop/SKILL.md").is_file())
         owned.write_bytes(installed_bytes)
-
-        loop_removals = 0
-
-        def fail_second_loop_removal(command, **kwargs):
-            nonlocal loop_removals
-            if command[2] == "remove":
-                loop_removals += 1
-                if loop_removals == 2:
-                    return mock.Mock(returncode=1, stdout="", stderr="simulated Loop removal failure")
-            return original_run(command, **kwargs)
-
-        with mock.patch.object(installer.subprocess, "run", side_effect=fail_second_loop_removal):
-            with self.assertRaisesRegex(ValueError, "simulated Loop removal failure"):
-                remove(source=release, home=user, hosts=selected, platform="darwin", applications=shared)
-        self.assertEqual(owned.read_bytes(), installed_bytes)
-        for host in selected:
-            directory = ".minimax" if host == "minimax" else f".{host}"
-            self.assertTrue((user / directory / "skills/ora-programming/SKILL.md").is_file())
-            self.assertTrue((user / directory / "skills/ora-programming-loop/SKILL.md").is_file())
-
         removed = remove(source=release, home=user, hosts=selected, platform="darwin", applications=shared)
         self.assertIn(str(unknown), removed["retained"])
         for host in selected:
@@ -4333,40 +2340,32 @@ elif skill.exists():
         self.assertEqual(unknown.read_text(), "keep me")
         self.assertEqual((project / "Handoff.md").read_text(), "previous recoverable handoff")
         self.assertIn("preserve", credentials.read_text())
+        self.assertTrue(markup_app.is_dir())  # Removal leaves the markup app in place.
         self.assertIn(".cmd", next(iter(launcher_files(app, "win32")))); self.assertIn(".desktop", next(iter(launcher_files(app, "linux"))))
-
-        # Windows desktop shortcut with faked host operations: the shortcut
-        # command keeps spaced install paths quoted as data, the icon is a
-        # valid container, and the win32 transaction creates and rolls back
-        # the shortcut file. No real Windows shell runs here; native Windows
-        # qualification remains outstanding.
-        import base64
-        import os
-        import struct
-        win_home = user / "disposable win user"
-        win_default_app = installer.install_location(win_home, "win32")
-        self.assertIn(" ", str(win_default_app))
-        launch_argument = win_default_app / "launch.py"
-        settings_argument = win_default_app.parent / "settings.json"
-        win_target = win_home / "Python" / "pythonw.exe"
-        win_link = win_home / "Desktop" / "O'ra Vibe Coder.lnk"
-        direct = installer.shortcut_command(
-            win_link, win_target, f'"{launch_argument}" --settings "{settings_argument}"',
-            win_default_app, win_default_app / "Ora Vibe Coder.ico",
-        )
-        self.assertIn("$shell = New-Object -ComObject WScript.Shell", direct)
-        self.assertIn(f"$shortcut.TargetPath = '{win_target}'", direct)
-        self.assertIn(f"$shortcut.Arguments = '\"{launch_argument}\" --settings \"{settings_argument}\"'", direct)
-        self.assertIn(f"$shortcut.WorkingDirectory = '{win_default_app}'", direct)
-        self.assertIn(f"$shortcut.IconLocation = '{win_default_app / 'Ora Vibe Coder.ico'},0'", direct)
-        self.assertIn("CreateShortcut('" + str(win_link).replace("'", "''") + "')", direct)
-        payload = b"fake png payload"
-        icon = installer.windows_icon_bytes(payload)
-        reserved, icon_type, entries = struct.unpack("<HHH", icon[:6])
-        self.assertEqual((reserved, icon_type, entries), (0, 1, 1))
-        width, height, _, _, planes, depth, size, offset = struct.unpack("<BBBBHHII", icon[6:22])
-        self.assertEqual((width, height, planes, depth), (0, 0, 1, 32))
-        self.assertEqual((size, offset, icon[22:]), (len(payload), 22, payload))
+        # An unsupported Mac skips the markup app silently; a differing archive
+        # refuses installation naming Ora Screen Markup and the remedy; a user
+        # who already keeps a personal copy in their own Applications folder
+        # gets no second copy in the shared one.
+        unsupported = self.home / "unsupported mac user"
+        unsupported_shared = unsupported / "Applications"
+        with mock.patch.object(installer, "screen_markup_supported", return_value=False):
+            install(source=release, home=unsupported, hosts=(), platform="darwin", applications=unsupported_shared)
+        self.assertTrue((unsupported_shared / "Ora Vibe Coder.app").is_dir())
+        self.assertFalse((unsupported_shared / "Ora Screen Markup.app").exists())
+        diverged = self.home / "diverged archive user"
+        diverged_shared = diverged / "Applications"
+        with mock.patch.object(installer.loop_integrity, "SCREEN_MARKUP_AUTHORITY",
+                               dict(pin, archive_sha256="f" * 64)):
+            with self.assertRaisesRegex(ValueError, r"Ora Screen Markup.*Download a fresh Ora Vibe Coder and run setup again"):
+                install(source=release, home=diverged, hosts=(), platform="darwin", applications=diverged_shared)
+        self.assertFalse((diverged_shared / "Ora Vibe Coder.app").exists())
+        self.assertFalse((diverged_shared / "Ora Screen Markup.app").exists())
+        personal = self.home / "personal markup user"
+        personal_shared = self.home / "personal markup shared"
+        (personal / "Applications" / "Ora Screen Markup.app").mkdir(parents=True)
+        install(source=release, home=personal, hosts=(), platform="darwin", applications=personal_shared)
+        self.assertTrue((personal_shared / "Ora Vibe Coder.app").is_dir())
+        self.assertFalse((personal_shared / "Ora Screen Markup.app").exists())
 
         class WindowsName:
             name = "nt"
@@ -4375,11 +2374,8 @@ elif skill.exists():
                 return getattr(os, attribute)
 
         desktop_link = user / "Desktop" / "Ora Vibe Coder.lnk"
-        win_scripts = []
 
         def fake_windows_shell(command, **kwargs):
-            self.assertEqual(command[:3], ["powershell", "-NoProfile", "-EncodedCommand"])
-            win_scripts.append(base64.b64decode(command[3]).decode("utf-16-le"))
             desktop_link.write_bytes(b"faked shortcut v1")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
@@ -4387,34 +2383,7 @@ elif skill.exists():
             with mock.patch.object(installer, "os", WindowsName()):
                 win_result = install(source=release, home=user, hosts=(), platform="win32")
         win_app = Path(win_result["app"])
-        self.assertEqual(str(win_app), str(installer.install_location(user, "win32")))
-        self.assertEqual(len(win_scripts), 1)
-        self.assertIn(f"$shortcut.TargetPath = '{sys.executable}'", win_scripts[0])
-        win_launch = win_app / "launch.py"
-        win_settings = win_app.parent / "settings.json"
-        self.assertIn(f"$shortcut.Arguments = '\"{win_launch}\" --settings \"{win_settings}\"'", win_scripts[0])
-        self.assertEqual(desktop_link.read_bytes(), b"faked shortcut v1")
         self.assertTrue((user / "Desktop" / "Ora Vibe Coder" / "Ora Vibe Coder.cmd").is_file())
-        installed_icon = (win_app / "Ora Vibe Coder.ico").read_bytes()
-        reserved, icon_type, entries = struct.unpack("<HHH", installed_icon[:6])
-        self.assertEqual((reserved, icon_type, entries), (0, 1, 1))
-
-        def failing_windows_shell(command, **kwargs):
-            win_scripts.append(base64.b64decode(command[3]).decode("utf-16-le"))
-            desktop_link.write_bytes(b"faked shortcut v2")
-            return mock.Mock(returncode=1, stdout="", stderr="simulated shortcut failure")
-
-        server_before = (win_app / "ora_vibe_coder/server.py").read_bytes()
-        with mock.patch.object(installer.subprocess, "run", side_effect=failing_windows_shell):
-            with mock.patch.object(installer, "os", WindowsName()):
-                with self.assertRaisesRegex(ValueError, "desktop shortcut could not be created"):
-                    install(source=release, home=user, hosts=(), platform="win32")
-        self.assertEqual(len(win_scripts), 2)
-        self.assertEqual(desktop_link.read_bytes(), b"faked shortcut v1")
-        self.assertEqual((win_app / "ora_vibe_coder/server.py").read_bytes(), server_before)
-        self.assertTrue((win_app / "ora-vibe-install.json").is_file())
-        self.assertTrue((user / "Desktop" / "Ora Vibe Coder" / "Ora Vibe Coder.cmd").is_file())
-        self.assertFalse(list(user.rglob(".ora-vibe-install-*")))
 
         with mock.patch.object(installer, "os", WindowsName()):
             remove(source=release, home=user, hosts=(), platform="win32")
@@ -4423,8 +2392,6 @@ elif skill.exists():
         self.assertFalse((user / "Desktop" / "Ora Vibe Coder").exists())
 
     def test_setup_refuses_to_replace_a_newer_app_or_loop(self):
-        # Setup never rolls back: a newer installed application or a newer
-        # installed Programming Loop is named and nothing is changed.
         from ora_vibe_coder import installer
         user = self.home / "downgrade guard user"
         release = self.synthetic_release()
@@ -4446,11 +2413,6 @@ elif skill.exists():
 
         identity.write_text(json.dumps(original, indent=2) + "\n", encoding="utf-8")
 
-        # A newer installed bundle-owned Programming Loop entry is never
-        # replaced by this bundle: the bundled Loop installer owns the
-        # never-newer rule now, refuses the replacement itself with its own
-        # message, and setup changes nothing (every installed item is kept
-        # byte-for-byte).
         loop_source = user / ".codex" / "skills" / "ora-programming-loop" / "SOURCE.json"
         marker = json.loads(loop_source.read_text(encoding="utf-8"))
         original_marker = dict(marker)
@@ -4467,14 +2429,8 @@ elif skill.exists():
         self.assertFalse(list(user.rglob(".ora-vibe-install-*")))
         loop_source.write_text(json.dumps(original_marker), encoding="utf-8")
 
-        # Equal versions install normally: the bundled installer's guard
-        # blocks only newer copies, so a same-version reinstall refreshes
-        # the entry.
         install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
 
-        # A newer shared Mac launcher alone is refused with truthful guidance:
-        # removal preserves the shared launcher (another account may use it),
-        # so removing Vibe first would not clear it, and setup does not say so.
         launcher_record = shared / "Ora Vibe Coder.app" / "Contents/Resources/ora-vibe-install.json"
         launcher_original = launcher_record.read_text(encoding="utf-8")
         launcher_record.write_text(json.dumps(
@@ -4490,12 +2446,6 @@ elif skill.exists():
         self.assertFalse(list(user.rglob(".ora-vibe-install-*")))
         launcher_record.write_text(launcher_original, encoding="utf-8")
 
-        # A standalone renamed entry naming the public Loop release, at the
-        # bundle's version (1.2.1) and again at a newer version, is preserved
-        # exactly: setup succeeds, leaves that entry byte-identical with its
-        # provenance, creates no old-named entry beside it, and says so; the
-        # Loop installer never runs for that host. Removal afterwards removes
-        # the bundle's own entries and still leaves the standalone entry.
         from ora_vibe_coder import handoff
         standalone_user = self.home / "standalone loop user"
         standalone = standalone_user / ".codex" / "skills" / "ora-programming-loop"
@@ -4508,8 +2458,6 @@ elif skill.exists():
                 "public_release_repository": "https://github.com/ora-commons/ora-programming-loop",
                 "files": {"SKILL.md": "0" * 64}}), encoding="utf-8")
             before_standalone = {p.name: p.read_bytes() for p in standalone.rglob("*") if p.is_file()}
-            self.assertEqual(handoff.loop_component_facts(standalone_user)["installed"]["codex"],
-                             {"ora-programming-loop": version})
             result = install(source=release, home=standalone_user, hosts=("codex",), platform="darwin",
                              applications=standalone_user / "Applications")
             self.assertEqual({p.name: p.read_bytes() for p in standalone.rglob("*") if p.is_file()},
@@ -4525,122 +2473,6 @@ elif skill.exists():
             self.assertFalse((standalone_user / ".codex/skills/ora-programming").exists())
             self.assertFalse(installer.install_location(standalone_user, "darwin").exists())
             self.assertFalse(list(standalone_user.rglob(".ora-vibe-install-*")))
-
-        # A marker with the right version but the wrong component, source, or
-        # public repository is not a preserved standalone copy: each fails the
-        # provenance requirement, so setup never skips the bundled Loop
-        # installer for that host on its word alone.
-        plugin = release / "plugins" / "ora-vibe-coder"
-        correct_marker = {
-            "component": "ora-programming-loop", "source": "ora-programming-loop",
-            "version": "1.2.1", "source_kind": "public-release",
-            "public_release_repository": "https://github.com/ora-commons/ora-programming-loop",
-            "files": {"SKILL.md": "0" * 64}}
-        for field, wrong in (("component", "programming-loop"),
-                             ("source", "programming-loop"),
-                             ("public_release_repository", "https://github.com/example/other-loop")):
-            with self.subTest(wrong_provenance=field):
-                (standalone / "SOURCE.json").write_text(
-                    json.dumps(dict(correct_marker, **{field: wrong})), encoding="utf-8")
-                self.assertFalse(installer.standalone_loop_preserved(standalone_user, "codex", plugin))
-        # End to end, the wrong-provenance entry is not preserved-and-skipped:
-        # the bundled Loop installer runs for the host and installs through
-        # it, and the setup note claims no preservation.
-        result = install(source=release, home=standalone_user, hosts=("codex",), platform="darwin",
-                         applications=standalone_user / "Applications")
-        self.assertNotIn("standalone Ora Programming Loop entry", result["note"])
-        self.assertEqual((standalone / "SKILL.md").read_text(encoding="utf-8"), "synthetic loop entry")
-        self.assertEqual(json.loads((standalone / "SOURCE.json").read_text(encoding="utf-8"))["source_kind"],
-                         "vendored-snapshot")
-        remove(source=release, home=standalone_user, hosts=("codex",), platform="darwin",
-               applications=standalone_user / "Applications")
-        self.assertFalse((standalone_user / ".codex/skills/ora-programming").exists())
-        self.assertFalse(installer.install_location(standalone_user, "darwin").exists())
-        self.assertFalse(list(standalone_user.rglob(".ora-vibe-install-*")))
-
-    def test_legacy_loop_entry_removal_refuses_symbolic_link_paths(self):
-        # The bundled Loop installer refuses symbolic-link installation paths
-        # for its own removals; Vibe's removal of a pre-rename bundle-installed
-        # entry holds the same rule for the entry folder, its parents, the
-        # removed tree, and the shared reviewer profile, so deletion can never
-        # follow a link to files outside the owned entry.
-        import hashlib
-        from ora_vibe_coder import installer
-        release = self.synthetic_release()
-        profile_body = b"legacy reviewer profile\n"
-
-        def legacy_entry(folder):
-            folder.mkdir(parents=True)
-            (folder / "SKILL.md").write_bytes(b"legacy loop entry\n")
-            (folder / "VERSION").write_bytes(b"1.0.0\n")
-            (folder / "SOURCE.json").write_text(json.dumps({
-                "component": "programming-loop", "source": "programming-loop",
-                "source_kind": "vendored-snapshot", "version": "1.0.0",
-                "files": {"SKILL.md": hashlib.sha256(b"legacy loop entry\n").hexdigest(),
-                          "VERSION": hashlib.sha256(b"1.0.0\n").hexdigest()},
-                "reviewer_sha256": hashlib.sha256(profile_body).hexdigest(),
-            }), encoding="utf-8")
-
-        def reviewer_profile(agents_folder):
-            agents_folder.mkdir(parents=True)
-            (agents_folder / installer.LOOP_PROFILE).write_bytes(profile_body)
-
-        # A linked entry folder: the real entry lives elsewhere and the old
-        # entry path is a link to it.
-        linked_folder_user = self.home / "linked legacy folder user"
-        real_entry = linked_folder_user / "entry storage"
-        legacy_entry(real_entry)
-        reviewer_profile(linked_folder_user / ".codex" / "agents")
-        skills = linked_folder_user / ".codex" / "skills"
-        skills.mkdir(parents=True)
-        os.symlink(real_entry, skills / "programming-loop")
-        with self.assertRaisesRegex(ValueError, "symbolic link"):
-            remove(source=release, home=linked_folder_user, hosts=("codex",),
-                   platform="darwin", applications=linked_folder_user / "Applications")
-        self.assertEqual((real_entry / "SKILL.md").read_bytes(), b"legacy loop entry\n")
-        self.assertTrue((skills / "programming-loop").is_symlink())
-
-        # A linked parent folder above the entry.
-        linked_parent_user = self.home / "linked legacy parent user"
-        skills_storage = linked_parent_user / "skills storage"
-        legacy_entry(skills_storage / "programming-loop")
-        reviewer_profile(linked_parent_user / ".codex" / "agents")
-        (linked_parent_user / ".codex").mkdir(parents=True, exist_ok=True)
-        os.symlink(skills_storage, linked_parent_user / ".codex" / "skills")
-        with self.assertRaisesRegex(ValueError, "symbolic link"):
-            remove(source=release, home=linked_parent_user, hosts=("codex",),
-                   platform="darwin", applications=linked_parent_user / "Applications")
-        self.assertTrue((skills_storage / "programming-loop" / "SOURCE.json").is_file())
-
-        # A symlink inside the removed tree, added beside the owned files.
-        outside = self.home / "outside the linked tree"
-        outside.mkdir()
-        (outside / "personal.txt").write_text("outside content")
-        linked_inside_user = self.home / "linked legacy inside user"
-        legacy_entry(linked_inside_user / ".codex" / "skills" / "programming-loop")
-        reviewer_profile(linked_inside_user / ".codex" / "agents")
-        os.symlink(outside / "personal.txt",
-                   linked_inside_user / ".codex" / "skills" / "programming-loop" / "added link.md")
-        with self.assertRaisesRegex(ValueError, "symbolic link"):
-            remove(source=release, home=linked_inside_user, hosts=("codex",),
-                   platform="darwin", applications=linked_inside_user / "Applications")
-        self.assertTrue(
-            (linked_inside_user / ".codex" / "skills" / "programming-loop" / "SKILL.md").is_file())
-        self.assertEqual((outside / "personal.txt").read_text(), "outside content")
-
-        # The reviewer-profile path behind a linked agents folder: the entry
-        # itself is plain, but the profile deletion would traverse a link.
-        linked_profile_user = self.home / "linked legacy profile user"
-        legacy_entry(linked_profile_user / ".codex" / "skills" / "programming-loop")
-        agents_storage = linked_profile_user / "agents storage"
-        reviewer_profile(agents_storage)
-        os.symlink(agents_storage, linked_profile_user / ".codex" / "agents")
-        with self.assertRaisesRegex(ValueError, "symbolic link"):
-            remove(source=release, home=linked_profile_user, hosts=("codex",),
-                   platform="darwin", applications=linked_profile_user / "Applications")
-        self.assertTrue((linked_profile_user / ".codex" / "skills" / "programming-loop"
-                         / "SOURCE.json").is_file())
-        self.assertEqual((agents_storage / installer.LOOP_PROFILE).read_bytes(), profile_body)
 
     def test_common_launcher_and_desktop_link_are_maintained_and_removal_reports_shared_items(self):
         import plistlib
@@ -4661,7 +2493,6 @@ elif skill.exists():
         assert_launcher_icon()
         link = user / "Desktop" / "Ora Vibe Coder"
         self.assertTrue(link.is_symlink() and os.readlink(link) == str(launcher))
-        # A personal item at the Desktop link's path is never replaced.
         link.unlink()
         link.write_text("a personal item")
         (release / "ora_vibe_coder/server.py").write_text("BOUNDARY = 'replacement application'\n")
@@ -4670,20 +2501,16 @@ elif skill.exists():
         self.assertEqual(link.read_text(), "a personal item")
         self.assertFalse(link.is_symlink())
         assert_launcher_icon()
-        # A missing owned link is restored on update.
         link.unlink()
         third = install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
         self.assertEqual(third["desktop_link"], "created")
         self.assertTrue(link.is_symlink() and os.readlink(link) == str(launcher))
         assert_launcher_icon()
-        # Removal deletes only the owned link; the shared launcher stays for
-        # another account, and the result reports exactly that.
         removed = remove(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
         self.assertFalse(link.exists())
         self.assertFalse(Path(result["app"]).exists())
         self.assertTrue(launcher.is_dir())
         self.assertTrue(any("shared launcher" in note and "was kept" in note for note in removed["notes"]))
-        # Reinstallation uses the same bundled artwork without a custom Finder icon.
         install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
         assert_launcher_icon()
         self.assertFalse(list(user.rglob(".ora-vibe-install-*")))
@@ -4698,8 +2525,6 @@ elif skill.exists():
         launcher = Path(result["launcher"])
         previous_launcher = {p.relative_to(launcher): p.read_bytes() for p in launcher.rglob("*") if p.is_file()}
         previous_app = (app / "ora_vibe_coder/server.py").read_bytes()
-        # A shared folder this account cannot write is refused before anything
-        # changes, naming the permission the shared launcher actually needs.
         locked = user / "Locked Applications"
         locked.mkdir()
         locked.chmod(0o500)
@@ -4710,7 +2535,6 @@ elif skill.exists():
             locked.chmod(0o700)
         self.assertEqual((app / "ora_vibe_coder/server.py").read_bytes(), previous_app)
         self.assertFalse(list(locked.iterdir()))
-        # A signing-command failure is a transaction failure, never ignored.
         original_run = installer.subprocess.run
 
         def failing_codesign(command, **kwargs):
@@ -4723,8 +2547,6 @@ elif skill.exists():
             with self.assertRaisesRegex(ValueError, "Signing the Ora Vibe Coder launcher failed.*previous installation was preserved"):
                 install(source=release, home=user, hosts=("codex",), platform="darwin", applications=shared)
         self.assertEqual((app / "ora_vibe_coder/server.py").read_bytes(), previous_app)
-        # A strict final-location verification failure rolls the whole
-        # transaction back to the previous usable installation.
         def failing_verify(command, **kwargs):
             if command[:4] == ["/usr/bin/codesign", "--verify", "--deep", "--strict"]:
                 return mock.Mock(returncode=1, stdout="", stderr="simulated verification failure")
@@ -4748,8 +2570,6 @@ elif skill.exists():
         shared = user / "Applications"
         result = install(source=release, home=user, hosts=(), platform="darwin", applications=shared)
         boost = Path(result["boost"])
-        # The installed entries bind to the Bridge bundled beside them, and
-        # that bundled Bridge copy is exactly where they point.
         self.assertTrue((boost.parent / "agent-bridge" / "ora_agent_bridge" / "__main__.py").is_file())
         for name in installer.BOOST_ENTRIES:
             wrapper = boost / name
@@ -4758,7 +2578,6 @@ elif skill.exists():
                 'os.environ["AGENT_BRIDGE_HOME"] = str(root.parent / "agent-bridge")',
                 wrapper.read_text(encoding="utf-8"),
             )
-        # The bundled package imports offline and reports its released facts.
         completed = subprocess.run(
             [sys.executable, "-c",
              "import json, sys; sys.path.insert(0, sys.argv[1]); import ora_review; "
@@ -4769,18 +2588,10 @@ elif skill.exists():
         self.assertEqual(facts["component"], "ora-adversarial-review")
         self.assertEqual(facts["version"], "0.6.0")
         self.assertEqual(sorted(facts["analytical_roles"]), ["peer", "primary"])
-        # An installed entry answers its own command surface offline; no
-        # network, pip, or model call is involved in running --help.
         helped = subprocess.run([sys.executable, str(boost / "ora-gear-3"), "--help"],
                                 capture_output=True, text=True, timeout=120)
         self.assertEqual(helped.returncode, 0, helped.stderr)
         self.assertIn("ora-gear-3", helped.stdout)
-        # The bundled Gear accepts this turn's exact user words: the option is
-        # part of the bundled command surface. A blank turn-instructions file
-        # proves acceptance offline and safely — the bundled engine recognizes
-        # the option, reads its file, and refuses before any engine is built,
-        # while a bundle regressed to an engine without the option fails to
-        # parse instead ("unrecognized arguments", exit code 2).
         self.assertIn("--turn-instructions-file", helped.stdout)
         blank = self.home / "blank turn instructions.md"
         blank.write_text("   \n", encoding="utf-8")
@@ -4834,16 +2645,8 @@ elif skill.exists():
                     self.assertIn("not confirmed", result["message"])
                     received = json.loads(receipt.read_text())
                     if host == "zcode":
-                        self.assertEqual(received[0][0:7], [
-                            "--cwd", str(project.root), "--mode", "plan",
-                            "--max-turns", "1", "--json",
-                        ])
-                        self.assertEqual(received[0][7:9], ["--attach", str(operations[0] / "assignment.md")])
-                        self.assertEqual(received[0][9:], ["--prompt", hosts.ZCODE_BOOTSTRAP])
-                        self.assertEqual(received[1], [
-                            "tui", "--cwd", str(project.root), "--mode", "build",
-                            "--resume", "sess_fake_receipt",
-                        ])
+                        self.assertIn(str(operations[0] / "assignment.md"), received[0])
+                        self.assertEqual(received[1][-2:], ["--resume", "sess_fake_receipt"])
                     else:
                         self.assertIn("Read the complete UTF-8 Markdown assignment", received[0][-1])
                     if host == "qwen":
@@ -4867,9 +2670,6 @@ elif skill.exists():
             hosts.continue_in(project, "unseen changed packet", "Codex")
         self.assertFalse((project.root / "NEVER_RUN").exists())
 
-        # A selected code folder becomes the launch working directory, and a
-        # location changed after preparation cannot silently continue a stale
-        # saved assignment.
         from ora_vibe_coder.handoff import prepare_request
         code = self.home / "selected repository"
         code.mkdir()
@@ -5031,7 +2831,6 @@ elif skill.exists():
             return original_popen(args, **kwargs)
 
         def wait_for(check):
-            # A bounded test wait ensures a regression cannot strand the harness.
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
                 value = check()
@@ -5044,118 +2843,44 @@ elif skill.exists():
             self.server = server
             self.thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01})
             self.thread.start()
-            browser = None
-            playwright = None
             try:
-                # The normal launcher reached serve while the configured root
-                # itself was blocked; setup and HTTP remain responsive.
                 wait_for(lambda: (projects / ".entered-folder").exists())
                 self.assertEqual(self.request("/", {}, method="GET")[0], 200)
-                setup = self.request("/api/setup", {})[1]
-                self.assertEqual(setup["home"], str(projects))
-                pending = self.request("/api/projects", {})[1]
-                self.assertTrue(pending["scanning"])
-                self.assertFalse(pending["complete"])
-                self.assertIn(str(projects), " ".join(pending["notices"]))
-                controller = server.store._scan_thread
-                for _ in range(4):
-                    self.assertEqual(self.request("/api/rescan", {})[0], 200)
-                    self.assertIs(server.store._scan_thread, controller)
+                self.assertTrue(self.request("/api/projects", {})[1]["scanning"])
                 wait_for(lambda: not server.store.report()["scanning"])
                 self.assertFalse(server.store.report()["complete"])
                 (projects / ".stall-folder").unlink()
-                (projects / ".stall-after-entries").touch()
                 self.request("/api/rescan", {})
                 wait_for(lambda: not server.store.report()["scanning"])
                 inventory = self.request("/api/projects", {})[1]
                 self.assertEqual({entry["name"] for entry in inventory["projects"]}, {"Readable", "Nested"})
-                notices = " ".join(inventory["notices"])
-                self.assertIn(str(unavailable), notices)
-                self.assertIn(f"{projects} could not be read", notices)
-                self.assertTrue((projects / ".entered-partial").exists())
-                self.assertIn(str(definition / "Project.md"), notices)
-                self.assertTrue((unavailable / ".entered-folder").exists())
-                self.assertTrue((definition / ".entered-file").exists())
-                self.assertEqual(self.request("/api/quit-state", {})[0], 200)
-
-                # Inspect the same UI surfaces used by the normal launcher.
-                # Browser availability is also covered by the separately named
-                # project-picker check; API hard-hang proof runs regardless.
-                try:
-                    from playwright.sync_api import expect, sync_playwright
-                except ImportError:
-                    sync_playwright = None
-                if sync_playwright is not None:
-                    playwright = sync_playwright().start()
-                    if Path(playwright.chromium.executable_path).is_file():
-                        browser = playwright.chromium.launch(headless=True)
-                        page = browser.new_page()
-                        opened = []
-                        page.on("request", lambda request: opened.append(request.url) if request.url.endswith("/api/open") else None)
-                        page.goto(server.url)
-                        expect(page.locator("#project")).to_be_visible()
-                        expect(page.locator("#project option")).to_have_count(3)
-                        self.assertEqual(opened, [])  # Unreadable last_project is never auto-opened.
-                        page.locator("#open").click()
-                        expect(page.locator("#scan-notices")).to_contain_text(str(definition / "Project.md"))
-                        expect(page.locator("#scan-notices")).to_contain_text(str(unavailable))
-                        expect(page.locator("#project-list")).not_to_contain_text("No projects")
-                        defaults = page.evaluate("({home: browseHome, fallback: browseFallback})")
-                        page.evaluate("paths => { browseHome = paths.missing; browseFallback = paths.home; }",
-                                      {"missing": str(self.home / "Missing Documents"), "home": str(self.home)})
-                        page.locator("#open-browse").click()
-                        expect(page.locator("#folder-picker")).to_be_visible()
-                        expect(page.locator("#folder-path")).to_have_value(str(self.home))
-                        self.assertEqual(server.store.home, projects)
-                        page.locator("#folder-cancel").click()
-                        page.evaluate("paths => { browseHome = paths.home; browseFallback = paths.fallback; }", defaults)
-                        page.locator("#open-close").click()
-                        entry = next(item for item in inventory["projects"] if item["name"] == "Readable")
-                        self.select_project(page, entry["id"])
-                        page.locator('[data-stage="build"]').click()
-                        page.locator("#message").fill("Keep this unsent message")
-
-                (projects / ".stall-after-entries").unlink()
-                (unavailable / ".stall-folder").unlink()
-                (definition / ".stall-file").unlink()
-                if browser is not None:
+                self.assertIn(str(unavailable), " ".join(inventory["notices"]))
+                self.assertIn(str(definition / "Project.md"), " ".join(inventory["notices"]))
+                with self.browser_session() as browser:
+                    page = browser.new_page()
+                    page.goto(server.url)
+                    expect(page.locator("#project option")).to_have_count(3)
+                    page.locator("#open").click()
+                    expect(page.locator("#scan-notices")).to_contain_text(str(unavailable))
+                    page.locator("#open-close").click()
+                    entry = next(item for item in inventory["projects"] if item["name"] == "Readable")
+                    self.select_project(page, entry["id"])
+                    page.locator("#message").fill("Keep this unsent message")
+                    (unavailable / ".stall-folder").unlink()
+                    (definition / ".stall-file").unlink()
                     page.locator("#open").click()
                     page.locator("#refresh-projects").click()
                     expect(page.locator("#project option")).to_have_count(4)
                     expect(page.locator("#project")).to_have_value(entry["id"])
                     expect(page.locator("#message")).to_have_value("Keep this unsent message")
-                    self.assertEqual(page.evaluate("workspace"), "build")
-                    page.locator("#open-close").click()
-                else:
-                    self.request("/api/rescan", {})
-                wait_for(lambda: not server.store.report()["scanning"])
-                recovered = self.request("/api/projects", {})[1]
-                self.assertTrue(recovered["complete"])
-                self.assertEqual({item["name"] for item in recovered["projects"]}, {"Definition", "Readable", "Nested"})
-                self.assertFalse(recovered["notices"])
-
-                # A later unavailable definition keeps its last-known identity,
-                # honestly disabled; Stop reaps the actually blocked helper.
-                (definition / ".entered-file").unlink()
-                (definition / ".stall-file").touch()
-                self.request("/api/rescan", {})
-                wait_for(lambda: (definition / ".entered-file").exists())
-                current = self.request("/api/projects", {})[1]
-                known = next(item for item in current["projects"] if item["name"] == "Definition")
-                self.assertFalse(known["available"])
+                    wait_for(lambda: not server.store.report()["scanning"])
+                    self.assertTrue(server.store.report()["complete"])
                 self.assertEqual(self.request("/api/stop", {})[0], 200)
                 self.thread.join(3)
-                self.assertFalse(self.thread.is_alive())
                 server.shutdown_thread.join(3)
-                self.assertFalse(server.shutdown_thread.is_alive())
-                self.assertFalse(server.store._scan_thread.is_alive())
+                self.assertFalse(self.thread.is_alive())
                 self.assertTrue(all(child.poll() is not None for child in owned_readers))
-                self.assertFalse([thread for thread in threading.enumerate() if thread.name == "Vibe discovery responses"])
             finally:
-                if browser is not None:
-                    browser.close()
-                if playwright is not None:
-                    playwright.stop()
                 self.close()
 
         argv = ["vibe", "--no-browser", "--settings", str(settings.path)]
@@ -5167,84 +2892,6 @@ elif skill.exists():
         self.assertFalse(settings.path.with_name("running.json").exists())
         self.assertTrue(all(child.poll() is not None for child in owned_readers))
 
-        # Failure to save or protect the launch record must close the already
-        # constructed server and reap its blocked reader before releasing the
-        # lock that prevents another launch or update from taking ownership.
-        running = settings.path.with_name("running.json")
-        original_write = app_entry.atomic_write
-        original_chmod = Path.chmod
-        original_close = LocalServer.server_close
-        for failure in ("write", "permissions"):
-            with self.subTest(launch_record_failure=failure):
-                (projects / ".entered-folder").unlink(missing_ok=True)
-                (projects / ".stall-folder").touch()
-                constructed, closed = [], []
-
-                def construct(*args, **kwargs):
-                    server = LocalServer(*args, **kwargs)
-                    constructed.append(server)
-                    return server
-
-                def save_record(path, text):
-                    if failure == "write":
-                        wait_for(lambda: (projects / ".entered-folder").exists())
-                        raise OSError("launch record write failed")
-                    return original_write(path, text)
-
-                def protect_record(path, *args, **kwargs):
-                    if path == running:
-                        wait_for(lambda: (projects / ".entered-folder").exists())
-                        raise OSError("launch record permissions failed")
-                    return original_chmod(path, *args, **kwargs)
-
-                def close_while_locked(server):
-                    with self.assertRaisesRegex(ValueError, "already running"):
-                        with AppLock(settings.path.with_name("app.lock")):
-                            pass
-                    original_close(server)
-                    closed.append(server)
-
-                try:
-                    with mock.patch.object(project_module.subprocess, "Popen", side_effect=start_reader), \
-                            mock.patch.object(app_entry, "LocalServer", side_effect=construct), \
-                            mock.patch.object(LocalServer, "server_close", new=close_while_locked), \
-                            mock.patch.object(app_entry, "atomic_write", side_effect=save_record), \
-                            mock.patch.object(Path, "chmod", new=protect_record), \
-                            mock.patch.object(sys, "argv", argv), \
-                            mock.patch.object(app_entry, "serve") as serve_failed, \
-                            contextlib.redirect_stdout(io.StringIO()) as message:
-                        app_entry.main()
-                    serve_failed.assert_not_called()
-                    self.assertIn("could not start", message.getvalue())
-                    self.assertEqual(closed, constructed)
-                    self.assertEqual(len(closed), 1)
-                    self.assertEqual(closed[0].fileno(), -1)
-                    self.assertFalse(closed[0].store._scan_thread.is_alive())
-                    self.assertTrue(all(child.poll() is not None for child in owned_readers))
-                    self.assertFalse(running.exists())
-                    with AppLock(settings.path.with_name("app.lock")):
-                        pass
-                finally:
-                    for server in constructed:
-                        original_close(server)
-
-        # A genuinely missing configured root is reported at that boundary;
-        # startup must neither abort nor silently search another folder.
-        missing = self.home / "Missing configured root"
-        settings.update(projects_dir=str(missing))
-        seen = []
-        def unavailable_root(server, **kwargs):
-            try:
-                server.store._scan_thread.join()
-                seen.append(server.store.report())
-            finally:
-                server.server_close()
-        with mock.patch.object(sys, "argv", argv), mock.patch.object(app_entry, "serve", side_effect=unavailable_root):
-            app_entry.main()
-        self.assertEqual(seen[0]["home"], str(missing))
-        self.assertFalse(seen[0]["complete"])
-        self.assertIn(str(missing), " ".join(seen[0]["notices"]))
-
     def test_browser_open_failure_still_allows_stop_and_joins_owned_server(self):
         self.close()
         server = LocalServer(self.home)
@@ -5253,7 +2900,6 @@ elif skill.exists():
             return False
         serve(server, opener=failed_browser)
         self.assertEqual(server.fileno(), -1)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,9 +1,7 @@
 """Build one explicit, portable snapshot without a model or vendor account."""
 
-import hashlib
 import json
 from pathlib import Path
-from pathlib import PurePosixPath
 import re
 import stat
 
@@ -41,20 +39,16 @@ HOSTS = {
     "minimax": "minimax",
     "minimax code": "minimax",
 }
-LOOP_FILES = {
-    "VERSION", "LICENSE", "NOTICE.md", "frameworks/programming-loop.md",
-    *(f"adapters/{host}.md" for host in sorted(set(HOSTS.values()))),
-}
 STAGE_ROLES = {
-    "specification": ("Request", "Registry", "Specification", "Code"),
-    "planning": ("Request", "Registry", "Specification", "Plan", "Code"),
+    "specification": ("Registry", "Specification", "Code"),
+    "planning": ("Registry", "Specification", "Plan", "Code"),
     "programming": ("Registry", "Specification", "Plan", "Programming Result", "Verification Report", "Code"),
     "programming-result": ("Registry", "Specification", "Plan", "Programming Result", "Code"),
-    "verification": ("Registry", "Specification", "Plan", "Programming Result", "Verification Report", "Code", "Checks", "Baseline"),
-    "guided": ("Registry", "Specification", "Plan", "Programming Result", "Verification Report", "Code", "Checks", "Baseline"),
-    "review-specification": ("Request", "Registry", "Specification"),
-    "review-plan": ("Request", "Registry", "Specification", "Plan"),
-    "create-plan": ("Request", "Registry", "Specification", "Code"),
+    "verification": ("Registry", "Specification", "Plan", "Programming Result", "Verification Report", "Code"),
+    "guided": ("Registry", "Specification", "Plan", "Programming Result", "Verification Report", "Code"),
+    "review-specification": ("Registry", "Specification"),
+    "review-plan": ("Registry", "Specification", "Plan"),
+    "create-plan": ("Registry", "Specification", "Code"),
     "implement-plan": ("Registry", "Specification", "Plan", "Programming Result", "Code"),
 }
 REVIEW_STAGES = {"review-specification": "specification", "review-plan": "planning"}
@@ -78,19 +72,12 @@ LABEL_EXAMPLES = {"specification": "vibe_document: specification", "planning": "
 COMPANION_STAGES = frozenset({"specification", "planning", "create-plan"})
 
 
-def loop_component_facts(home=None):
-    """Facts of the Loop package Vibe actually selects, plus installed entries.
-
-    The selected package is the generated resource copy this application
-    embeds in its packets; the installed entries are the per-user copies the
-    hosts' own coding tools see, recognized under either of the shared
-    entry's two names (pre-rename and renamed). Both are read-only
+def loop_component_facts():
+    """Facts of the Loop package Vibe actually selects. Read-only
     observations: no minimum version is invented, and an unreadable package
-    reports its reason.
-    """
+    reports its reason."""
     facts = {"version": None, "path": str(LOOP), "adapters": (), "status": "unknown",
-             "reason": "", "remedy": "Reinstall Ora Vibe Coder from a complete release, then reopen the project and try again.",
-             "installed": {}}
+             "reason": "", "remedy": "Reinstall Ora Vibe Coder from a complete release, then reopen the project and try again."}
     try:
         version = (LOOP / "VERSION").read_text(encoding="utf-8").strip()
         adapters = tuple(sorted(
@@ -103,15 +90,6 @@ def loop_component_facts(home=None):
         facts["reason"] = (f"the bundled Programming Loop package at {LOOP} does not report "
                            "a release version with its host adapters")
         return facts
-    try:
-        identity = json.loads((LOOP / "SOURCE.json").read_text(encoding="utf-8"))
-        facts["source_revision"] = identity.get("source_revision") if isinstance(identity, dict) else None
-    except (OSError, ValueError, UnicodeDecodeError):
-        facts["source_revision"] = None
-    root = Path(home) if home is not None else Path.home()
-    from .installer import SKILL_HOMES, shared_loop_entries  # The authoritative per-user entry map.
-    for host in sorted(set(SKILL_HOMES) & set(HOSTS.values())):
-        facts["installed"][host] = shared_loop_entries(root, host) or None
     facts.update({"version": version, "adapters": adapters, "status": "ok", "reason": "", "remedy": ""})
     return facts
 
@@ -151,23 +129,16 @@ def loop_resources(stage, destination, *, portable=False):
                 or identity.get("component") != "ora-programming-loop"
                 or identity.get("source") != "ora-programming-loop"
                 or any(identity.get(name) != expected
-                       for name, expected in authority.items())
-                or not isinstance(identity.get("files"), dict)
-                or set(identity.get("files", {})) != set(loop_integrity.VENDORED_PATHS)
-                or not LOOP_FILES.issubset(set(identity.get("files", {})))):
+                       for name, expected in authority.items())):
             raise ValueError("Programming Loop source provenance is incomplete or conflicting.")
+        # One identity check: the whole-folder Git tree over the packaged bytes
+        # and modes catches any changed byte, so no per-file digest comparison
+        # follows it.
         files, _, source_tree = loop_integrity.read_snapshot(
             LOOP, allowed_extra={"SOURCE.json"}
         )
         if source_tree != authority["source_tree"]:
             raise ValueError("Programming Loop resources do not match the reviewed source tree.")
-        for name, expected in identity["files"].items():
-            path = PurePosixPath(name)
-            if (path.is_absolute() or ".." in path.parts or "\\" in name
-                    or str(path) != name or not re.fullmatch(r"[0-9a-f]{64}", expected)):
-                raise ValueError("Programming Loop source identity contains an invalid path or digest.")
-            if hashlib.sha256(files[name]).hexdigest() != expected:
-                raise ValueError(f"Programming Loop resource does not match its identity: {name}")
         version = files["VERSION"].decode("utf-8").strip()
         if identity.get("version") != version:
             raise ValueError("Programming Loop source identity is inconsistent.")
@@ -288,9 +259,8 @@ def prepare_request(project, stage, user_input, destination, material=None, supp
     if retained_pictures:
         parts.append(retained_pictures)
     if stage in COMPANION_STAGES:
-        # The same bundled-companion facts the in-app turn carries: actual
-        # versions, mandatory bundled paths, and the Gear roles currently
-        # usable. conversation owns the one builder.
+        # The same bundled-companion facts the in-app turn carries; conversation
+        # owns the one builder.
         parts.append(_conversation.companion_facts_text())
     responsibility = {
         "specification": "Executor using Ora Specification.",
@@ -316,9 +286,7 @@ def prepare_request(project, stage, user_input, destination, material=None, supp
                  "Ask useful questions and explain consequential gaps in the normal conversation; if the user chooses to proceed with the available "
                  "information, do so and report the resulting limitations honestly.")
     outputs = []
-    for role, variants in DEFAULT_NAMES.items():
-        if role in {"Request", "User Guide", "Technical Documentation", "Product Overview", "Report"}:
-            continue  # Legacy vocabulary: recognized when present, never a required output.
+    for role in DEFAULT_NAMES:
         outputs.append(f"{role}: {artifact_destination(project, role, discovery)}")
     outputs.append(f"Optional overview result fields: {project.root / 'Project.md'} (only the active stage's own field, under normal write authority).")
     outputs.append("Additional documentation: produce it only when the project calls for it, and maintain existing documentation affected by changes.")
@@ -376,10 +344,10 @@ def prepare_request(project, stage, user_input, destination, material=None, supp
             "## Saving the assessment\n\n"
             "You are a reviewer: do not edit the document beyond recording the assessment, and do not record approval.\n\n"
             f"Assess practical sufficiency — {question} " + guidance + "\n\n"
-            "If you can write the document, keep exactly one `## Current review` section (create it before other body sections if absent) and replace any superseded feedback in it with:\n\n"
-            "```text\nStage: " + stage_role + "\nVerdict: PASSED    (or NOT PASSED or INCOMPLETE)\nBasis: " + (basis or "<the basis value supplied above>") + "\n<For NOT PASSED, list each required deficiency as one \"- \" bullet.>\n```\n\n"
-            "Preserve newer surrounding content written by others. If you cannot write the document, return that completed section text so it can be saved externally. "
-            "Also set the document’s opening YAML `review: PASSED`, `review: NOT PASSED` or `review: INCOMPLETE` to this same conclusion, preserving its status and any pre-existing vault metadata. "
+            "The verdict lives only in the document's opening YAML: set `review:` to exactly `PASSED`, `NOT PASSED` or `INCOMPLETE` — decided after the assessment is finished — preserving its status and any pre-existing vault metadata. "
+            "If you can write the document, also keep exactly one `## Current review` section (create it before other body sections if absent) and replace any superseded feedback in it with the reasoning and findings:\n\n"
+            "```text\nStage: " + stage_role + "\nBasis: " + (basis or "<the basis value supplied above>") + "\n<The assessment reasoning; for NOT PASSED, list each required deficiency as one \"- \" bullet.>\n```\n\n"
+            "Preserve newer surrounding content written by others. If you cannot write the document, return a YAML block (`review: PASSED`, `review: NOT PASSED` or `review: INCOMPLETE`) followed by that completed section text so it can be saved externally. "
             "Saving an assessment is advisory information for the user; it never blocks any stage, and it is never approval.")
     parts.append("# Current project materials — quoted data\n\nLocal paths may not be accessible to a remote recipient. Supply files through an authorized route separately; this application never uploads or fetches them. Markdown/text reading ceiling: 256 KiB per source, not a model-context guarantee.")
     parts.append("## Project purpose\n\n" + quoted(f"Name: {brief['name']}\nDescription: {brief['description']}\nDesired outcome: {brief['goals']}"))
@@ -408,7 +376,10 @@ def prepare_request(project, stage, user_input, destination, material=None, supp
         "create-plan": "Plan how to implement the available Specification, whatever its state: inspect the actual project — including relevant accessible code when a location is known — and produce one actionable Plan with implementation steps and appropriate checks, writing to the resolved or expected Plan destination. Gear 4 and Gear 3 are optional aids when available. Identify any consequential gap in the available information; the user decides whether to proceed.",
         "implement-plan": "Implement the available Plan, whatever its state, launching in the code folder named above when one is known. The Programming Loop is the offered structured method when its companion is available. Identify consequential gaps; the user decides whether to proceed. Save a truthful Programming Result after actual work, including work that stops unfinished.",
     }[stage]
-    parts.append("Open the selected harness and paste this entire Markdown request.\n\nNext bounded assignment: " + next_result + "\n\n"
+    receiving_instruction = ("This assignment is for you, the AI receiving this request. Use your own available tools and settings, "
+                             "and follow the project's instructions." if portable else
+                             "Open the selected harness and paste this entire Markdown request.")
+    parts.append(receiving_instruction + "\n\nNext bounded assignment: " + next_result + "\n\n"
                  "Hand back directly to the assignment owner with inspectable results, checks and findings, accepted input changes, remaining dependencies, "
                  "delivery and cleanup state, and any genuinely required user decision. A completed draft or review assignment does not establish larger-project completion.\n\n" +
                  "Work from this disclosed basis, identify consequential gaps, and save permitted results into real project artifacts. Prior labels and reports are not proof. "

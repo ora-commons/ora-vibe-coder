@@ -32,14 +32,12 @@ VENDORED_PATHS = (
     "tests/test_distribution.py",
 )
 
-# This is the single maintainer update point for a reviewed Bridge runtime
-# import. The Bridge repository is public and authoritative in one place, so
-# the authoritative and public release repositories name the same source.
+# This is the single maintainer update point for a reviewed Bridge runtime import.
 BRIDGE_AUTHORITY = {
-    "authoritative_repository": "ora-commons/ora-agent-bridge",
+    "authoritative_repository": "Golfplan18/ora-agent-bridge",
     "public_release_repository": "ora-commons/ora-agent-bridge",
-    "source_revision": "7955bbc4829cf07e2ba626d215a6df2af1a203cd",
-    "source_tree": "43d5b690dce5d25a518404c39593e54ee6a4ca19",
+    "source_revision": "806b5f3e8c27e9e23f48c88060b52ce5c64585ce",
+    "source_tree": "95b018990f67404f275515651eccc2206b0fa5a8",
     "vendored_snapshot": "components/agent-bridge",
 }
 
@@ -91,6 +89,18 @@ BOOST_PATHS = (
         "universal")),
 )
 
+# This is the single maintainer update point for a bundled Ora Screen Markup
+# import. The markup tool ships as one release archive, so it is pinned by its
+# public release tag and the archive's SHA-256 — deliberately not a Git-SHA
+# authority like the three pins above.
+SCREEN_MARKUP_AUTHORITY = {
+    "public_release_repository": "ora-commons/ora-screen-markup",
+    "release_tag": "v0.1.0",
+    "archive_name": "ora-screen-markup-0.1.0.zip",
+    "archive_sha256": "a71fbe44e5eefd80d5c165c0164168399c96dd06fd733d0400ac6c751424c9b1",
+    "vendored_path": "components/ora-screen-markup",
+}
+
 
 class LoopIntegrityError(ValueError):
     pass
@@ -131,6 +141,33 @@ def bridge_authority_metadata() -> dict[str, str]:
 def boost_authority_metadata() -> dict[str, str]:
     """The bundled Ora AI Boost runtime's reviewed identity, validated the same way."""
     return _validated_authority(BOOST_AUTHORITY, "Ora AI Boost")
+
+
+def screen_markup_authority_metadata() -> dict[str, str]:
+    """The bundled Ora Screen Markup release identity: tag plus archive SHA-256.
+
+    Validated on read like the Git-identity pins, but against its own shape —
+    a public release repository, tag, archive name, SHA-256 digest, and the
+    vendored path holding the archive."""
+    required = {
+        "public_release_repository",
+        "release_tag",
+        "archive_name",
+        "archive_sha256",
+        "vendored_path",
+    }
+    authority = SCREEN_MARKUP_AUTHORITY
+    if set(authority) != required or not all(
+            isinstance(authority[name], str) and authority[name]
+            for name in required):
+        raise LoopIntegrityError("Ora Screen Markup authority metadata is incomplete")
+    if not re.fullmatch(r"[0-9a-f]{64}", authority["archive_sha256"]):
+        raise LoopIntegrityError("Ora Screen Markup archive_sha256 is not a SHA-256 digest")
+    vendored = PurePosixPath(authority["vendored_path"])
+    if (vendored.is_absolute() or ".." in vendored.parts
+            or str(vendored) != authority["vendored_path"]):
+        raise LoopIntegrityError("Ora Screen Markup vendored path is invalid")
+    return dict(authority)
 
 
 def _git_object_id(kind: str, payload: bytes) -> bytes:

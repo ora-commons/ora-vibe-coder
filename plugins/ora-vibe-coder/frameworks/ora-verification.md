@@ -104,11 +104,11 @@ Correction routing:
 
 ## Verdict and the Verification Report
 
-Save the actual verdict in opening YAML `status: PASSED`, `status: NOT PASSED` or `status: INCOMPLETE`, with substantive evidence and the exact reason in the report body. NOT PASSED means a completed assessment found required deficiencies; INCOMPLETE means required evidence or an essential prerequisite prevents a supported conclusion. The report body also carries exactly one current `Review disposition:` line — `SETTLED`, `CORRECTION`, `SEVERE`, `INCOMPLETE` or `ASK USER` — outside quotations and examples, per the shared contract. Preserve existing vault metadata. Truthfulness rules:
+Save the actual verdict in opening YAML `status: PASSED`, `status: NOT PASSED` or `status: INCOMPLETE`, with substantive evidence and the exact reason in the report body. NOT PASSED means a completed assessment found required deficiencies; INCOMPLETE means required evidence or an essential prerequisite prevents a supported conclusion. The same opening YAML also carries `disposition:` — exactly `SETTLED`, `CORRECTION`, `SEVERE`, `INCOMPLETE` or `ASK USER` — decided after the review is finished, per the shared contract. Preserve existing vault metadata. Truthfulness rules:
 
 - `PASSED` (with `SETTLED`) only when no actionable finding or unverified risk with identified harm remains, the authorized checks that exist pass, the implementation conforms to the available requirements where they exist, important content and data are preserved, and failure and recovery behavior are sound.
 - Neither the report's existence nor an older passing result proves that newer code passed. A saved verdict describes the implementation actually inspected, not automatically newer code.
-- A fallback, unrepeated, or transport-failed review is never recorded as a completed passing review; a missing, duplicate, unknown or contradictory disposition line reads as incomplete.
+- A fallback, unrepeated, or transport-failed review is never recorded as a completed passing review; a missing, duplicate, unknown or off-list disposition value reads as incomplete.
 
 Save or update one current Verification Report after actual verification — for passing, failing, and incomplete reviews alike. Update the current report after subsequent verification rather than accumulating superseded ones. It records:
 

@@ -12,11 +12,6 @@ import webbrowser
 
 from .project import atomic_write
 
-# The desktop wrapper passes this flag so startup and browser failures reach
-# the user without a console window. Nothing else changes.
-WRAPPER_FLAG = "--wrapper"
-
-
 def settings_path(home=None, platform=None):
     home, platform = Path(home or Path.home()), platform or sys.platform
     if platform == "darwin":
@@ -27,7 +22,7 @@ def settings_path(home=None, platform=None):
 
 
 def documents_location(home=None):
-    """The Documents boundary; discovery reports availability without blocking startup."""
+    """The Documents boundary; discovery reports availability without blocking."""
     return Path(home or Path.home()) / "Documents"
 
 
@@ -90,8 +85,8 @@ class AppLock:
         return self
 
     def __exit__(self, *args):
-        # Keep the empty lock inode stable so simultaneous launch/update requests
-        # cannot obtain different locks. It contains no account or project data.
+        # The empty lock inode stays stable so simultaneous requests cannot
+        # hold different locks; it contains no account or project data.
         if self.stream:
             self.stream.close()
 
@@ -137,9 +132,8 @@ def native_alert(message, url=None, platform=None):
 
 
 def _post(url, token, path):
-    # The launch URL carries the token as its fragment (http://127.0.0.1:PORT/#TOKEN);
-    # drop it — the token travels in the header — and any trailing slash so the
-    # appended API path reaches the server as /api/..., not a fragment or //api/...
+    # Drop the URL's #TOKEN fragment (the token travels in the header) and any
+    # trailing slash so the appended path reaches the server as /api/....
     request = urllib.request.Request(url.partition("#")[0].rstrip("/") + path, data=b"{}",
                                      headers={"Content-Type": "application/json", "X-Ora-Token": token}, method="POST")
     with urllib.request.urlopen(request, timeout=10) as response:
@@ -169,12 +163,9 @@ def confirm_quit_dialog(platform=None):
 
 
 def request_quit(settings, *, dialog=None, platform=None):
-    """Ask the running local server to stop, warning first about visible input.
-
-    Returns True when the app should quit (nothing left running locally, or the
-    user chose Quit anyway); False when the user cancelled. Never touches the
-    input text itself.
-    """
+    """Ask the running local server to stop, warning first about visible
+    input. True when the app should quit; False when the user cancelled.
+    Never touches the input text itself."""
     dialog = dialog or confirm_quit_dialog
     path = settings.path.with_name("running.json")
     try:

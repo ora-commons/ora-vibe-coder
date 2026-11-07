@@ -15,59 +15,78 @@ import tempfile
 import threading
 import time
 
-from .status import (assessment_facts, body_start, document_type_values, metadata, reported_status,
-                     reported_verdict, sections, legacy_review_basis, review_basis, canonical_verdict,
-                     meaning_text, set_yaml_fields, yaml_value, RECORDING_FIELDS)
+from .status import (REVIEW_VALUES, VALUES, assessment_facts, body_start, document_type_values,
+                     metadata, overview_status, reported_status, sections, review_basis,
+                     meaning_text, set_yaml_fields, yaml_value, RECORDING_FIELDS,
+                     correction_dispositions, review_disposition, verification_finding_labels)
 
 READ_LIMIT = 256 * 1024
 PACKET_LIMIT = 4 * 1024 * 1024
 
 
-def findings_key(text, stage):
-    """Identify the saved review, or the whole Verification Report."""
+def _assessment_body(text, stage):
+    """The lone Current review section of a Specification or Plan, or the
+    whole text (the Verification Report's own findings)."""
     text = text or ""
     if stage in {"specification", "planning"}:
         reviews = [item for item in sections(text) if item[0].strip().casefold() == "current review"]
         if len(reviews) == 1:
             _name, _start, body, end = reviews[0]
-            text = text[body:end].strip()
-    return "findings-" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+            return text[body:end].strip()
+    return text
+
+
+def findings_key(text, stage):
+    """Identify the saved review, or the whole Verification Report."""
+    return "findings-" + hashlib.sha256(_assessment_body(text, stage).encode("utf-8")).hexdigest()
+
+
+def walk_project_documents(root, skip=("Handoff.md",)):
+    """Yield (path, stat) for ordinary Markdown/text files beneath one project
+    folder, stopping at nested project definitions — the one shared walk
+    behind the reader listing and the change signal."""
+    def walk(folder):
+        try:
+            children = sorted(folder.iterdir(), key=lambda path: path.name.casefold())
+        except OSError:
+            return
+        for path in children:
+            if path.name.startswith(".") or path.is_symlink():
+                continue
+            try:
+                if path.is_dir():
+                    if not (path / "Project.md").exists():
+                        yield from walk(path)
+                    continue
+                info = path.stat()
+            except OSError:
+                continue
+            if not stat.S_ISREG(info.st_mode) or path.suffix.lower() not in READER_SUFFIXES:
+                continue
+            if path.name in skip:
+                continue
+            yield path, info
+    yield from walk(Path(root))
 
 
 # macOS cloud-backed filesystem calls cannot be cancelled in a Python thread.
 # This is an inactivity deadline for one isolated read, never a scan/content
 # limit: after five seconds without a response, name it and try siblings.
 DISCOVERY_READ_SECONDS = 5
-# The five standard working documents come first; the roles after them are the
-# recognized legacy vocabulary, retained so older files and saved associations
-# keep working without migration.
-ROLES = ("Registry", "Specification", "Plan", "Programming Result", "Verification Report",
-         "Request", "User Guide", "Technical Documentation", "Product Overview",
-         "Verification Findings", "Report", "Code", "Checks", "Baseline")
-# Each role's default filename variants: the current plain name, then the older
-# numbered form. A project's starter file, its legacy numbered file, and the
-# "<Project Name> — <variant>" spelling all identify their own role.
-DEFAULT_NAMES = {"Registry": ("Registry",), "Specification": ("Specification", "02 Specification"),
-                 "Plan": ("Plan", "03 Implementation Plan"), "Programming Result": ("Programming Result",),
-                 "Verification Report": ("Verification Report",), "Request": ("01 Request",),
-                 "User Guide": ("04 User Guide",), "Technical Documentation": ("05 Technical Documentation",),
-                 "Product Overview": ("06 Product Overview",), "Report": ("07 Report",)}
-# Code, Checks and Baseline stay deliberate associations; discovery never guesses them.
-DISCOVERABLE = ("Registry", "Specification", "Plan", "Programming Result", "Verification Report",
-                "Request", "User Guide", "Technical Documentation", "Product Overview",
-                "Verification Findings", "Report")
+# The five standard working documents; Code stays a deliberate association.
+ROLES = ("Registry", "Specification", "Plan", "Programming Result", "Verification Report", "Code")
+# Each role's default filename; the "<Project Name> — <variant>" spelling too.
+DEFAULT_NAMES = {"Registry": ("Registry",), "Specification": ("Specification",),
+                 "Plan": ("Plan",), "Programming Result": ("Programming Result",),
+                 "Verification Report": ("Verification Report",)}
+# Code stays a deliberate association; discovery never guesses it.
+DISCOVERABLE = ("Registry", "Specification", "Plan", "Programming Result", "Verification Report")
 ROLE_WORDS = {
     "Registry": ("registry",),
     "Specification": ("spec", "specification"),
     "Plan": ("plan", "planning"),
-    "User Guide": ("user guide", "guide"),
-    "Technical Documentation": ("technical documentation", "technical doc", "documentation"),
-    "Product Overview": ("product overview", "overview"),
     "Programming Result": ("programming result", "implementation result"),
     "Verification Report": ("verification report",),
-    "Verification Findings": ("verification findings", "findings"),
-    "Report": ("report",),
-    "Request": ("request",),
 }
 READER_SUFFIXES = {".md", ".markdown", ".txt"}
 
@@ -125,11 +144,7 @@ def not_started(text):
     if start is None:
         return False
     body = text[start:]
-    status_value = yaml_value(text, "status")[0]
-    if status_value in {"PASSED", "NOT PASSED", "INCOMPLETE", "COMPLETE"}:
-        return False
-    if any(value.upper() in {"PASSED", "NOT PASSED", "INCOMPLETE", "COMPLETE"}
-           for values in metadata(text).values() for value in values):
+    if yaml_value(text, "status")[0] in VALUES["programming"]:
         return False
     generic = {"Intended behavior, requirements, and outcomes.", "Implementation approach, steps, and checks.",
                "Notes, background, decisions, and open questions."}
@@ -168,10 +183,6 @@ def word_roles(text):
             if re.search(rf"(?:^| ){re.escape(word)}(?: |$)", tokens):
                 roles.add(role)
                 break
-    # The more specific document name wins: "verification report" also contains
-    # the Report role's word, but names the Verification Report.
-    if "Verification Report" in roles:
-        roles.discard("Report")
     return roles
 
 
@@ -378,15 +389,11 @@ class Project:
     def discover(self):
         """Resolve stage documents from the selected folder's ordinary Markdown.
 
-        Rank: expected default name, then a scalar vibe_document type label in
-        closed opening frontmatter or ordinary opening metadata, then whole
-        role words in the filename. Within a rank: latest modification time,
-        then stable filename order. Programming and Verification results use
-        the latest modification time first so a newer numbered result can
-        supersede the standard filename. An explicit association still wins.
-        Project.md, outgoing packets and conflicting files are never selected.
-        """
-        from .status import document_type_values  # local alias kept for clarity
+        Rank: expected default name, a scalar vibe_document type label, then
+        whole role words in the filename; within a rank, newest wins (results
+        newest-first so a numbered result can supersede the standard name).
+        An explicit association still wins; Project.md, outgoing packets and
+        conflicting files are never selected."""
         result = {"resolved": {}, "conflicts": [], "candidates": {}}
         try:
             entries = sorted(self.root.iterdir(), key=lambda path: path.name)
@@ -425,7 +432,7 @@ class Project:
             expected_role = expected.get(path.stem)
             roles, rank = None, None
             if values:
-                # An explicit label controls; a disagreeing name or expectation is a conflict.
+                # An explicit label controls; a disagreeing name or expectation conflicts.
                 label_roles = word_roles(values[0])
                 others = set(name_roles) | ({expected_role} if expected_role else set())
                 if len(label_roles) != 1 or (others and others != label_roles):
@@ -433,9 +440,7 @@ class Project:
                     continue
                 roles, rank = next(iter(label_roles)), 1
             elif expected_role:
-                # The expected default name identifies its own role; other words
-                # may come from the project's own name.
-                roles, rank = expected_role, 0
+                roles, rank = expected_role, 0  # The expected name identifies its role.
             elif len(name_roles) == 1:
                 roles, rank = next(iter(name_roles)), 2
             elif len(name_roles) > 1:
@@ -447,10 +452,10 @@ class Project:
             if pool:
                 result["candidates"][role] = [str(item[3]) for item in pool]
                 if role in {"Programming Result", "Verification Report"}:
-                    rank, _, _, path = min(pool, key=lambda item: (-item[1], item[0], item[2]))
+                    _, _, _, path = min(pool, key=lambda item: (-item[1], item[0], item[2]))
                 else:
-                    rank, _, _, path = min(pool, key=lambda item: (item[0], -item[1], item[2]))
-                result["resolved"][role] = {"path": str(path), "name": path.name, "rank": rank}
+                    _, _, _, path = min(pool, key=lambda item: (item[0], -item[1], item[2]))
+                result["resolved"][role] = {"path": str(path), "name": path.name}
         return result
 
     def reference(self, role, discovery=None):
@@ -565,10 +570,12 @@ class Project:
         saved, _warning = self.approve_document(stage, expected, expected_path)
         return {role: saved}
 
-    def _approved_document(self, role, path, basis=None):
+    def _approved_document(self, role, path, basis=None, fresh=False):
         key = (role, path)
+        if fresh:
+            self.document_versions.pop(key, None)
         saved = self.document_versions.get(key)
-        if saved is not None and (basis is None or basis in {review_basis(saved["text"]), legacy_review_basis(saved["text"])}):
+        if saved is not None and (basis is None or basis == review_basis(saved["text"])):
             return saved
         from . import conversation
         for retained in sorted((self.root / ".vibe").glob("*/session/messages/*-initiator-record.md"), reverse=True):
@@ -586,7 +593,7 @@ class Project:
                 source, document = body.split(marker, 1)[1].split("\n\nContent:\n\n", 1)
                 if source != path:
                     continue
-                if basis is not None and basis not in {review_basis(document), legacy_review_basis(document)}:
+                if basis is not None and basis != review_basis(document):
                     continue
                 saved = {"path": path, "text": document, "role": role}
                 if basis is None:
@@ -596,8 +603,31 @@ class Project:
                 continue
         return None
 
-    def material_change(self, stage):
-        """Return a real comparison task, or deterministic recording equivalence."""
+    def run_approval_documents(self):
+        """Fresh approval evidence for startup; a reviewed copy cannot prove approval."""
+        documents = []
+        for stage, role in (("specification", "Specification"), ("planning", "Plan")):
+            item = self.material(role)
+            reference = self.reference(role)
+            approved = reported_status(stage, item["text"] or "", item["path"])["label"] == "APPROVED"
+            retained = self._approved_document(role, item["path"], fresh=True) if approved else None
+            state = ("unapproved" if not approved else "missing" if retained is None else
+                     "unchanged" if meaning_text(retained["text"]) == meaning_text(item["text"]) else "changed")
+            documents.append({"stage": stage, "role": role, "path": item["path"], "text": item["text"],
+                              "resolved": str(reference.resolve()) if isinstance(reference, Path) else item["path"],
+                              "state": state, "before": retained["text"] if retained else None})
+        return documents
+
+    def document_change(self, stage):
+        """A plain changed-text notice against the last retained version.
+
+        Compares the current document's meaning against the retained approved
+        copy, or failing that the reviewed snapshot, by deterministic
+        recording equivalence only: no model call decides anything, and no
+        field of the document is rewritten — the notice is display
+        information, and the saved status and review stay exactly as their
+        own writers left them.
+        """
         role = {"specification": "Specification", "planning": "Plan"}[stage]
         item = self.material(role)
         if item["text"] is None:
@@ -617,67 +647,8 @@ class Project:
             return None
         if meaning_text(approved["text"]) == meaning_text(item["text"]):
             return dict(stage=stage, state="unchanged", comparison=comparison) if comparison == "review" else None
-        key = review_basis(approved["text"]) + ":" + review_basis(item["text"])
-        from . import conversation
-        answer = conversation.read_aux_answers(self).get(f"{stage}:{key}")
-        if answer and answer["purpose"] == conversation.PURPOSE_MATERIALITY:
-            verdict = answer["answer"].get("materiality")
-            if verdict == "MATERIAL":
-                self.apply_material_change(stage, approved, item)
-            if verdict == "UNKNOWN":
-                return dict(stage=stage, state="unknown", comparison=comparison, key=key,
-                            reason="The comparison could not establish whether meaning changed: " + answer["answer"].get("reason", "No supported conclusion."))
-            if verdict in {"MATERIAL", "UNCHANGED"}:
-                return dict(stage=stage, state=verdict.lower(), comparison=comparison,
-                            review_current=(verdict == "UNCHANGED" and assessment_facts(stage, approved["text"])["applies"] == "current"
-                                            and assessment_facts(stage, approved["text"])["basis"] == facts["basis"]),
-                            key=key, reason=answer["answer"].get("reason", ""))
-        return dict(stage=stage, state="pending", comparison=comparison, key=key, before=approved, after=item,
-                    reason="The document text changed; a comparison of meaning is needed before approval and review applicability can be established.")
-
-    def apply_material_change(self, stage, before, after):
-        role = {"specification": "Specification", "planning": "Plan"}[stage]
-        with self.document_lock:
-            item = self.material(role)
-            reference = self.reference(role)
-            if item["path"] != after["path"] or item["text"] != after["text"]:
-                return False  # A semantic answer can never be applied to a later edit.
-            if not isinstance(reference, Path) or reference.is_symlink() or not reference.resolve().is_relative_to(self.root):
-                return False
-            current = item["text"]
-            facts = assessment_facts(stage, current)
-            prior_facts = assessment_facts(stage, before["text"])
-            updates = {}
-            state = reported_status(stage, current, item["path"])["label"]
-            approved = self._approved_document(role, item["path"])
-            if (state in {"APPROVED", "Approved product specification", "Approved Implementation Plan"}
-                    and approved is not None and meaning_text(approved["text"]) != meaning_text(current)):
-                updates["status"] = "AWAITING APPROVAL"
-            reviewed_before = facts["basis"] in {review_basis(before["text"]), legacy_review_basis(before["text"])}
-            if (prior_facts["present"] or reviewed_before) and facts["applies"] != "current":
-                updates["review"] = "CHANGED"
-            if not updates:
-                return True
-            # Preserve actual earlier findings even when an editor replaced,
-            # rather than removed, the review section. A fresh basis-matched
-            # review above remains current and is never replaced this way.
-            if prior_facts["present"] and updates.get("review") == "CHANGED":
-                prior = [part for part in sections(before["text"]) if part[0].strip().casefold() == "current review"]
-                now = [part for part in sections(current) if part[0].strip().casefold() == "current review"]
-                if len(prior) == 1:
-                    previous_body = before["text"][prior[0][2]:prior[0][3]].strip()
-                    if not now:
-                        current = current.rstrip() + "\n\n## Current review\n\n" + previous_body + "\n"
-                    elif len(now) == 1:
-                        current_body = current[now[0][2]:now[0][3]].strip()
-                        if previous_body not in current_body:
-                            retained = previous_body + "\n\n### Feedback saved with the changed document\n\n" + current_body
-                            current = current[:now[0][2]] + "\n\n" + retained + "\n\n" + current[now[0][3]:]
-            updated = set_yaml_fields(current, **updates)
-            if read_text(reference) != item["text"]:
-                return False
-            atomic_write(reference, updated)
-            return True
+        return dict(stage=stage, state="changed", comparison=comparison,
+                    reason="The text changed since the recorded approval or review; the saved verdict applies to an earlier version.")
 
     def _document_assessment(self, stage, role, discovery):
         """Advisory completeness facts read from the resolved stage document."""
@@ -691,16 +662,12 @@ class Project:
             facts = assessment_facts(stage, item["text"] or "", snapshots)
         facts["path"] = item["path"]
         facts["expected"] = item["text"]
-        facts["approval_unknown"] = (reported_status(stage, item["text"] or "", item["path"])["label"] in {"APPROVED", "Approved product specification", "Approved Implementation Plan"}
+        facts["approval_unknown"] = (reported_status(stage, item["text"] or "", item["path"])["label"] == "APPROVED"
                                      and self._approved_document(role, item["path"]) is None)
-        change = self.material_change(stage)
+        change = self.document_change(stage)
         if change:
-            facts["change"] = {key: value for key, value in change.items() if key not in {"before", "after"}}
-            if change["state"] == "material":
-                facts["expected"] = self.material(role)["text"]
-                saved_facts = assessment_facts(stage, facts["expected"] or "")
-                facts.update(saved_facts)
-            elif change["state"] == "unchanged" and (change.get("comparison") == "review" or change.get("review_current")):
+            facts["change"] = dict(change)
+            if change["state"] == "unchanged" and change.get("comparison") == "review":
                 facts["applies"] = "current"
         conflict = self._selection_conflict(role, discovery)
         if conflict:
@@ -735,7 +702,7 @@ class Project:
                 if match["path"] != path:
                     continue
                 document = match["document"]
-                if digests[0] in {legacy_review_basis(document), review_basis(document)}:
+                if digests[0] == review_basis(document):
                     return [document]
         # An approval note can retain the actual reviewed version even after
         # a later approval replaces the in-memory/latest approval. Looking up
@@ -768,14 +735,13 @@ class Project:
                 text = read_text(candidate)
             except (OSError, ProjectError):
                 continue
-            if stage in {"specification", "planning"}:
-                value = assessment_facts(stage, text)["verdict"]
-            else:
-                value = reported_status(stage, text, candidate, field="Status" if stage == "programming" else "Verdict")["label"]
-                if value in {"Not reported", "VERDICT MISSING"} or value.startswith("Unknown"):
-                    value = ""
-            if value:
-                conclusions.append((candidate, value))
+            # Only exact on-list YAML values are compared; missing, malformed
+            # and off-list values never create or settle a conflict.
+            key, allowed = ("review", REVIEW_VALUES) if stage in {"specification", "planning"} else ("status", VALUES[stage])
+            value, error = yaml_value(text, key)
+            if error or value not in allowed:
+                continue
+            conclusions.append((candidate, value))
         if len({value for _, value in conclusions}) > 1:
             return ("Different candidate documents report conflicting current conclusions: " +
                     "; ".join(f"{Path(path).name}: {value}" for path, value in conclusions) +
@@ -791,40 +757,17 @@ class Project:
         recognized renamed copy — is never listed.
         """
         entries = []
-
-        def walk(folder):
+        for path, _info in walk_project_documents(self.root, skip=("Project.md", "Handoff.md")):
             try:
-                children = sorted(folder.iterdir(), key=lambda path: path.name.casefold())
-            except OSError:
-                return
-            for path in children:
-                if path.name.startswith(".") or path.is_symlink():
-                    continue
-                try:
-                    if path.is_dir():
-                        # A subdirectory with its own Project.md is a nested
-                        # project: a boundary, not part of this project.
-                        if not (path / "Project.md").exists():
-                            walk(path)
-                        continue
-                    info = path.stat()
-                except OSError:
-                    continue
-                if not stat.S_ISREG(info.st_mode) or path.suffix.lower() not in READER_SUFFIXES:
-                    continue
-                if path.name == "Project.md" or path.name == "Handoff.md":
-                    continue
-                try:
-                    text = read_text(path, PACKET_LIMIT if path.name == self.implementation_request_name() and path.parent == self.root else READ_LIMIT)
-                except (OSError, ProjectError):
-                    text = None
-                if text is not None and is_outgoing_packet(text) and path != self.root / self.implementation_request_name():
-                    continue
-                entries.append({"name": path.name, "path": path.relative_to(self.root).as_posix(),
-                                "origin": "folder", "not_started": not_started(text) if text is not None else False,
-                                "unreadable": text is None})
+                text = read_text(path, PACKET_LIMIT if path.name == self.implementation_request_name() and path.parent == self.root else READ_LIMIT)
+            except (OSError, ProjectError):
+                text = None
+            if text is not None and is_outgoing_packet(text) and path != self.root / self.implementation_request_name():
+                continue
+            entries.append({"name": path.name, "path": path.relative_to(self.root).as_posix(),
+                            "origin": "folder", "not_started": not_started(text) if text is not None else False,
+                            "unreadable": text is None})
 
-        walk(self.root)
         seen = {entry["path"] for entry in entries}
         for role in DISCOVERABLE:
             reference = self.reference(role)
@@ -860,21 +803,6 @@ class Project:
                     result["reason"] = str(error)
                 return result
         raise ProjectError("That document is not part of this project's reading list.")
-
-    def overview_sources(self, discovery=None):
-        """Description/mission/goals sections found in resolved project documents."""
-        sources = []
-        for role in ("Request", "Product Overview"):
-            item = self.material(role, discovery=discovery)
-            if item["text"] is None:
-                continue
-            found = {}
-            for name, _start, body, end in sections(item["text"]):
-                if name.strip() in {"Description", "Mission", "Goals"} and name.strip() not in found:
-                    found[name.strip()] = item["text"][body:end].strip()
-            if found:
-                sources.append({"role": role, "name": Path(item["path"]).name, "sections": found})
-        return sources
 
     def save_brief(self, expected, name, description, goals, paths, parent=None, state=None):
         current = self.brief_text()
@@ -960,46 +888,69 @@ class Project:
                 if resolved:
                     entry.update(path=resolved["path"], name=resolved["name"], origin="discovered")
             documents[role] = entry
-        changes = {stage: self.material_change(stage) for stage in ("specification", "planning")}
+        changes = {stage: self.document_change(stage) for stage in ("specification", "planning")}
         statuses = {}
         for stage, role in (("specification", "Specification"), ("planning", "Plan")):
             item = self.material(role, discovery=discovery)
             statuses[stage] = reported_status(stage, item["text"] or "", item["path"] or f"No {role} document")
         for stage in ("programming", "verification"):
-            statuses[stage] = reported_status(stage, raw or "", str(self.root / "Project.md"))
+            statuses[stage] = overview_status(stage, raw or "", str(self.root / "Project.md"))
         # Saved result documents govern the prominent outcome displays; the
         # Project.md fields remain separately reported history.
         result = self.material("Programming Result", discovery=discovery)
         programming_result = {"path": result["path"],
                               "status": {**reported_status("programming", result["text"] or "",
-                                                           result["path"] or "No Programming Result document", field="Status"),
+                                                           result["path"] or "No Programming Result document"),
                                          "untouched": not_started(result["text"]) if result["text"] is not None else False,
                                          "unreadable": result["reason"] if result["path"] and result["text"] is None else ""}}
         report = self.material("Verification Report", discovery=discovery)
         verification = {"path": report["path"], "name": Path(report["path"]).name if report["path"] else None,
                         "findings_key": findings_key(report["text"], "verification"),
-                        "verdict": reported_verdict(report["text"] or ""),
                         "status": reported_status("verification", report["text"] or "",
-                                                  report["path"] or "No Verification Report document", field="Verdict") |
+                                                  report["path"] or "No Verification Report document") |
                                   {"untouched": not_started(report["text"]) if report["text"] is not None else False,
-                                   "unreadable": report["reason"] if report["path"] and report["text"] is None else ""},
-                        "legacy_field": statuses["verification"]["literal"]}
+                                   "unreadable": report["reason"] if report["path"] and report["text"] is None else ""}}
         for role, outcome in (("Programming Result", programming_result), ("Verification Report", verification)):
             conflict = self._selection_conflict(role, discovery)
             if conflict:
                 outcome["status"].update(label="REPORT ERROR", kind="neutral", icon="○",
                                          reason=conflict)
                 documents[role]["note"] = conflict
-                if role == "Verification Report":
-                    outcome["verdict"] = ""
+        # CORRECTED is a completion display, not a replacement verdict in the
+        # independent report. Existing finding labels tie the saved decisions
+        # to this report; file order prevents an older correction hiding a
+        # later report that reuses those labels.
+        if (programming_result["status"]["label"] == "PASSED"
+                and review_disposition(result["text"]) == "SETTLED"
+                and verification["status"]["label"] == "NOT PASSED"
+                and review_disposition(report["text"]) in {"CORRECTION", "SEVERE", "ASK USER"}):
+            findings = verification_finding_labels(report["text"])
+            decisions = {}
+            for label, decision, _reason in correction_dispositions(result["text"]):
+                decisions.setdefault(label, []).append(decision)
+            settled = findings and all(len(decisions.get(label, [])) == 1
+                                       and (not label.startswith("S") or decisions[label] == ["FIXED"])
+                                       for label in findings)
+            if (review_disposition(report["text"]) == "SEVERE"
+                    and not any(label.startswith("S") for label in findings)):
+                settled = settled and all(decisions.get(label) == ["FIXED"] for label in findings)
+            try:
+                follows_report = Path(result["path"]).stat().st_mtime_ns > Path(report["path"]).stat().st_mtime_ns
+            except OSError:
+                follows_report = False
+            if settled and follows_report:
+                verification["status"].update(
+                    label="CORRECTED", kind="positive", icon="✓",
+                    reason=("Completed after correction: the Programming Result records settlement of every "
+                            "finding. The original Verification Report remains NOT PASSED for the work "
+                            "inspected before correction; no further verification pass is claimed."))
         return {**brief, "root": str(self.root), "raw": raw, "statuses": statuses,
                 "documents": documents, "discovery_conflicts": discovery["conflicts"],
-                "overview_sources": self.overview_sources(discovery),
                 "assessments": {stage: self._document_assessment(stage, role, discovery)
                                 for stage, role in (("specification", "Specification"), ("planning", "Plan"))},
                 "reader": self.reader_documents(), "programming_result": programming_result,
                 "verification": verification,
-                "plan_notice": "The Specification changed materially; the Plan may need updating." if (changes.get("specification") or {}).get("state") == "material" or assessments_changed(self.material("Specification")["text"]) else "",
+                "plan_notice": "The Specification changed since its review; the Plan may need updating." if (changes.get("specification") or {}).get("state") == "changed" or assessments_changed(self.material("Specification")["text"]) else "",
                 "code_folder": str(folder) if (folder := self.code_folder(brief)) else None,
                 "handoff_exists": (self.root / "Handoff.md").exists(), "handoff_path": str(self.root / "Handoff.md"),
                 "implementation_request_path": str(self.root / self.implementation_request_name())}

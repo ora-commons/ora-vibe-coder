@@ -1,14 +1,12 @@
 """Vendored instructions for the second-opinion reliability pipeline.
 
-The three instruction layers below are vendored text, not a runtime. They are
-adapted from Ora's injected behavioral preamble and F-Evaluate / F-Revise
-frameworks at the sources recorded in ORA_SOURCES, with the web-verification
-machinery omitted: externals that cannot be verified inside this pipeline
-surface under UNCERTAINTIES instead. The record is static provenance — which
-sources were copied, at which revision, with which digests — not a live check:
-an ordinary update to the Ora checkout must never fail this application's own
-tests. Any future change to these texts has a documented migration path
-through that record.
+The three instruction layers below are vendored text, not a runtime, adapted
+from Ora's injected behavioral preamble and F-Evaluate / F-Revise frameworks
+at the sources recorded in ORA_SOURCES, with web verification omitted (an
+unverifiable external surfaces under UNCERTAINTIES). ORA_SOURCES is static
+provenance — which sources were copied, at which revision, with which digests
+— not a live check, so an ordinary update to the Ora checkout never fails
+this application's own tests.
 """
 
 ORA_REVISION = "526a7379e09fd821f1fe4a9e86a50c3050a186f8"
@@ -27,19 +25,6 @@ ORA_SOURCES = {
         "sha256": "836b1e5ac41dec5b7b4c7344e23a74e56f59b8de11d8de88366e42cc208f3eb9",
     },
 }
-
-
-def pins():
-    """The vendored-text provenance record, for display and inspection.
-
-    A static record of the original copy: Ora's repository, each source's
-    path inside it, the revision it was taken from, and its digest at that
-    time. It asserts nothing about the live checkout — the sources are
-    read-only reference material, and their later evolution is not this
-    application's test to judge.
-    """
-    return {"revision": ORA_REVISION, "repository": ORA_REPOSITORY,
-            "sources": {name: dict(facts) for name, facts in ORA_SOURCES.items()}}
 
 
 # Layer 1 — the constitution and standing-rules preamble, adapted from Ora's
@@ -272,10 +257,11 @@ Evaluator uncertainties that propagate, unverifiable externals, and any new
 uncertainty this revision introduced — stated plainly for the user.
 
 ### `## REVISED ASSESSMENT`
-The complete revised assessment as it should be saved: a clear `Verdict: PASSED`, `Verdict: NOT PASSED`
-or `Verdict: INCOMPLETE`, the reasoning, and the deficiency list for an
-NOT PASSED verdict. The application records the stage and evidence basis;
-do not repeat the `## Current review` heading here.
+The complete revised assessment as it should be saved: opening with a YAML
+block declaring exactly `review: PASSED`, `review: NOT PASSED` or
+`review: INCOMPLETE`, then the reasoning, and the deficiency list for a NOT
+PASSED verdict. The application records the stage and evidence basis; do not
+repeat the `## Current review` heading here.
 Re-emit the complete assessment even when nothing changed; narration is not a
 substitute, and a missing or empty section here fails the pass.
 
@@ -293,12 +279,18 @@ You are the authoring reviewer: a fresh independent assessment of the current
 {stage_role}, separate from any conversation that produced it. Apply the shared
 task and criteria above to the supplied document.
 
-Return your complete visible assessment in one `## Current review` section:
+Return your complete visible assessment, opening with a YAML block that declares
+the verdict — `PASSED`, `NOT PASSED` or `INCOMPLETE` — as the one field the
+application reads:
 
 ```text
-Verdict: PASSED    (or NOT PASSED or INCOMPLETE)
-<For NOT PASSED, list each required deficiency as one "- " bullet.>
+---
+review: PASSED
+---
 ```
+
+Follow it with the assessment reasoning; for NOT PASSED, list each required
+deficiency as one "- " bullet.
 
 The application records the stage and the evidence basis for the document it
 sent you. Do not copy or calculate a fingerprint. The assessment is advisory;

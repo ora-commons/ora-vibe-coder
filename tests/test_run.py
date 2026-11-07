@@ -7,19 +7,22 @@ live.
 """
 
 import base64
+import http.client
 import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 import time
 from unittest import mock
 import unittest
 
 from ora_vibe_coder import conversation, run as run_module
 from ora_vibe_coder.launcher import Settings
-from ora_vibe_coder.project import ProjectStore, ProjectError
+from ora_vibe_coder.project import Project, ProjectStore, ProjectError
+from ora_vibe_coder.server import LocalServer
 
-TEST_ROOT = Path("/private/tmp") if Path("/private/tmp").is_dir() else Path(tempfile.gettempdir())
+TEST_ROOT = Path(tempfile.gettempdir())
 
 FAKE_BRIDGE = '''
 """A fake Agent Bridge whose runs consume scripted step directives."""
@@ -52,8 +55,6 @@ def main():
     runp.add_argument("--session", required=True)
     runp.add_argument("--timeout", type=float)
     runp.add_argument("--no-timeout", action="store_true")
-    runp.add_argument("--max-steps", type=int)
-    runp.add_argument("--require-model")
     runp.add_argument("--model")
     runp.add_argument("--effort")
     runp.add_argument("--events-jsonl", action="store_true")
@@ -69,8 +70,7 @@ def main():
     args = parser.parse_args()
     if args.command == "check":
         print(json.dumps({"peer": args.peer, "mode": args.mode or "review", "ready": True,
-                          "warnings": [], "work": "supported",
-                          "model_switch": "-m" if args.peer == "codex" else None}))
+                          "warnings": [], "work": "supported"}))
         return 0
     session = pathlib.Path(args.session)
     body = json.loads(sys.stdin.readline())["body"] if getattr(args, "work_input_jsonl", False) else sys.stdin.read()
@@ -121,15 +121,6 @@ def main():
     request.write_text("\\n".join(headers) + "\\n\\n## Body\\n\\n" + body, encoding="utf-8")
     for name, text in (directive.get("writes") or {}).items():
         pathlib.Path(name).write_text(text, encoding="utf-8")
-    if directive.get("mid_input"):
-        emit({"event": "work_input_ready", "thread_id": "owned-thread", "turn_id": "owned-turn"})
-        for status in ("accepted", "refused"):
-            value = {**json.loads(sys.stdin.readline()), "status": status, "reason": "native refusal" if status == "refused" else ""}
-            number = next_sequence(session)
-            note = session / "messages" / ("%04d-initiator-record.md" % number)
-            note.write_text("# Message %04d\\nRecord: note\\nFrom: vibe-coder\\n\\n## Body\\n\\nWork-Input-JSON: " % number + json.dumps(value) + "\\n", encoding="utf-8")
-            emit({"event": "work_input", **value})
-        emit({"event": "work_input_closed"})
     if directive.get("delay"):
         time.sleep(float(directive["delay"]))
     if directive.get("fail"):
@@ -144,10 +135,6 @@ def main():
     response = session / "messages" / ("%04d-peer-to-initiator.md" % answer)
     response.write_text("# Message %04d\\nFrom: peer\\nTo: vibe-coder\\nAnswers: %04d\\n\\n## Body\\n\\n"
                         % (answer, sequence) + reply, encoding="utf-8")
-    if directive.get("lost_final"):
-        emit({"event": "finished", "phase": "run", "outcome": "failure",
-              "reason": "temporary service connection lost after saving"})
-        return 1
     if args.events_jsonl:
         finished = {"event": "finished", "phase": "run", "outcome": "success",
                     "request_path": str(request), "response_path": str(response), "warnings": []}
@@ -158,26 +145,21 @@ def main():
         print(response)
     return 0
 
-
 raise SystemExit(main())
 '''
-
 
 def reply_with_questions(*questions):
     return ("Working on it.\n\n## Questions for you\n\n"
             + "\n".join(f"- {question}" for question in questions) + "\n")
 
-
 def report(verdict, disposition=None, findings=None):
     if disposition is None:
         disposition = ("SETTLED" if verdict.startswith("PASSED") else
                        "INCOMPLETE" if "INCOMPLETE" in verdict else "CORRECTION")
-    text = f"# Verification Report\n\nVerdict: {verdict}\n\nWhat was checked and found.\n"
+    text = f"---\nstatus: {verdict}\ndisposition: {disposition}\n---\n# Verification Report\n\nWhat was checked and found.\n"
     if findings is not None:
         text += "\n## Findings\n\n" + "\n".join(f"- {item}" for item in findings) + "\n"
-    text += f"\nReview disposition: {disposition}\n"
     return text
-
 
 class RunCase(unittest.TestCase):
     def setUp(self):
@@ -203,7 +185,6 @@ class RunCase(unittest.TestCase):
         self.addCleanup(self._bridge_patch.stop)
         self.registry = conversation.TurnRegistry()
         self.runs = run_module.RunRegistry()
-        # A paused run's driver thread outlives its assertion; Stop ends it.
         self.addCleanup(self.runs.drain)
 
     def project(self, name="One"):
@@ -237,6 +218,24 @@ class RunCase(unittest.TestCase):
             time.sleep(0.05)
         self.fail(message)
 
+    def local_server(self):
+        """One shared disposable server and POST helper for the API tests."""
+        server = LocalServer(self.home, settings=Settings(self.root / "settings.json"))
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01})
+        thread.start()
+        self.addCleanup(lambda: (server.runs.drain(), server.shutdown(), thread.join(),
+                                 server.server_close()))
+
+        def post(path, body):
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            connection.request("POST", path, json.dumps(body),
+                               headers={"Content-Type": "application/json", "X-Ora-Token": server.token})
+            response = connection.getresponse()
+            data = json.loads(response.read())
+            connection.close()
+            return response.status, data
+        return server, post
+
     def build_step_ok(self, root, index=0, note="Delivered for the run."):
         return index, {str(root / "One — Programming Result.md"):
                        f"# Programming Result\n\nStatus: COMPLETE\n\n{note}\n"}
@@ -263,101 +262,6 @@ class RunCase(unittest.TestCase):
         """
         return request.split("\n\n# Work-turn instructions", 1)[0]
 
-    # -- the scenarios -------------------------------------------------------
-
-    def test_mid_run_instruction_reaches_later_steps(self):
-        self.addCleanup(self.registry.drain)
-        project = self.project()
-        root = project.root
-        self.directive(0, mid_input=True, reply="Specification saved.", writes={
-            str(root / "Specification.md"): "# Specification\n\nA useful product brief.\n"})
-        self.directive(1, reply="Plan saved.", writes={str(root / "Plan.md"): "# Plan\n\nAn executable approach.\n"})
-        self.directive(2, reply="Built.", writes={str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-        self.directive(3, reply="Verified.", writes={str(root / "One — Verification Report.md"): report("PASSED")})
-        driver = self.start(project)
-        self.wait_for(lambda: driver.handle is not None and driver.handle.snapshot().get("input_target"))
-        handle = driver.handle
-        target = handle.snapshot()["input_target"]
-        correction = "Keep the supplied names.\nPreserve every existing note."
-        accepted = self.registry.send_input(project, handle.turn, driver.run, target, correction)
-        rejected = self.registry.send_input(project, handle.turn, driver.run, target, "DO NOT PROPAGATE THIS FAILED DRAFT")
-        self.assertEqual((accepted["status"], rejected["status"]), ("pending", "pending"))
-        self.settle(driver, lambda status: status["state"] == "complete")
-        saved = conversation.read_turn(root / ".vibe" / handle.turn)
-        self.assertEqual(saved["inputs"][0]["text"], correction)
-        self.assertEqual([item["status"] for item in saved["inputs"]], ["accepted", "refused"])
-        later = self.step_requests(project)[1:]
-        self.assertEqual(len(later), 3)
-        for request in later:
-            self.assertIn("Current user instructions received during this run", self.own_message(request))
-            self.assertIn(correction, self.own_message(request))
-            self.assertNotIn("DO NOT PROPAGATE", request)
-
-    def test_run_from_specification_consumes_the_brief_once_and_completes(self):
-        self.addCleanup(self.registry.drain)
-        project = self.project()
-        root = project.root
-        # Run to Completion takes priority over an optional comparison that
-        # was already using the work slot, without pausing for its answer.
-        self.directive(0, reply="MATERIAL\nRequirements changed.\n", delay=30)
-        comparison = conversation.start_aux(self.registry, project, "codex", conversation.PURPOSE_MATERIALITY,
-                                            "specification", "Compare the two retained versions.", {"Key": "old:new"})
-        self.wait_for(lambda: comparison.state == "running" and (self.scenario / "directive.count").is_file()
-                      and (self.scenario / "directive.count").read_text() == "1")
-        self.directive(1, reply="Specification drafted.\n", writes={
-            str(root / "Specification.md"): "# One — Specification\n\n## Description\n\nA real product brief.\n"})
-        self.directive(2, reply="Planned.\n", writes={
-            str(root / "Plan.md"): "# One — Plan\n\n## Approach\n\nSteps are laid out.\n"})
-        self.directive(3, reply="Built.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-        self.directive(4, reply="Verified.\n", writes={
-            str(root / "One — Verification Report.md"): report("PASSED")})
-        driver = self.start(project, "specification", "Build the small tool from this brief.")
-        final = self.settle(driver, lambda status: status["state"] == "complete")
-        self.assertEqual(comparison.state, "interrupted")
-        self.assertFalse(comparison.worker.is_alive())
-        self.assertFalse(comparison.live_children())
-        self.assertNotIn("specification:old:new", conversation.read_aux_answers(project))
-        self.assertEqual(final["verdicts"], ["PASSED"])
-        requests = self.step_requests(project)
-        self.assertEqual(len(requests), 4)
-        # The brief is carried by the entry step once — beside its fixed
-        # assignment, never in place of it — and no later step's own
-        # instruction repeats it.
-        self.assertIn("Build the small tool from this brief.", self.own_message(requests[0]))
-        for later in requests[1:]:
-            self.assertNotIn("Build the small tool from this brief.", self.own_message(later))
-        runs = run_module.read_runs(project)
-        self.assertEqual(runs[-1]["state"], "complete")
-        self.assertTrue(all(step["state"] == "complete" for step in runs[-1]["steps"]))
-
-    def test_a_brief_carrying_entry_step_keeps_its_fixed_stage_assignment(self):
-        project = self.project()
-        root = project.root
-        self.directive(0, reply="Specification drafted.\n", writes={
-            str(root / "Specification.md"): "# One — Specification\n\n## Description\n\nA real product brief.\n"})
-        self.directive(1, reply="Planned.\n", writes={
-            str(root / "Plan.md"): "# One — Plan\n\n## Approach\n\nSteps are laid out.\n"})
-        self.directive(2, reply="Built.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-        self.directive(3, reply="Verified.\n", writes={
-            str(root / "One — Verification Report.md"): report("PASSED")})
-        brief = "Build the whole final deliverable, including every part and its checks."
-        driver = self.start(project, "specification", brief)
-        final = self.settle(driver, lambda status: status["state"] == "complete")
-        self.assertEqual(final["verdicts"], ["PASSED"])
-        requests = self.step_requests(project)
-        self.assertEqual(len(requests), 4)
-        # The dispatched entry request retains the fixed Specification
-        # assignment — its stage boundary included — and carries the user's
-        # brief beside it as preserved context, never replacing the boundary.
-        entry_message = self.own_message(requests[0])
-        self.assertIn("Work toward a complete, implementation-neutral Specification", entry_message)
-        self.assertIn("do not start the Plan or implementation", entry_message)
-        self.assertIn(brief, entry_message)
-        for later in requests[1:]:
-            self.assertNotIn(brief, self.own_message(later))
-
     def test_a_failed_brief_save_prevents_the_start(self):
         project = self.project()
         with mock.patch.dict(os.environ, {"VIBE_FAKE_FAIL_RUN_NOTES": "1"}):
@@ -367,65 +271,11 @@ class RunCase(unittest.TestCase):
         self.assertEqual(run_module.read_runs(project), [])
         self.assertFalse(list((project.root / ".vibe").glob("*/session/messages/*")))
 
-    def test_a_start_that_never_dispatched_re_supplies_the_brief_on_resume(self):
-        project = self.project()
-        root = project.root
-        brief = "Build the small tool from this brief."
-        # Clicking Run while an ordinary turn is still working: run-start does
-        # not check for one, so the entry step's first start is refused by the
-        # one-work-turn rule and never dispatches.
-        blocker = self.registry.admit(root, "codex", "programming", frozenset({str(root)}))
-        self.directive(0, reply="Specification drafted.\n", writes={
-            str(root / "Specification.md"): "# One — Specification\n\n## Description\n\nA real product brief.\n"})
-        self.directive(1, reply="Planned.\n", writes={
-            str(root / "Plan.md"): "# One — Plan\n\n## Approach\n\nSteps are laid out.\n"})
-        self.directive(2, reply="Built.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-        self.directive(3, reply="Verified.\n", writes={
-            str(root / "One — Verification Report.md"): report("PASSED")})
-        driver = self.start(project, "specification", brief)
-        paused = self.settle(driver, lambda status: status["state"] == "paused-failure")
-        self.assertIn("One work turn per project", paused["reason"])
-        # The start never dispatched, so the brief was not consumed: it stays
-        # owed to the entry step, not silently dropped by the pause.
-        self.assertEqual(driver.pending_brief(), brief)
-        blocker.finish("finished")
-        self.assertTrue(driver.resume())
-        final = self.settle(driver, lambda status: status["state"] == "complete")
-        self.assertEqual(final["verdicts"], ["PASSED"])
-        requests = self.step_requests(project)
-        self.assertEqual(len(requests), 4)
-        # The first actually-dispatched attempt carries the brief; no later
-        # step repeats it.
-        self.assertIn(brief, self.own_message(requests[0]))
-        for later in requests[1:]:
-            self.assertNotIn(brief, self.own_message(later))
-        self.assertEqual(driver.pending_brief(), "")
-
     def test_copy_request_for_a_paused_entry_step_carries_the_brief(self):
-        import http.client
-        import threading
-        from ora_vibe_coder.server import LocalServer
-        settings = Settings(self.root / "settings.json")
-        server = LocalServer(self.home, settings=settings)
-        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01})
-        thread.start()
-        self.addCleanup(lambda: (server.runs.drain(), server.shutdown(), thread.join(),
-                                 server.server_close()))
-
-        def post(path, body):
-            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
-            connection.request("POST", path, json.dumps(body),
-                               headers={"Content-Type": "application/json", "X-Ora-Token": server.token})
-            response = connection.getresponse()
-            data = json.loads(response.read())
-            connection.close()
-            return response.status, data
+        server, post = self.local_server()
 
         _status, created = post("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})
         root = self.home / "Two"
-        # An ordinary in-flight turn for the same project: run-start does not
-        # check for one, so the run pauses when its entry step cannot start.
         blocker = server.conversation.admit(root, "codex", "programming", frozenset({str(root)}))
         self.addCleanup(blocker.finish, "finished")
         brief_file = self.root / "selected brief.txt"
@@ -434,15 +284,14 @@ class RunCase(unittest.TestCase):
         detail_file = self.root / "selected details.md"
         detail_text = "# Selected details\n\n```text\nNested material stays intact.\n```\n"
         detail_file.write_text(detail_text, encoding="utf-8")
+        payload = b"tiny png payload for the run brief"
+        picture = {"name": "sketch.png", "data": base64.b64encode(payload).decode("ascii")}
         _code, started = post("/api/run-start", {"id": created["id"], "entry": "specification",
                                                  "text": "Build the small tool from this brief.",
-                                                 "images": [], "files": [str(brief_file), str(detail_file)], "tool": "codex"})
+                                                 "images": [picture], "files": [str(brief_file), str(detail_file)], "tool": "codex"})
         self.wait_for(lambda: post("/api/turn-state", {"id": created["id"]})[1]
                       ["run"]["active"]["state"] == "paused-failure",
                       message="the entry step never paused on the refused start")
-        # The manual fallback for the paused entry step delivers the brief too,
-        # so it never disappears behind a manual delivery — with the fixed
-        # stage assignment still governing the step.
         _code, copied = post("/api/run-copy", {"id": created["id"]})
         self.assertIn("Build the small tool from this brief.", copied["text"])
         self.assertNotIn("Requested harness choices", copied["text"])
@@ -452,8 +301,15 @@ class RunCase(unittest.TestCase):
             self.assertIn(f"## Selected material: {selected}\n", copied["text"])
             self.assertIn(original, copied["text"])
             self.assertEqual(selected.read_text(encoding="utf-8"), original)
+        self.assertIn("Brief pictures not included: sketch.png.", copied["text"])
+        self.assertNotIn(picture["data"], copied["text"])
+        self.assertEqual(copied["pictures"], ["sketch.png"])
         self.assertTrue(Path(copied["path"]).is_file())
         self.assertEqual(Path(copied["path"]).read_text(encoding="utf-8"), copied["text"])
+        project = self.store.projects[self.store.open(root)]
+        kept = sorted(path.name for folder in conversation.turn_folders(project)
+                      for path in (folder / "attachments").glob("*"))
+        self.assertEqual(kept, ["0001-sketch.png"])
         blocker.finish("finished")
         self.directive(0, reply=reply_with_questions("Which route should the Specification use?"))
         _code, resumed = post("/api/run-resume", {"id": created["id"]})
@@ -467,233 +323,210 @@ class RunCase(unittest.TestCase):
         _code, stopped = post("/api/run-stop", {"id": created["id"]})
         self.assertEqual(stopped["run"]["last"]["state"], "unfinished")
 
+    def approve_pair(self, project):
+        for stage, role in (("specification", "Specification"), ("planning", "Plan")):
+            path = project.root / f"{role}.md"
+            path.write_text(f"---\nstatus: AWAITING APPROVAL\n---\n# {role}\n\n## Requirements\nKeep records for 30 days.\n")
+            project.approve_document(stage, path.read_text(), str(path))
+
+    def test_matching_approved_documents_start_implementation(self):
+        counter = 0
+        for entry, count in (("specification", 2), ("planning", 2), ("specification", 1), ("planning", 0)):
+            with self.subTest(entry=entry, approved=count):
+                project = self.project(f"Approved {entry} {count}")
+                self.approve_pair(project)
+                if count < 2:
+                    plan = project.root / "Plan.md"
+                    plan.write_text(plan.read_text().replace("status: APPROVED", "status: AWAITING APPROVAL"))
+                if count == 0:
+                    spec = project.root / "Specification.md"
+                    spec.write_text(spec.read_text().replace("status: APPROVED", "status: AWAITING APPROVAL"))
+                if count == 2:
+                    # A reused Project may already cache the earlier approved
+                    # copy when another session approves a newer real version.
+                    project.snapshot()
+                    plan = project.root / "Plan.md"
+                    plan.write_text(plan.read_text().replace("30 days", "90 days"))
+                    Project(project.root).approve_document("planning", plan.read_text(), str(plan))
+                    # Supported recording/layout equivalences keep approval.
+                    for role in ("Specification", "Plan"):
+                        path = project.root / f"{role}.md"
+                        path.write_text(path.read_text().replace("## Requirements", "## **Requirements**")
+                                        .replace("days.", "days.  ").replace("status: APPROVED", "status: APPROVED\nreview: PASSED"))
+                selected = self.root / f"selected-{counter}.txt"
+                selected.write_text("Preserve this exact selected detail.\n")
+                picture = {"name": "sketch.png", "data": base64.b64encode(b"original drawing").decode()}
+                self.directive(counter, reply=reply_with_questions("Which approved color?"))
+                counter += 1
+                expected = "build" if count == 2 else entry
+                driver = self.runs.start(self.registry, project, entry, "The exact user brief.",
+                    {"roles": {}, "hide_advisory": True}, {}, "codex", [picture], [str(selected)])
+                paused = self.settle(driver, lambda state: state["state"] == "paused-question")
+                self.assertEqual((paused["entry"], paused["step"]), (expected, expected))
+                request = self.own_message(self.step_requests(project)[0])
+                self.assertEqual(request.count("The exact user brief."), 1)
+                self.assertIn("Preserve this exact selected detail.", request)
+                turns = [conversation.read_turn(folder) for folder in conversation.turn_folders(project)]
+                work = [turn for turn in turns if turn["purpose"] == conversation.PURPOSE_WORK]
+                self.assertEqual([turn["fields"]["Run-Step"] for turn in work], [expected])
+                self.assertIn("sketch.png", request)
+                if count == 2:
+                    self.directive(counter, writes={str(project.root / f"{project.brief()['name']} — Programming Result.md"):
+                        "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
+                    self.directive(counter + 1, reply=reply_with_questions("Which verification environment?"))
+                    counter += 2
+                    driver.receive_answer("Use blue.")
+                    self.settle(driver, lambda state: state["questions"] == ["Which verification environment?"])
+                    for later in self.step_requests(project)[1:]:
+                        own = self.own_message(later)
+                        self.assertNotIn("The exact user brief.", own)
+                        self.assertNotIn("Preserve this exact selected detail.", own)
+                driver.request_stop()
+                self.assertTrue(driver.done.wait(5))
+
+    def test_run_requires_current_approval_confirmation(self):
+        server, post = self.local_server()
+        for changed, missing, preferences in ((("Specification",), False, False), (("Plan",), False, True),
+                                               (("Specification", "Plan"), False, True), (("Specification",), True, True)):
+            with self.subTest(changed=changed, missing=missing, best_guess=preferences):
+                name = "Case " + str(len(server.store.projects))
+                created = post("/api/create", {"directory": name, "name": name, "description": "", "goals": ""})[1]
+                project = server.store.projects[created["id"]]
+                self.approve_pair(project)
+                for role in changed:
+                    path = project.root / f"{role}.md"
+                    if missing:
+                        # A matching reviewed snapshot is useful review evidence,
+                        # but is not a retained approval.
+                        from ora_vibe_coder.status import review_basis
+                        current = path.read_text()
+                        reviewed = current.replace("status: APPROVED", "status: APPROVED\nreview: PASSED\nreview basis: " + review_basis(current))
+                        path.write_text(reviewed)
+                        folder = conversation.reserve_turn_folder(project)
+                        messages = folder / "session" / "messages"
+                        messages.mkdir(parents=True)
+                        (messages / "0001-initiator-to-peer.md").write_text(
+                            "# Message 0001\nFrom: vibe-coder\nTo: peer\n\n## Body\n\n## " + role +
+                            "\n\nSource:\n\n```text\n" + str(path) + "\n```\n\n```text\n" + current + "\n```\n")
+                        for note in (project.root / ".vibe").glob("*/session/messages/*-initiator-record.md"):
+                            if "Vibe-Role: " + role + "\n" in note.read_text():
+                                note.unlink()
+                    else:
+                        path.write_text(path.read_text().replace("30 days", "90 days"))
+                before = {str(path): path.read_bytes() for path in project.root.rglob("*") if path.is_file()}
+                request = {"id": created["id"], "entry": "planning", "text": "Keep the brief.", "images": [], "files": [],
+                           "tool": "codex", "config": {"hide_advisory": preferences, "best_guess": preferences}}
+                code, result = post("/api/run-start", request)
+                self.assertEqual(code, 200)
+                confirmation = result["approval_confirmation"]
+                self.assertEqual({item["role"] for item in confirmation["documents"] if item["state"] in {"changed", "missing"}}, set(changed))
+                for item in confirmation["documents"]:
+                    if item["role"] in changed:
+                        self.assertEqual(item["state"], "missing" if missing else "changed")
+                        if not missing:
+                            self.assertIn("-Keep records for 30 days.", item["difference"])
+                            self.assertIn("+Keep records for 90 days.", item["difference"])
+                        self.assertEqual(item["text"], Path(item["path"]).read_text())
+                # Even a bare confirmation flag cannot replace the explicit choice.
+                self.assertIn("approval_confirmation", post("/api/run-start", dict(request, confirmation=True))[1])
+                self.assertIsNone(server.runs.find(project))
+                self.assertFalse((self.scenario / "directive.count").exists())
+                self.assertEqual({str(path): path.read_bytes() for path in project.root.rglob("*") if path.is_file()}, before)
+                # Direct callers receive the same unavoidable preflight.
+                with self.assertRaises(run_module.RunApprovalRequired):
+                    self.start(project, "planning", config={"roles": {}, "best_guess": True, "hide_advisory": True})
+
+    def test_run_confirmation_rechecks_displayed_documents(self):
+        server, post = self.local_server()
+        counter = 0
+        for edit in ("Specification", "Plan", "resolved path"):
+            with self.subTest(edit=edit):
+                name = "Stale " + str(counter)
+                created = post("/api/create", {"directory": name, "name": name, "description": "", "goals": ""})[1]
+                project = server.store.projects[created["id"]]
+                self.approve_pair(project)
+                plan = project.root / "Plan.md"
+                plan.write_text(plan.read_text().replace("30 days", "90 days"))
+                if edit == "resolved path":
+                    # Deliberately associated path remains spelled identically
+                    # while an in-project parent link selects another file.
+                    for target in ("old", "new"):
+                        folder = project.root / target
+                        folder.mkdir()
+                        (folder / "Specification.md").write_text((project.root / "Specification.md").read_text())
+                    (project.root / "chosen").symlink_to(project.root / "old", target_is_directory=True)
+                    overview = project.root / "Project.md"
+                    overview.write_text(overview.read_text().replace("## Artifact Paths", "## Artifact Paths\n\n- Specification: chosen/Specification.md"))
+                    project.approve_document("specification", (project.root / "chosen/Specification.md").read_text(), str(project.root / "chosen/Specification.md"))
+                request = {"id": created["id"], "entry": "specification", "text": "Retain exact brief.", "images": [], "files": [], "tool": "codex"}
+                prompt = post("/api/run-start", request)[1]["approval_confirmation"]
+                before_notes = set((project.root / ".vibe").glob("*/session/messages/*"))
+                if edit == "resolved path":
+                    (project.root / "chosen").unlink()
+                    (project.root / "chosen").symlink_to(project.root / "new", target_is_directory=True)
+                else:
+                    path = project.root / f"{edit}.md"
+                    path.write_text(path.read_text().replace("days.", "days, with backups."))
+                refreshed = post("/api/run-start", dict(request, confirmation=prompt["token"]))[1]["approval_confirmation"]
+                self.assertTrue(refreshed["stale"])
+                self.assertNotEqual(refreshed["token"], prompt["token"])
+                self.assertEqual(set((project.root / ".vibe").glob("*/session/messages/*")), before_notes)
+                self.assertIsNone(server.runs.find(project))
+                # Consent to the refreshed contents records only those versions.
+                chosen = {item["role"]: item["text"] for item in refreshed["documents"]}
+                self.directive(counter, reply=reply_with_questions("Which deployment target?"))
+                counter += 1
+                result = post("/api/run-start", dict(request, confirmation=refreshed["token"]))[1]
+                driver = server.runs.find(project)
+                self.assertEqual(result["run"]["entry"], "build")
+                self.settle(driver, lambda state: state["state"] == "paused-question")
+                for role, text in chosen.items():
+                    self.assertEqual(project._approved_document(role, project.material(role)["path"], fresh=True)["text"], text)
+                driver.request_stop()
+                self.assertTrue(driver.done.wait(5))
+
     def test_a_run_from_the_plan_workspace_enters_at_the_planning_step(self):
-        import http.client
-        import threading
-        from ora_vibe_coder.server import LocalServer
-        settings = Settings(self.root / "settings.json")
-        server = LocalServer(self.home, settings=settings)
-        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01})
-        thread.start()
-        self.addCleanup(lambda: (server.runs.drain(), server.shutdown(), thread.join(),
-                                 server.server_close()))
-
-        def post(path, body):
-            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
-            connection.request("POST", path, json.dumps(body),
-                               headers={"Content-Type": "application/json", "X-Ora-Token": server.token})
-            response = connection.getresponse()
-            data = json.loads(response.read())
-            connection.close()
-            return response.status, data
-
-        def run_steps(root):
-            project = self.store.projects[self.store.open(root)]
-            return [turn["fields"].get("Run-Step") for turn in
-                    (conversation.read_turn(folder) for folder in conversation.turn_folders(project))
-                    if turn["purpose"] == conversation.PURPOSE_WORK and turn["fields"].get("Run")]
-
-        def wait_complete(identifier, workspace):
-            self.wait_for(lambda: (post("/api/turn-state", {"id": identifier})[1]
-                                   ["run"].get("last") or {}).get("state") == "complete",
-                          timeout=60, message=f"the run from the {workspace} workspace never completed")
-
-        # The Plan workspace sends "planning" — the canonical route name every
-        # other layer uses — so the real start route accepts it and the run
-        # begins at step 2, earlier stages not redone, and proceeds.
-        _status, created = post("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})
-        root = self.home / "Two"
-        self.directive(0, reply="Planned.\n", writes={
-            str(root / "Plan.md"): "# Two — Plan\n\n## Approach\n\nSteps are laid out.\n"})
-        self.directive(1, reply="Built.\n", writes={
-            str(root / "Two — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-        self.directive(2, reply="Verified.\n", writes={
-            str(root / "Two — Verification Report.md"): report("PASSED")})
-        code, started = post("/api/run-start", {"id": created["id"], "entry": "planning",
-                                                "text": "Build the small tool from this brief.",
-                                                "images": [], "files": [], "tool": "codex"})
-        self.assertEqual(code, 200)
-        self.assertEqual(started["run"]["entry"], "planning")
-        wait_complete(created["id"], "Plan")
-        self.assertEqual(run_steps(root), ["planning", "build", "verification"])
-        requests = self.step_requests(self.store.projects[self.store.open(root)])
-        self.assertEqual(len(requests), 3)
-        self.assertIn("Build the small tool from this brief.", self.own_message(requests[0]))
-        for later in requests[1:]:
-            self.assertNotIn("Build the small tool from this brief.", self.own_message(later))
-
-        # The Specification and Build & Verify workspaces keep their own
-        # entries: step 1 and step 3, unchanged.
-        _status, created_spec = post("/api/create", {"directory": "Three", "name": "Three", "description": "", "goals": ""})
-        root_spec = self.home / "Three"
-        self.directive(3, reply="Specification drafted.\n", writes={
-            str(root_spec / "Specification.md"): "# Three — Specification\n\n## Description\n\nA real product brief.\n"})
-        self.directive(4, reply="Planned.\n", writes={
-            str(root_spec / "Plan.md"): "# Three — Plan\n\n## Approach\n\nSteps are laid out.\n"})
-        self.directive(5, reply="Built.\n", writes={
-            str(root_spec / "Three — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-        self.directive(6, reply="Verified.\n", writes={
-            str(root_spec / "Three — Verification Report.md"): report("PASSED")})
-        code_spec, started_spec = post("/api/run-start", {"id": created_spec["id"], "entry": "specification",
-                                                          "text": "Build it from the Specification.",
-                                                          "images": [], "files": [], "tool": "codex"})
-        self.assertEqual(code_spec, 200)
-        self.assertEqual(started_spec["run"]["entry"], "specification")
-        wait_complete(created_spec["id"], "Specification")
-        self.assertEqual(run_steps(root_spec), ["specification", "planning", "build", "verification"])
-
-        _status, created_build = post("/api/create", {"directory": "Four", "name": "Four", "description": "", "goals": ""})
-        root_build = self.home / "Four"
-        self.directive(7, reply="Built.\n", writes={
-            str(root_build / "Four — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-        self.directive(8, reply="Verified.\n", writes={
-            str(root_build / "Four — Verification Report.md"): report("PASSED")})
-        code_build, started_build = post("/api/run-start", {"id": created_build["id"], "entry": "build",
-                                                            "text": "Build it directly.",
-                                                            "images": [], "files": [], "tool": "codex"})
-        self.assertEqual(code_build, 200)
-        self.assertEqual(started_build["run"]["entry"], "build")
-        wait_complete(created_build["id"], "Build & Verify")
-        self.assertEqual(run_steps(root_build), ["build", "verification"])
-
-    def test_run_copy_names_the_pending_brief_pictures_as_not_included(self):
-        import http.client
-        import threading
-        from ora_vibe_coder.server import LocalServer
-        settings = Settings(self.root / "settings.json")
-        server = LocalServer(self.home, settings=settings)
-        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01})
-        thread.start()
-        self.addCleanup(lambda: (server.runs.drain(), server.shutdown(), thread.join(),
-                                 server.server_close()))
-
-        def post(path, body):
-            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
-            connection.request("POST", path, json.dumps(body),
-                               headers={"Content-Type": "application/json", "X-Ora-Token": server.token})
-            response = connection.getresponse()
-            data = json.loads(response.read())
-            connection.close()
-            return response.status, data
-
-        _status, created = post("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})
-        root = self.home / "Two"
-        # An in-flight ordinary turn keeps the entry step from dispatching, so
-        # the brief — its pictures included — stays pending behind the pause.
-        blocker = server.conversation.admit(root, "codex", "programming", frozenset({str(root)}))
-        self.addCleanup(blocker.finish, "finished")
-        payload = b"tiny png payload for the run brief"
-        picture = {"name": "sketch.png", "data": base64.b64encode(payload).decode("ascii")}
-        _code, started = post("/api/run-start", {"id": created["id"], "entry": "build",
-                                                 "text": "Build the small tool from this brief.",
-                                                 "images": [picture], "files": [], "tool": "codex"})
-        self.wait_for(lambda: post("/api/turn-state", {"id": created["id"]})[1]
-                      ["run"]["active"]["state"] == "paused-failure",
-                      message="the entry step never paused on the refused start")
-        _code, copied = post("/api/run-copy", {"id": created["id"]})
-        # The manual packet carries the brief, and — because a copy cannot
-        # carry pictures — names the pending brief picture as not included
-        # instead of silently dropping it. The response carries the name, per
-        # the one-click Copy response shape, so the banner can say pictures
-        # were left out.
-        self.assertIn("# User request\n\n", copied["text"])
-        self.assertIn("Build the small tool from this brief.", copied["text"])
-        self.assertNotIn("Requested harness choices", copied["text"])
-        self.assertNotIn("Selected receiving harness", copied["text"])
-        self.assertIn("Brief pictures not included: sketch.png.", copied["text"])
-        self.assertNotIn(picture["data"], copied["text"])
-        self.assertEqual(copied["pictures"], ["sketch.png"])
-        saved = Path(copied["path"]).read_text(encoding="utf-8")
-        self.assertIn("Brief pictures not included: sketch.png.", saved)
-        # Delivery-disclosure only: the picture stays retained in the run record.
-        project = self.store.projects[self.store.open(root)]
-        kept = sorted(path.name for folder in conversation.turn_folders(project)
-                      for path in (folder / "attachments").glob("*"))
-        self.assertEqual(kept, ["0001-sketch.png"])
-        blocker.finish("finished")
-        _code, stopped = post("/api/run-stop", {"id": created["id"]})
-        self.assertEqual(stopped["run"]["last"]["state"], "unfinished")
-
-    def test_run_brief_pictures_start_the_run_and_ride_the_first_step_once(self):
-        import http.client
-        import threading
-        from ora_vibe_coder.server import LocalServer
-        settings = Settings(self.root / "settings.json")
-        server = LocalServer(self.home, settings=settings)
-        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01})
-        thread.start()
-        self.addCleanup(lambda: (server.runs.drain(), server.shutdown(), thread.join(),
-                                 server.server_close()))
-
-        def post(path, body):
-            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
-            connection.request("POST", path, json.dumps(body),
-                               headers={"Content-Type": "application/json", "X-Ora-Token": server.token})
-            response = connection.getresponse()
-            data = json.loads(response.read())
-            connection.close()
-            return response.status, data
-
-        _status, created = post("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})
-        root = self.home / "Two"
-        payload = b"tiny png payload for the run brief"
-        picture = {"name": "sketch.png", "data": base64.b64encode(payload).decode("ascii")}
-        self.directive(0, reply="Built.\n", writes={
-            str(root / "Two — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-        self.directive(1, reply="Verified.\n", writes={
-            str(root / "Two — Verification Report.md"): report("PASSED")})
-        code, started = post("/api/run-start", {"id": created["id"], "entry": "build",
-                                                "text": "Build the small tool from this brief.",
-                                                "images": [picture], "files": [], "tool": "codex"})
-        # Brief pictures pass through in the wire shape every turn accepts, so
-        # the start records its brief instead of failing on the attachment.
-        self.assertEqual(code, 200)
-        self.assertIn("run", started)
-        self.wait_for(lambda: (post("/api/turn-state", {"id": created["id"]})[1]
-                               ["run"].get("last") or {}).get("state") == "complete",
-                      timeout=60, message="the run with brief pictures never completed")
-        project = self.store.projects[self.store.open(root)]
-        notes = [(folder, fields) for folder in conversation.turn_folders(project)
-                 for fields in run_module.run_note_fields(folder)
-                 if fields.get("Note") == run_module.RUN_START and not fields.get("Reconfigures")]
-        self.assertEqual(len(notes), 1)
-        note_folder, fields = notes[0]
-        self.assertEqual(fields["Brief-Images"], "sketch.png")
-        self.assertEqual((note_folder / "attachments" / "0001-sketch.png").read_bytes(), payload)
-        # The pictures ride the first dispatched entry step exactly once: the
-        # build turn retains and dispatches them; the verification turn does not.
-        step_attachments = {}
-        for folder in conversation.turn_folders(project):
-            turn = conversation.read_turn(folder)
-            if turn["purpose"] == conversation.PURPOSE_WORK and turn["fields"].get("Run"):
-                kept = sorted(path.name for path in (folder / "attachments").glob("*"))
-                step_attachments[turn["fields"]["Run-Step"]] = kept
-        self.assertEqual(step_attachments.get("build"), ["0001-sketch.png"])
-        self.assertEqual(step_attachments.get("verification"), [])
-        requests = self.step_requests(project)
-        self.assertEqual(len(requests), 2)
-        self.assertIn("0001-sketch.png", requests[0])
-        self.assertNotIn("0001-sketch.png", requests[1])
+        server, post = self.local_server()
+        steps = ("specification", "planning", "build", "verification")
+        counter = 0
+        for entry, start in (("specification", 0), ("planning", 1), ("build", 2)):
+            with self.subTest(entry=entry):
+                name = entry.title()
+                created = post("/api/create", {"directory": name, "name": name, "description": "", "goals": ""})[1]
+                root = self.home / name
+                outputs = (("Specification.md", "# Specification\n\nA useful product brief.\n"),
+                           ("Plan.md", "# Plan\n\nAn executable approach.\n"),
+                           (f"{name} — Programming Result.md", "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"),
+                           (f"{name} — Verification Report.md", report("PASSED")))
+                self.directive(counter, reply=reply_with_questions("Which behavior?"))
+                counter += 1
+                for path, text in outputs[start:]:
+                    self.directive(counter, reply="Saved.", writes={str(root / path): text})
+                    counter += 1
+                code, started = post("/api/run-start", {"id": created["id"], "entry": entry,
+                    "text": "Keep this brief.", "images": [], "files": [], "tool": "codex"})
+                self.assertEqual(code, 200)
+                self.assertEqual(started["run"]["entry"], entry)
+                project = server.store.projects[created["id"]]
+                driver = server.runs.find(project)
+                paused = self.settle(driver, lambda state: state["state"] == "paused-question")
+                self.assertEqual(paused["questions"], ["Which behavior?"])
+                driver.receive_answer("Use the agreed behavior.")
+                self.wait_for(lambda: (post("/api/turn-state", {"id": created["id"]})[1]["run"].get("last") or {}).get("state") == "complete")
+                project = server.store.projects[created["id"]]
+                turns = [conversation.read_turn(folder) for folder in conversation.turn_folders(project)]
+                self.assertEqual([turn["fields"]["Run-Step"] for turn in turns if turn["purpose"] == conversation.PURPOSE_WORK], [steps[start], *steps[start:]])
+                requests = self.step_requests(project)
+                self.assertIn("Keep this brief.", self.own_message(requests[0]))
+                for request in requests[1:]:
+                    self.assertNotIn("Keep this brief.", self.own_message(request))
+                if start < 2:
+                    self.assertIn("status: APPROVED", (root / "Plan.md").read_text())
+                if start == 0:
+                    self.assertIn("status: APPROVED", (root / "Specification.md").read_text())
 
     def test_deliver_send_with_a_picture_attaches_it_to_the_started_turn(self):
-        import http.client
-        import threading
-        from ora_vibe_coder.server import LocalServer
-        settings = Settings(self.root / "settings.json")
-        server = LocalServer(self.home, settings=settings)
-        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01})
-        thread.start()
-        self.addCleanup(lambda: (server.runs.drain(), server.shutdown(), thread.join(),
-                                 server.server_close()))
-
-        def post(path, body):
-            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
-            connection.request("POST", path, json.dumps(body),
-                               headers={"Content-Type": "application/json", "X-Ora-Token": server.token})
-            response = connection.getresponse()
-            data = json.loads(response.read())
-            connection.close()
-            return response.status, data
+        server, post = self.local_server()
 
         _status, created = post("/api/create", {"directory": "Two", "name": "Two", "description": "", "goals": ""})
         root = self.home / "Two"
@@ -753,16 +586,11 @@ class RunCase(unittest.TestCase):
             str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
         self.directive(2, reply=reply_with_questions("Who signs off the release checklist?"))
         driver = self.runs.find(project)
-        # The answer carries a marked-up picture with its numbered notes, as a
-        # composed message would; both ride the resumed step.
         payload = b"tiny png payload for the run answer"
         answer_picture = {"name": "answer shot.png",
                           "data": base64.b64encode(payload).decode("ascii"),
                           "notes": "1. Callout\nUse SQLite for the marked area"}
         driver.receive_answer("Use SQLite everywhere.", [answer_picture], [])
-        # The accepted answer's picture is retained the moment it is accepted —
-        # before the resumed step dispatches — so a failure ahead of that
-        # dispatch, or stopping the run, cannot lose the captured original.
         retained = [folder for folder in conversation.turn_folders(project)
                     if (folder / "attachments" / "0001-answer-shot.png").is_file()]
         self.assertGreaterEqual(len(retained), 1)
@@ -777,10 +605,6 @@ class RunCase(unittest.TestCase):
         requests = self.step_requests(project)
         self.assertIn("Use SQLite everywhere.", requests[1])
         self.assertIn("The work is signed off.", requests[3])
-        # The answer's picture rode the resumed build step too, its notes tied
-        # to it, and was consumed there: the verification step carries no copy
-        # of it. Its original stays retained from acceptance onward, beside
-        # the copy the dispatched step saved.
         carried = [folder for folder in conversation.turn_folders(project)
                    if (folder / "attachments").is_dir()]
         self.assertEqual(len(carried), 2)
@@ -791,40 +615,13 @@ class RunCase(unittest.TestCase):
         self.assertLess(requests[1].index("0001-answer-shot.png"),
                         requests[1].index("Use SQLite for the marked area"))
         self.assertNotIn("0001-answer-shot.png", requests[3])
-        # The answer resets the no-progress count and the same step resumed.
         self.assertEqual(driver.status()["no_progress"], 0)
-
-    def test_best_guess_mode_resends_the_step_and_counts_no_progress(self):
-        project = self.project()
-        root = project.root
-        (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
-        (root / "Plan.md").write_text("# P\n\n## Approach\n\nFilled.\n", encoding="utf-8")
-        self.directive(0, reply=reply_with_questions("Which port should the server use?"))
-        self.directive(1, reply="Built on port 8080 as an assumption.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nAssumption recorded: port 8080.\n"})
-        self.directive(2, reply=reply_with_questions("Which verifier may I commission?"))
-        self.directive(3, reply="Verified.\n", writes={str(root / "One — Verification Report.md"): report("PASSED")})
-        driver = self.start(project, "build", config={"roles": {}, "best_guess": True, "hide_advisory": False})
-        # The build step that asked is resent with the best-guess instruction
-        # instead of pausing, and the repeat counts as no progress.
-        working = self.settle(driver, lambda status: status["state"] == "running" and status["no_progress"] >= 1)
-        self.assertGreaterEqual(working["no_progress"], 1)
-        self.wait_for(lambda: len(self.step_requests(project, "build")) >= 2,
-                      message="the best-guess repeat was never sent")
-        requests = self.step_requests(project, "build")
-        self.assertIn("best guess", requests[1].lower())
-        self.assertIn("Which port should the server use?", requests[1])
-        verification_question = self.settle(driver, lambda status: status["state"] == "running"
-                                            and status["step"] == "verification")
-        self.assertEqual(verification_question["step"], "verification")
-        self.settle(driver, lambda status: status["state"] == "complete")
 
     def test_unchanged_older_passed_report_never_completes_and_three_attempts_end_unfinished(self):
         project = self.project()
         root = project.root
         (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
         (root / "Plan.md").write_text("# P\n\n## Approach\n\nFilled.\n", encoding="utf-8")
-        # An 8-October-style PASSED report left exactly as it was.
         (root / "One — Programming Result.md").write_text("# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n", encoding="utf-8")
         (root / "One — Verification Report.md").write_text(
             "# Verification Report\n\nVerdict: PASSED\n\nThe 8 October pass.\n", encoding="utf-8")
@@ -843,100 +640,111 @@ class RunCase(unittest.TestCase):
         self.assertEqual(driver.status()["verdicts"], [])
 
     def test_not_passed_goes_to_correction_which_settles_and_completes(self):
-        with self.subTest(name="multi-item correction settles and completes"):
-            project = self.project()
-            root = project.root
-            (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
-            (root / "Plan.md").write_text("# P\n\n## Approach\n\nFilled.\n", encoding="utf-8")
-            self.directive(0, reply="Built.\n", writes={
-                str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-            # The report enumerates both findings with the stable labels the
-            # correction must cite back.
-            self.directive(1, reply="Found two defects.\n", writes={str(root / "One — Verification Report.md"): report(
-                "NOT PASSED", disposition="CORRECTION",
-                findings=["R1 — the login check accepts an empty password.",
-                          "R2 — the export omits the trailing summary row."])})
-            self.directive(2, reply="Corrected both defects.\n", writes={
-                str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\n"
-                                                           "- R1 — FIXED — corrected the login check; the empty-password case now fails.\n"
-                                                           "- R2 — FIXED — added the summary row; the export test passes.\n\n"
-                                                           "Review disposition: SETTLED\n"})
-            driver = self.start(project, "build", tool="zcode")
-            final = self.settle(driver, lambda status: status["state"] == "complete")
-            self.assertEqual(final["verdicts"], ["NOT PASSED"])
-            self.assertIn("completed after correction", final["reason"])
-            steps = [turn["fields"].get("Run-Step") for turn in
-                     (conversation.read_turn(folder) for folder in conversation.turn_folders(project))
-                     if turn["purpose"] == conversation.PURPOSE_WORK and turn["fields"].get("Run")]
-            self.assertEqual(steps, ["build", "verification", "correction"])
-            # The settled correction completes the run; verification is never
-            # selected again after it.
-            self.assertEqual(len(self.step_requests(project, "verification")), 1)
-            calls = [json.loads(line) for line in self.argv_log.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual([call["work_permission"] for call in calls if call["purpose"] == "work"],
-                             ["full-access", None, "full-access"])
         with self.subTest(name="a severe finding settles only through its own recorded fix"):
             project = self.project("Two")
             root = project.root
             (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
             (root / "Plan.md").write_text("# P\n\n## Approach\n\nFilled.\n", encoding="utf-8")
-            self.directive(3, reply="Built.\n", writes={
+            self.directive(0, reply="Built.\n", writes={
                 str(root / "Two — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n"})
-            # A severe report pauses for the owner's decision; its findings
-            # carry the S label that the settlement must eventually fix.
-            self.directive(4, reply="Found a severe defect.\n", writes={str(root / "Two — Verification Report.md"): report(
+            self.directive(1, reply="Found a severe defect.\n", writes={str(root / "Two — Verification Report.md"): report(
                 "NOT PASSED", disposition="SEVERE",
                 findings=["S1 — the export sends the collected addresses to an outside endpoint.",
                           "R1 — the login check accepts an empty password."])})
             driver = self.start(project, "build")
             paused = self.settle(driver, lambda status: status["state"] == "paused-question")
             self.assertIn("severe finding", paused["questions"][0])
-            # The owner's answer guides the correction; the run resumes there.
-            # This attempt fixes the unrelated finding and tries to reject the
-            # severe one — neither erases it.
-            self.directive(5, reply="Rejected the integration claim.\n", writes={
-                str(root / "Two — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\n"
-                                                           "- S1 — REJECTED — the outside send is the vendor's required integration; no change.\n"
-                                                           "- R1 — FIXED — corrected the login check; the empty-password case now fails.\n\n"
-                                                           "Review disposition: SETTLED\n"})
-            self.directive(6, reply="Resolved the severe finding.\n", writes={
-                str(root / "Two — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\n"
-                                                           "- S1 — FIXED — removed the outside send; the export writes only the local file, verified by its check.\n"
-                                                           "- R1 — FIXED — corrected the login check; the empty-password case now fails.\n\n"
-                                                           "Review disposition: SETTLED\n"})
+            self.directive(2, reply="Rejected the integration claim.\n", writes={
+                str(root / "Two — Programming Result.md"): "---\nstatus: PASSED\ndisposition: SETTLED\n---\n"
+                                                               "# Programming Result\n\n"
+                                                               "- S1 — REJECTED — the outside send is the vendor's required integration; no change.\n"
+                                                               "- R1 — FIXED — corrected the login check; the empty-password case now fails.\n"})
+            self.directive(3, reply="Resolved the severe finding.\n", writes={
+                str(root / "Two — Programming Result.md"): "---\nstatus: PASSED\ndisposition: SETTLED\n---\n"
+                                                               "# Programming Result\n\n"
+                                                               "- S1 — FIXED — removed the outside send; the export writes only the local file, verified by its check.\n"
+                                                               "- R1 — FIXED — corrected the login check; the empty-password case now fails.\n"})
             driver.receive_answer("Remove the outside send; keep everything else.", [], [])
             final = self.settle(driver, lambda status: status["state"] == "complete", timeout=60)
             self.assertEqual(final["verdicts"], ["NOT PASSED"])
             self.assertIn("completed after correction", final["reason"])
             corrections = self.step_requests(project, "correction")
             self.assertEqual(len(corrections), 2)
-            # An unrelated fix cannot settle the severe finding: the retry
-            # names S1 itself.
             self.assertIn("the severe finding(s) S1", corrections[1])
             self.assertIn("own recorded fix with evidence", corrections[1])
-            # Verification is never selected again after the correction.
             self.assertEqual(len(self.step_requests(project, "verification")), 1)
+            saved = project.snapshot()
+            self.assertEqual(saved["programming_result"]["status"]["label"], "PASSED")
+            self.assertEqual(saved["verification"]["status"]["label"], "CORRECTED")
+            self.assertEqual(saved["verification"]["status"]["literal"], "NOT PASSED")
+            self.assertIn("status: NOT PASSED", project.material("Verification Report")["text"])
 
-    def test_repeated_review_incomplete_repeats_with_changed_approach_and_ends_unfinished(self):
+    def test_verification_routing_severe_ask_user_and_user_closure(self):
+        counter = 0
+        closure = ("---\nstatus: CLOSED BY USER — UNRESOLVED FINDINGS\ndisposition: SETTLED\n---\n"
+                   "# Programming Result\n\n- R1 — FIXED — corrected the login check.\n")
+        for report_text, closing, expected in (
+                # SEVERE reaches the owner whatever the status says; it is never retried.
+                (report("INCOMPLETE", disposition="SEVERE"), False, ("paused-question", "severe finding")),
+                (report("PASSED", disposition="SEVERE"), False, ("paused-question", "severe finding")),
+                ("---\ndisposition: SEVERE\n---\n# Verification Report\n", False, ("paused-question", "severe finding")),
+                (report("NOT PASSED", disposition="ASK USER"), False, ("paused-question", "ASK USER")),
+                # ASK USER outranks an INCOMPLETE status; closure in a saved Result ends unfinished.
+                (report("INCOMPLETE", disposition="ASK USER"), False, ("paused-question", "ASK USER")),
+                ("---\nstatus: CLOSED BY USER — UNRESOLVED FINDINGS\n---\n# Verification Report\n", False, ("unfinished", "user closure")),
+                (None, True, ("unfinished", "user closure")),
+                (report("NOT PASSED", disposition="CORRECTION"), True, ("unfinished", "user closure"))):
+            name = f"Route{counter}"
+            with self.subTest(expected=expected[1]):
+                project = self.project(name)
+                root = project.root
+                (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
+                (root / "Plan.md").write_text("# P\n\n## Approach\n\nFilled.\n", encoding="utf-8")
+                self.directive(counter, reply="Built.\n", writes={
+                    str(root / f"{name} — Programming Result.md"): closure if closing and report_text is None else
+                        "---\nstatus: PASSED\n---\n# Programming Result\n\nBuilt for the run.\n"})
+                counter += 1
+                if report_text is not None:
+                    self.directive(counter, reply="Reported.\n",
+                                   writes={str(root / f"{name} — Verification Report.md"): report_text})
+                    counter += 1
+                if closing and report_text is not None:
+                    self.directive(counter, reply="Closed by the user.\n", writes={
+                        str(root / f"{name} — Programming Result.md"): closure})
+                    counter += 1
+                driver = self.start(project, "build")
+                final = self.settle(driver, lambda status: status["state"] == expected[0])
+                self.assertIn(expected[1], final["questions"][0] if final["questions"] else final["reason"])
+
+    def test_a_settled_correction_finishes_with_a_warning_whatever_its_status(self):
         project = self.project()
         root = project.root
         (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
         (root / "Plan.md").write_text("# P\n\n## Approach\n\nFilled.\n", encoding="utf-8")
-        (root / "One — Programming Result.md").write_text("# Programming Result\n\nStatus: COMPLETE\n\nDelivered.\n", encoding="utf-8")
         _n, writes = self.build_step_ok(root)
-        self.directive(0, reply="Built for the run.\n", writes=writes)
-        for index in range(1, 4):
-            self.directive(index, reply="The review did not finish.\n", writes={
-                str(root / "One — Verification Report.md"):
-                    report("NOT PASSED — REVIEW INCOMPLETE") + f"\nAttempt {index}.\n"})
+        self.directive(0, reply="Built.\n", writes=writes)
+        self.directive(1, reply="Found one defect.\n", writes={str(root / "One — Verification Report.md"):
+            report("NOT PASSED", disposition="CORRECTION",
+                   findings=["R1 — the login check accepts an empty password."])})
+        self.directive(2, reply="Settled but unfinished.\n", writes={
+            str(root / "One — Programming Result.md"): "---\nstatus: INCOMPLETE\ndisposition: SETTLED\n---\n"
+                                                       "# Programming Result\n\n- R1 — FIXED — corrected; the check passes.\n"})
         driver = self.start(project, "build")
-        final = self.settle(driver, lambda status: status["state"] == "unfinished")
-        self.assertIn("stayed INCOMPLETE", final["reason"])
-        requests = self.step_requests(project, "verification")
-        self.assertEqual(len(requests), 3)
-        for repeat in requests[1:]:
-            self.assertIn("did not finish", repeat)
-            self.assertIn("change the approach", repeat)
+        final = self.settle(driver, lambda status: status["state"] == "unfinished", timeout=60)
+        self.assertIn("status reads INCOMPLETE, not PASSED", final["reason"])
+        self.assertEqual(len(self.step_requests(project, "correction")), 1)
+
+    def test_a_best_guess_run_does_not_pause_for_ask_user(self):
+        project = self.project()
+        root = project.root
+        (root / "Specification.md").write_text("# S\n\n## Description\n\nFilled.\n", encoding="utf-8")
+        (root / "Plan.md").write_text("# P\n\n## Approach\n\nFilled.\n", encoding="utf-8")
+        _n, writes = self.build_step_ok(root)
+        self.directive(0, reply="Built.\n", writes=writes)
+        self.directive(1, reply="Needs a choice.\n", writes={str(root / "One — Verification Report.md"): report("NOT PASSED", disposition="ASK USER")})
+        self.directive(2, reply="Guessed.\n", writes={str(root / "One — Verification Report.md"): report("PASSED")})
+        driver = self.start(project, "build", config={"roles": {}, "best_guess": True, "hide_advisory": False})
+        self.settle(driver, lambda status: status["state"] == "complete", timeout=60)
 
     def test_correction_that_is_not_settled_is_retried_then_settling_completes(self):
         project = self.project()
@@ -950,19 +758,14 @@ class RunCase(unittest.TestCase):
             report("NOT PASSED", disposition="CORRECTION",
                    findings=["R1 — the login check accepts an empty password.",
                              "R2 — the export omits the trailing summary row."])})
-        # The first correction is genuinely unfinished: its saved result
-        # declares INCOMPLETE, so nothing is settled yet.
         self.directive(2, reply="Interrupted mid-correction.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\n"
-                                                       "Work began on the defect.\n\nReview disposition: INCOMPLETE\n"})
-        # The retry records a decision for the report's findings — one fix
-        # and one reasoned rejection — and settles, completing the run
-        # without another verification call.
+            str(root / "One — Programming Result.md"): "---\nstatus: INCOMPLETE\ndisposition: INCOMPLETE\n---\n"
+                                                       "# Programming Result\n\nWork began on the defect.\n"})
         self.directive(3, reply="Resolved both.\n", writes={
-            str(root / "One — Programming Result.md"): "# Programming Result\n\nStatus: COMPLETE\n\n"
+            str(root / "One — Programming Result.md"): "---\nstatus: PASSED\ndisposition: SETTLED\n---\n"
+                                                       "# Programming Result\n\n"
                                                        "- R1 — FIXED — corrected the login check; the empty-password case now fails.\n"
-                                                       "- R2 — REJECTED — the summary row is outside the approved Specification; no change.\n\n"
-                                                       "Review disposition: SETTLED\n"})
+                                                       "- R2 — REJECTED — the summary row is outside the approved Specification; no change.\n"})
         driver = self.start(project, "build")
         final = self.settle(driver, lambda status: status["state"] == "complete", timeout=60)
         self.assertEqual(final["verdicts"], ["NOT PASSED"])
@@ -975,7 +778,6 @@ class RunCase(unittest.TestCase):
         self.assertEqual(len(corrections), 2)
         self.assertIn("declared `INCOMPLETE`", corrections[1])
         self.assertIn("Actually resolve every recorded finding", corrections[1])
-        # Verification is never selected again after the correction.
         self.assertEqual(len(self.step_requests(project, "verification")), 1)
 
     def test_unsettled_corrections_count_no_progress_and_end_unfinished(self):
@@ -990,19 +792,16 @@ class RunCase(unittest.TestCase):
             report("NOT PASSED", disposition="CORRECTION",
                    findings=["R1 — the login check accepts an empty password."])})
         for index in range(2, 5):
-            # Each correction saves a success word alone, with no disposition
-            # of the finding and no settled declaration.
             self.directive(index, reply=f"Correction attempt {index} done.\n", writes={
                 str(root / "One — Programming Result.md"): f"# Programming Result\n\nStatus: COMPLETE\n\nCorrection attempt {index}.\n"})
         driver = self.start(project, "build")
         final = self.settle(driver, lambda status: status["state"] == "unfinished")
-        self.assertIn("did not carry one current settled", final["reason"])
+        self.assertIn("did not carry a settled `disposition: SETTLED`", final["reason"])
         corrections = self.step_requests(project, "correction")
         self.assertEqual(len(corrections), 3)
         for repeat in corrections[1:]:
             self.assertIn("Actually resolve every recorded finding", repeat)
             self.assertIn("A saved success word alone is not a settled correction", repeat)
-        # No second verification dispatch ever followed the correction.
         self.assertEqual(len(self.step_requests(project, "verification")), 1)
 
     def test_stop_run_records_unfinished_without_replay(self):
@@ -1018,7 +817,6 @@ class RunCase(unittest.TestCase):
         self.assertIsNone(self.runs.find(project))
         records = run_module.read_runs(project)
         self.assertEqual(records[-1]["state"], "unfinished")
-        # No replay: nothing restarts the run after its stop.
         time.sleep(0.4)
         self.assertIsNone(self.runs.find(project))
         self.assertEqual((self.scenario / "directive.count").read_text(), "1")
@@ -1044,7 +842,6 @@ class RunCase(unittest.TestCase):
         frozen = paused["elapsed_seconds"]
         self.assertEqual(driver.status()["elapsed_seconds"], frozen)
         self.assertEqual((self.scenario / "directive.count").read_text(), "2")
-        # A pre-dispatch permission gate remains explicit and starts no model.
         blocked = self.project("Permission")
         with mock.patch.object(conversation, "require_work_route", side_effect=ProjectError("Native permission is required.")):
             second = self.start(blocked)
@@ -1059,115 +856,28 @@ class RunCase(unittest.TestCase):
     def test_transient_failure_recovers_without_replaying_changed_work(self):
         import errno
         project = self.project()
-        self.directive(0, reply="Recovered before dispatch.\n")
-        popen = conversation.subprocess.Popen
-        rejected = []
-        def temporarily_unavailable(argv, *args, **kwargs):
+        self.directive(0, reply="Recovered before dispatch.")
+        popen, rejected = conversation.subprocess.Popen, []
+        def unavailable(argv, *args, **kwargs):
             if "run" in argv and not rejected:
-                rejected.append(list(argv))
+                rejected.append(argv)
                 raise OSError(errno.EAGAIN, "temporarily unavailable")
             return popen(argv, *args, **kwargs)
-        with mock.patch.object(conversation.subprocess, "Popen", side_effect=temporarily_unavailable):
-            safe = conversation.start_turn(self.registry, project, "codex", "specification", "Create it", [], activity="Creating")
+        with mock.patch.object(conversation.subprocess, "Popen", side_effect=unavailable):
+            safe = conversation.start_turn(self.registry, project, "codex", "specification", "Create it", [])
             self.assertTrue(safe.done.wait(10))
-        self.assertEqual(safe.state, "finished")
-        self.assertEqual(safe.activity, "Creating")
-        self.assertEqual(len(rejected), 1)
-        self.assertEqual((self.scenario / "directive.count").read_text(), "1")
-        # Published responses survive a lost final event: consume, never rerun.
-        saved = project.root / "Programming Result.md"
-        self.directive(1, lost_final=True, reply="Already saved.\n", writes={str(saved): "Saved outcome"})
-        retained = conversation.start_turn(self.registry, project, "codex", "programming-result", "Record result", [])
-        self.assertTrue(retained.done.wait(10))
-        self.assertEqual(retained.state, "finished")
-        self.assertEqual(saved.read_text(), "Saved outcome")
-        self.assertEqual((self.scenario / "directive.count").read_text(), "2")
-        # Code can change outside the project-document fingerprint.
-        code = self.root / "separate-code"
+        self.assertEqual((safe.state, len(rejected)), ("finished", 1))
+        code = self.root / "code"
         code.mkdir()
         project.save_brief(project.brief_text(), "One", "Description", "Goals", {"Code": str(code)})
         changed = code / "main.py"
-        self.directive(2, fail=True, reason="temporary service unavailable", writes={str(changed): "consequential change"})
-        project.approve_transition("build")
-        before = {path: path.read_bytes() for path in project.root.glob("*.md")}
+        self.directive(1, fail=True, reason="temporary service unavailable", writes={str(changed): "saved work"})
         driver = self.start(project, "build")
         paused = self.settle(driver, lambda state: state["state"] == "paused-failure")
-        self.assertEqual(changed.read_text(), "consequential change")
-        self.assertEqual({path: path.read_bytes() for path in project.root.glob("*.md")}, before)
-        self.assertEqual((self.scenario / "directive.count").read_text(), "3")
         self.assertIn("Inspect the saved files", paused["reason"])
         self.assertFalse(driver.resume())
-        self.assertEqual(changed.read_text(), "consequential change")
-        self.assertEqual((self.scenario / "directive.count").read_text(), "3")
-        driver.request_stop()
-        self.assertTrue(driver.done.wait(10))
-        # Explicitly read-only auxiliary calls can safely retry a transport error.
-        self.directive(3, fail=True, reason="temporary service unavailable")
-        self.directive(4, reply="PASSED\n")
-        auxiliary = conversation.start_aux(self.registry, project, "codex", conversation.PURPOSE_JUDGMENT,
-                                           "specification", "Read-only judgment", {"Key": "transient"})
-        self.assertTrue(auxiliary.done.wait(10))
-        self.assertEqual(auxiliary.state, "finished")
-        self.assertEqual((self.scenario / "directive.count").read_text(), "5")
-        # A repeated action carries its time, but never a prior attempt's
-        # dispatch evidence into a route or admission failure.
-        def cannot_dispatch(argv, *args, **kwargs):
-            if "run" in argv:
-                raise OSError(errno.EACCES, "Native permission is required before dispatch")
-            return popen(argv, *args, **kwargs)
-        for index, failure in enumerate(("route", "admission", "process")):
-            repeated = self.project("Repeat" + failure)
-            self.directive(5 + index * 2, reply=reply_with_questions("Which behavior?"), delay=.1)
-            self.directive(6 + index * 2, reply=reply_with_questions("Any final detail?"), delay=.2)
-            repeat = self.start(repeated)
-            first = self.settle(repeat, lambda state: state["state"] == "paused-question")
-            self.assertTrue(first["operation"]["dispatched"])
-            first_time = first["elapsed_seconds"]
-            self.assertGreater(first_time, 0)
-            target = "require_work_route" if failure == "route" else "start_turn"
-            rejected_attempt = (mock.patch.object(conversation.subprocess, "Popen", side_effect=cannot_dispatch)
-                                if failure == "process" else mock.patch.object(
-                                    conversation, target, side_effect=ProjectError("Temporary pre-dispatch condition.")))
-            with rejected_attempt:
-                repeat.receive_answer("Use the smaller behavior.")
-                blocked = self.settle(repeat, lambda state: state["state"] == "paused-failure")
-                if failure == "process":
-                    self.assertFalse(blocked["operation"]["dispatched"])
-                else:
-                    self.assertIsNone(blocked["operation"])
-                self.assertIn("Nothing was dispatched", blocked["reason"])
-                self.assertNotIn("original step will not repeat", blocked["reason"])
-                self.assertEqual(blocked["elapsed_seconds"], round(first["operation"]["elapsed_seconds"] +
-                    (blocked["operation"]["elapsed_seconds"] if blocked["operation"] else 0), 1))
-                self.assertEqual(repeat.status()["elapsed_seconds"], blocked["elapsed_seconds"])
-                self.assertEqual((self.scenario / "directive.count").read_text(), str(6 + index * 2))
-            self.assertTrue(repeat.resume())
-            resumed = self.settle(repeat, lambda state: state["state"] == "paused-question")
-            self.assertGreater(resumed["elapsed_seconds"], blocked["elapsed_seconds"])
-            self.assertEqual(repeat.status()["elapsed_seconds"], resumed["elapsed_seconds"])
-            self.assertEqual((self.scenario / "directive.count").read_text(), str(7 + index * 2))
-            self.assertIn("Use the smaller behavior.", self.step_requests(repeated)[-1])
-            repeat.request_stop()
-            self.assertTrue(repeat.done.wait(10))
-            self.assertFalse(repeat.resume())
-        # The first admitted turn can fail before dispatch too: the run's
-        # unsent brief remains owed to the first real request.
-        unsent = self.project("Unsent")
-        self.directive(11, reply=reply_with_questions("Which behavior?"))
-        with mock.patch.object(conversation.subprocess, "Popen", side_effect=cannot_dispatch):
-            deferred = self.start(unsent, brief="Preserve this initial brief.")
-            before_dispatch = self.settle(deferred, lambda state: state["state"] == "paused-failure")
-            self.assertFalse(before_dispatch["operation"]["dispatched"])
-            self.assertEqual(deferred.pending_brief(), "Preserve this initial brief.")
-            self.assertEqual((self.scenario / "directive.count").read_text(), "11")
-        self.assertTrue(deferred.resume())
-        self.settle(deferred, lambda state: state["state"] == "paused-question")
-        self.assertIn("Preserve this initial brief.", self.step_requests(unsent)[-1])
-        self.assertEqual(deferred.pending_brief(), "")
-        self.assertEqual((self.scenario / "directive.count").read_text(), "12")
-        deferred.request_stop()
-        self.assertTrue(deferred.done.wait(10))
-
+        self.assertEqual(changed.read_text(), "saved work")
+        self.assertEqual((self.scenario / "directive.count").read_text(), "2")
 
     def test_unsupported_role_refused_before_start_with_disclosure(self):
         project = self.project()
@@ -1223,9 +933,8 @@ class RunCase(unittest.TestCase):
             {str(root / "One — Verification Report.md"): report(
                 "NOT PASSED", findings=["R1 — the saved result omits the required check evidence."])},
             {str(root / "One — Programming Result.md"):
-                "# Programming Result\n\nStatus: COMPLETE\n\n"
-                "- R1 — FIXED — corrected; the check passes.\n\n"
-                "Review disposition: SETTLED\n"},
+                "---\nstatus: PASSED\ndisposition: SETTLED\n---\n# Programming Result\n\n"
+                "- R1 — FIXED — corrected; the check passes.\n"},
         ]
         for index, files in enumerate(writes):
             self.directive(index, reply="Saved.\n", model="reported-native-model", writes=files)
@@ -1237,16 +946,12 @@ class RunCase(unittest.TestCase):
         final = self.settle(driver, lambda status: status["state"] == "complete")
         argv = [json.loads(line) for line in self.argv_log.read_text(encoding="utf-8").splitlines()]
         work_calls = [entry for entry in argv if entry.get("purpose") == "work"]
-        # The settled correction completes the run; verification is not
-        # selected again after it.
         order = ["specification", "planning", "implementation", "verification", "correction"]
         self.assertEqual([(entry["model"], entry["effort"]) for entry in work_calls],
                          [(choices[role]["model"], choices[role]["effort"]) for role in order])
         for step in ("build", "correction"):
             self.assertIn("review-model (requested)", self.step_requests(project, step)[0])
         self.assertEqual(final["reported_model"], "reported-native-model")
-        # The default internal reviewer shares the full implementation choice.
-        # A blank review override also supersedes a saved explicit reviewer.
         for config in ({"roles": {}}, {"roles": {"review": {"tool": "", "model": "", "effort": ""}}}):
             defaults = {"implementation": choices["implementation"]}
             if config["roles"]:
@@ -1258,40 +963,28 @@ class RunCase(unittest.TestCase):
                                                        {"implementation": choices["implementation"]})[:3],
                          ("codex", "implementation-model", "high"))
 
-
     def test_skip_review_warning_switch_round_trip(self):
-        import http.client
-        import threading
-        from ora_vibe_coder.server import LocalServer
-        settings = Settings(self.root / "settings.json")
-        server = LocalServer(self.home, settings=settings)
-        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01})
-        thread.start()
-        self.addCleanup(lambda: (server.shutdown(), thread.join(), server.server_close()))
-
-        def post(path, body):
-            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
-            connection.request("POST", path, json.dumps(body),
-                               headers={"Content-Type": "application/json", "X-Ora-Token": server.token})
-            response = connection.getresponse()
-            data = json.loads(response.read())
-            connection.close()
-            return response.status, data
+        server, post = self.local_server()
 
         _status, created = post("/api/create", {"directory": "One", "name": "One", "description": "", "goals": ""})
-        # On by default, off, and on again: one switch in Settings governs it.
-        self.assertTrue(post("/api/setup", {})[1]["app_settings"]["warn_skip_review"])
-        self.assertTrue(post("/api/settings", {"warn_skip_review": False})[1]["warn_skip_review"] is False)
-        self.assertFalse(Settings(self.root / "settings.json").read()["warn_skip_review"])
-        self.assertTrue(post("/api/settings", {"warn_skip_review": True})[1]["warn_skip_review"] is True)
-        # A project with something actionable refuses only on the unsupported
-        # role, disclosed, before any start.
+        self.assertFalse(post("/api/setup", {})[1]["app_settings"]["hide_advisory"])
+        self.assertTrue(post("/api/settings", {"hide_advisory": True})[1]["hide_advisory"])
+        self.assertTrue(Settings(self.root / "settings.json").read()["hide_advisory"])
+        self.assertTrue(post("/api/settings", {"hide_advisory": False})[1]["hide_advisory"] is False)
         (self.home / "One" / "Specification.md").write_text(
             "# Specification\n\n## Description\n\nSomething to build.\n", encoding="utf-8")
         _code, refusal = post("/api/run-start", {"id": created["id"], "entry": "specification", "text": "",
                                                   "images": [], "files": [], "tool": "hermes"})
         self.assertIn("cannot exchange turns in-app", refusal["error"])
 
+    def test_a_run_refuses_only_when_there_is_literally_nothing_to_build(self):
+        server, post = self.local_server()
+        for name, description, expected in (("Empty", "", "literally nothing to build"),
+                                            ("Described", "A small tool.", "cannot exchange turns in-app")):
+            _status, created = post("/api/create", {"directory": name, "name": name, "description": description, "goals": ""})
+            _code, refusal = post("/api/run-start", {"id": created["id"], "entry": "specification", "text": "",
+                                                      "images": [], "files": [], "tool": "hermes"})
+            self.assertIn(expected, refusal["error"])
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,7 +2,7 @@
 
 The route is rote — Specification, Plan, Build (the Programming Loop),
 independent verification, then Correction, which settles in place — entered
-at the active stage. Every step is one ordinary work turn through the existing
+at the active stage, or Build when both current documents retain approval. Every step is one ordinary work turn through the existing
 turn machinery, so the existing saved-file readback decides what each step
 achieved; the driver never replays a step, never substitutes a tool, and never
 claims a pass the saved records do not show. Runs, their briefs and their
@@ -13,7 +13,9 @@ This module also builds the step requests the screen's manual buttons use, so
 manual and automated requests cannot drift apart.
 """
 
+import difflib
 import json
+import secrets
 from pathlib import Path
 import re
 import threading
@@ -23,8 +25,8 @@ from . import conversation
 from .handoff import prepare_request, quoted
 from .hosts import HOSTS as TOOL_LABELS
 from .project import ProjectError, not_started, read_text
-from .status import (canonical_verdict, correction_dispositions, reported_status,
-                     review_basis, review_disposition, verification_finding_labels)
+from .status import (VALUES, correction_dispositions, reported_status,
+                     review_disposition, verification_finding_labels)
 
 # The route, in order. Correction settles in place: a settled correction
 # completes the run; an unsettled one is retried as correction.
@@ -48,13 +50,7 @@ STEP_ROLE = {"specification": "specification", "planning": "planning", "build": 
 STEP_STAGE = {"specification": "specification", "planning": "planning", "build": "programming",
               "result": "programming-result", "verification": "verification",
               "correction": "programming", "create-plan": "planning", "implement-plan": "programming"}
-# The stage whose own step falls back to the step-3 selection when no override
-# or default names it: the stage the run was entered at.
-ENTRY_STEP_ROLE = {"specification": "specification", "planning": "planning", "build": "implementation"}
 NO_PROGRESS_LIMIT = 3
-STEP_TITLES = {"specification": "Specification", "planning": "Plan", "build": "Build",
-               "verification": "Independent verification", "correction": "Correction",
-               "result": "Programming Result"}
 
 # --- Step instructions, shared by the manual buttons and every run ------------
 
@@ -75,10 +71,10 @@ DEFAULT_INPUTS = {
     "verification": ("Coordinate a fresh, independent Ora Verification review of the current implementation "
                      "against the Specification and Plan. The implementation agent must not be its own "
                      "verifier. Save or update one truthful Verification Report, including findings and "
-                     "any incomplete checks, and return the result to the user. The report states its "
-                     "verdict (PASSED, NOT PASSED or INCOMPLETE) and carries exactly one current "
-                     "`Review disposition:` line — SETTLED, CORRECTION, SEVERE, INCOMPLETE or ASK USER — "
-                     "outside quotations and examples. Enumerate every finding on its own line with a "
+                     "any incomplete checks, and return the result to the user. The report's opening YAML "
+                     "carries `status:` — exactly PASSED, NOT PASSED or INCOMPLETE — and `disposition:` — "
+                     "exactly SETTLED, CORRECTION, SEVERE, INCOMPLETE or ASK USER; decide both only after "
+                     "the review is finished. Enumerate every finding on its own line with a "
                      "stable label the correction can cite — `- R1 — <finding>`, `- R2 — …`, and `S1`, "
                      "`S2` … for severe findings. Identify every severe finding: unrecoverable data "
                      "loss, security exposure, and unauthorized or erroneous spending, sending or "
@@ -95,9 +91,10 @@ DEFAULT_INPUTS = {
                    "of every finding on its own line in the Programming Result, citing each finding by "
                    "the stable label the Verification Report gave it: "
                    "`- <label> — FIXED — <what changed and the evidence>` "
-                   "or `- <label> — REJECTED — <concrete reason>`. Its final line is "
-                   "exactly one current `Review disposition:` line — SETTLED, SEVERE, INCOMPLETE or ASK "
-                   "USER — outside quotations and examples. Stop there. Do not run or commission a new "
+                   "or `- <label> — REJECTED — <concrete reason>`. The Programming Result's opening YAML "
+                   "carries `status:` — exactly PASSED, NOT PASSED or INCOMPLETE — and `disposition:` — "
+                   "exactly one current value: SETTLED, SEVERE, INCOMPLETE or ASK USER. Stop there. "
+                   "Do not run or commission a new "
                    "Ora Verification review or update the Verification Report in this turn; a settled "
                    "correction completes the work as completed after correction. If no report exists, "
                    "explain what evidence is missing before changing code."),
@@ -132,19 +129,15 @@ def result_direction(project):
         return ("No Programming Result was found. Continue with the available code and requirements, "
                 "and disclose the missing report.")
     return (f"The Programming Result was found at {saved['path']}. Its displayed status is "
-            f"{reported_status('programming', saved['text'] or '', saved['path'], field='Status')['label']}; "
+            f"{reported_status('programming', saved['text'] or '', saved['path'])['label']}; "
             "read the report and actual candidate directly rather than treating the badge as proof.")
 
 
 def build_input(step, project, user_text="", verifier=None, extra=()):
     """The step's fixed assignment, with any user brief as preserved context.
 
-    Every step keeps its full default instruction — including the boundary of
-    what this step's own stage permits, such as not starting the Plan or
-    implementation from the Specification step — and the user's unsent text
-    rides along as preserved context for the intended outcome, never replacing
-    the assignment. A brief therefore cannot widen a step beyond its stage.
-    """
+    The default instruction carries the stage boundary; the brief rides along
+    as context, never replacing the assignment, so it cannot widen a step."""
     parts = []
     text = user_text or ""
     if step in DEFAULT_INPUTS:
@@ -231,20 +224,11 @@ def unsupported_roles(config, entry, step3_tool, defaults):
 # --- Reading what a verification report says ----------------------------------
 
 def verification_verdict(text):
-    """PASSED, NOT PASSED, REVIEW INCOMPLETE — or '' when unreadable."""
-    label = reported_status("verification", text or "", "", field="Verdict")["label"]
-    if label == "INCOMPLETE" or label.startswith("NOT PASSED — REVIEW INCOMPLETE") or label.startswith("NOT PASSED — REVISION INCOMPLETE"):
-        return "REVIEW INCOMPLETE"
-    if label.startswith("NOT PASSED"):
-        return "NOT PASSED"
-    if label.startswith("PASSED") or label.startswith("ONE PASS COMPLETE"):
-        return "PASSED"
-    return ""
-
-
-def questions_paused(driver_status):
-    """The pause questions a run is waiting on, for the composer's answer box."""
-    return list(driver_status.get("questions") or []) if driver_status.get("state") == "paused-question" else []
+    """The report's opening YAML status value — PASSED, NOT PASSED, INCOMPLETE
+    or user closure — or '' when missing or unreadable. The raw value routes
+    the run; REVIEW INCOMPLETE is a screen label only."""
+    label = reported_status("verification", text or "", "")["label"]
+    return label if label in VALUES["verification"] else ""
 
 
 # --- The retained run record ---------------------------------------------------
@@ -263,10 +247,8 @@ def run_note_body(kind, run, fields):
 
 def _record_run_note(project, folder, kind, run, fields, body=None):
     session = folder / "session"
-    arguments = ["record", "--session", str(session), "--kind", "session-create",
-                 "--initiator", conversation.INITIATOR, "--peer", "codex", "--mode", "review",
-                 "--access-path", str(project.root)]
-    conversation.bridge_call(arguments, f"Vibe run note {kind} — run {run}\nProject: {project.root}\n")
+    conversation.open_session(project, session, "codex",
+                              f"Vibe run note {kind} — run {run}\nProject: {project.root}\n", mode="review")
     note = conversation.bridge_call(["record", "--session", str(session), "--kind", "note"],
                                     run_note_body(kind, run, fields) + (body or ""))
     if not re.match(r"(\d{4})-", Path(note).name):
@@ -330,7 +312,8 @@ def read_runs(project):
 class RunDriver:
     """One live Run to Completion, in memory while it works."""
 
-    def __init__(self, registry, project, entry, brief, config, defaults, step3_tool, attachments=None, files=()):
+    def __init__(self, registry, project, entry, brief, config, defaults, step3_tool, attachments=None, files=(), startup_documents=None):
+        self.startup_documents = startup_documents
         self.registry = registry
         self.project = project
         self.entry = entry
@@ -349,6 +332,7 @@ class RunDriver:
         self.questions = []
         self.observation = ""
         self.no_progress = 0
+        self.findings_settled = 0
         self.attempt_note = ""
         self.verdicts = []
         self.stop_requested = False
@@ -379,11 +363,9 @@ class RunDriver:
         self.worker.start()
 
     def _record_start(self):
-        # The brief's pictures are held in the wire shape every turn accepts —
-        # the same {"name", "data"} dicts start_turn normalizes through
-        # prepare_images — so the run-start note validates and retains them
-        # once here, and the first dispatched entry step re-supplies them
-        # unchanged, exactly like the brief's text and files.
+        # The brief's pictures ride in the wire shape start_turn accepts, so
+        # the run-start note retains them once and the first dispatched step
+        # re-supplies them unchanged.
         prepared = conversation.prepare_images(self.brief_images)
         folder = conversation.reserve_turn_folder(self.project)
         self.run = folder.name
@@ -405,20 +387,15 @@ class RunDriver:
     def receive_answer(self, text, images=(), files=()):
         """One answered pause: the count resets and the same step resumes.
 
-        The answer's pictures (each with its notes) and selected files ride
-        the resumed step, as `/api/converse` would carry them. Their
-        originals are retained in the run record before the pause clears,
-        so a failure ahead of the resumed step's dispatch — or stopping the
-        run — cannot lose an accepted answer the page has already cleared.
-        """
+        Answer pictures and files ride the resumed step, with their originals
+        retained in the run record before the pause clears, so nothing can
+        lose an answer the page already cleared."""
         prepared = conversation.prepare_images(list(images))  # Validates before the pause clears.
         if (not isinstance(files, (list, tuple)) or len(files) > 10
                 or any(not isinstance(path, str) or not path for path in files)):
             raise ProjectError("Choose at most 10 Markdown, text or HTML files for this answer.")
         # The retained answer record is written before the in-memory answer
-        # exists, so a reader that sees the accepted answer can also read its
-        # originals; the resumed step re-supplies them unchanged, exactly
-        # like the brief's pictures at run start.
+        # exists, so a reader can also read the originals.
         answer = (text or "").strip()
         folder = conversation.reserve_turn_folder(self.project)
         conversation.save_attachments(folder, prepared)
@@ -457,21 +434,13 @@ class RunDriver:
         return self.step == self.entry and not self.brief_used
 
     def pending_brief(self):
-        """The brief a paused entry step still owes its AI, or "".
-
-        A start that never dispatched did not consume the brief, so the
-        step's retry and the Copy request fallback both re-supply it; it is
-        consumed only by the first attempt that actually dispatches.
-        """
+        """The brief a paused entry step still owes its AI: consumed only by
+        the first attempt that actually dispatches."""
         return self.brief if self._brief_pending() else ""
 
     def pending_pictures(self):
-        """The names of the brief pictures a paused entry step still owes its AI.
-
-        A copy cannot carry pictures, so the manual fallback names each one
-        as not included instead of silently dropping it; the pictures stay
-        retained in this project's run record.
-        """
+        """The brief pictures a paused entry step still owes its AI; a copy
+        names them as not included, originals retained in the run record."""
         return [item.get("name", "") for item in self.brief_images] if self._brief_pending() else []
 
     def pending_files(self):
@@ -479,14 +448,9 @@ class RunDriver:
         return list(self.brief_files) if self._brief_pending() else []
 
     def pending_answer(self):
-        """The answer a paused step still owes its AI: (text, picture names, files).
-
-        An answer is consumed by the first dispatched attempt that carries
-        it, so this is empty once that attempt left; a newer answer that
-        arrived meanwhile stays. A copy cannot carry pictures, so the
-        manual fallback names each one as not included instead of silently
-        dropping it; the originals stay retained in this project's run record.
-        """
+        """The answer a paused step still owes its AI: (text, picture names,
+        files). Consumed by the first dispatched attempt that carries it; a
+        newer answer arrived meanwhile stays."""
         with self.lock:
             return (self.resume_answer,
                     [item.get("name", "") for item in self.resume_images],
@@ -545,11 +509,10 @@ class RunDriver:
                                 "which cannot exchange turns in-app, so an unattended run cannot use it. "
                                 "Choose a supported tool in Configure Path; nothing was substituted.")
             return False
-        # Dispatch-time revalidation against the actual current components,
-        # so a stale screen cannot start an unsupported route: every role's
-        # tool needs the Bridge work route, and the Build-family steps also
-        # need the applicable bundled Loop adapter. The named component,
-        # reason and remedy ride the pause; nothing is substituted.
+        # Dispatch-time revalidation against the actual current components:
+        # every role needs the Bridge work route, Build-family steps also the
+        # applicable Loop adapter. The reason rides the pause; nothing is
+        # substituted.
         try:
             action = f"the {ROLE_NAMES[STEP_ROLE[self.step]]} step"
             conversation.require_work_route(tool, action)
@@ -593,8 +556,8 @@ class RunDriver:
             extra.append("## The user's answer to your paused questions\n\n" + answer)
         extra.append(f"This step runs on {model_label(tool, model, effort)} ({origin} for this run).")
         text = build_input(self.step, self.project, user_text, verifier, extra)
-        # The entry step's brief pictures ride its first dispatch; an answer's
-        # pictures and files ride the resumed step it answered.
+        # The brief's pictures ride the first dispatch; an answer's pictures
+        # and files ride the resumed step it answered.
         images = (self.brief_images if self._brief_pending() else []) + list(answer_images)
         files = self.pending_files() + list(answer_files)
         self.step_requested = model_label(tool, model, effort)
@@ -603,7 +566,7 @@ class RunDriver:
             with self.lock:
                 if self.stop_requested:
                     return False
-                supplied_documents = self.project.approve_transition(self.step)
+                supplied_documents = self.supplied_documents()
                 self.handle = conversation.start_turn(
                     self.registry, self.project, tool, STEP_STAGE[self.step], text, images, files,
                     run_fields={"Run": self.run, "Run-Step": self.step}, model=model, effort=effort,
@@ -618,18 +581,30 @@ class RunDriver:
         self.handle.done.wait()
         model_reported, _provider = self.handle.observed_identity()
         with self.lock:
-            # Admission alone does not prove the worker started a process.
-            # Unsent input stays available to safe Continue and manual copy.
+            # Dispatch alone does not prove a process started; unsent input
+            # stays available to Continue and manual copy.
             if self.handle.dispatched:
                 self.brief_used = True
                 if self.resume_answer == answer:
-                    # The dispatched answer is consumed with its pictures and
-                    # files; a newer answer that arrived meanwhile stays.
+                    # A newer answer that arrived meanwhile stays.
                     self.resume_answer = ""
                     self.resume_images = []
                     self.resume_files = []
             self.reported_model = model_reported
         return self._decide()
+
+    def supplied_documents(self):
+        # Approved startup snapshots also serve an undispatched Copy fallback;
+        # neither route may replace the approval evidence before dispatch.
+        if self._brief_pending() and self.startup_documents is not None:
+            for role, shown in self.startup_documents.items():
+                current = self.project.material(role)
+                reference = self.project.reference(role)
+                if (current["path"] != shown["path"] or current["text"] != shown["text"]
+                        or not isinstance(reference, Path) or str(reference.resolve()) != shown["resolved"]):
+                    raise ProjectError(f"The {role} changed after startup approval. Stop this run and start again to review the current documents; nothing was approved or dispatched.")
+            return self.startup_documents
+        return self.project.approve_transition(self.step)
 
     def _assignment(self):
         return self._assignment_for(STEP_ROLE[self.step])
@@ -660,19 +635,11 @@ class RunDriver:
             self._end("unfinished", "The step's AI refused the work: no actionable product brief. "
                       "Add material to the project and start a new run.")
             return False
-        # 2. Questions for you pause the run; in best-guess mode the step is
-        #    sent again and that repeat counts as an attempt without progress.
+        # Questions pause the run; in best-guess mode the repeat counts as an
+        # attempt without progress.
         if questions:
             if self.config.get("best_guess"):
-                self.no_progress += 1
-                self.attempt_note = ("The previous attempt asked the user questions instead of continuing. "
-                                     "It said:\n\n" + quoted("\n".join(questions)) +
-                                     "\n\nMake and record a best guess for each of those questions as an "
-                                     "assumption in your saved document, and continue.")
-                self.observation = "Step asked questions; a best-guess repeat was sent."
-                if self.no_progress >= NO_PROGRESS_LIMIT:
-                    self._end_unfinished_no_progress("the step kept asking instead of making best guesses")
-                return True
+                return self._best_guess_repeat("\n".join(questions))
             with self.lock:
                 self.state = "paused-question"
                 self.questions = questions
@@ -698,6 +665,12 @@ class RunDriver:
         if step in {"build", "correction"}:
             ok = changed and artifact.get("role") == "Programming Result"
             if ok:
+                saved = self.project.material("Programming Result")
+                if reported_status("programming", saved["text"] or "", "")["label"] == "CLOSED BY USER — UNRESOLVED FINDINGS":
+                    self._end("unfinished",
+                              "The Programming Result records user closure with unresolved findings. The run "
+                              "ends unfinished; nothing is claimed to have passed.")
+                    return False
                 if step == "build":
                     self.observation = "Programming Result saved."
                     self._advance()
@@ -713,17 +686,15 @@ class RunDriver:
     def _decide_correction_result(self):
         """A correction settles through its saved Programming Result.
 
-        Settlement is more than a success word: the result must record at
-        least one fix or reasoned rejection, and a severe (S) finding settles
-        only through its own recorded fix with evidence. Decisions for
-        non-severe findings are recorded per the correction instructions, not
-        enforced label by label. The route never selects verification again
-        after correction: a settled correction completes the work as completed
-        after correction, and the only recoveries are a genuinely unsettled
-        result (retried here) and the owner-decision pauses.
-        """
+        Settlement requires a settled YAML disposition, at least one fix or
+        reasoned rejection, and a severe (S) finding settles only through its
+        own recorded fix. Quality never holds a run back: a settled correction
+        whose status is not PASSED finishes and says so. The route never
+        selects verification again after correction; the only recoveries are
+        a genuinely unsettled result and owner decisions."""
         saved = self.project.material("Programming Result")
         disposition = review_disposition(saved["text"] or "")
+        status = reported_status("programming", saved["text"] or "", "")["label"]
         if disposition == "SETTLED":
             entries = correction_dispositions(saved["text"] or "")
             pending = self.project.material("Verification Report")
@@ -755,6 +726,12 @@ class RunDriver:
                     "cannot settle it")
                 return True
             self.observation = "Programming Result: settled correction."
+            if status != "PASSED":
+                self._end("unfinished",
+                          f"Correction settled every finding with recorded reasons and the run is finished, but "
+                          f"the Programming Result's own status reads {status}, not PASSED. Nothing is claimed "
+                          "to have passed; read the saved report before relying on this work.")
+                return False
             self._end("complete",
                       "Correction settled every finding with recorded reasons — completed after "
                       "correction, without another verification pass.")
@@ -766,25 +743,34 @@ class RunDriver:
                 "removed; a rejection does not stand. Answer to guide the correction, or stop the run.")
             return False
         if disposition == "ASK USER":
+            if self.config.get("best_guess"):
+                return self._best_guess_repeat("The saved Programming Result left a decision for the user (ASK USER).")
             self._pause_for_owner(
                 "The correction's Programming Result records a decision only you can make (ASK USER). "
                 "Answer it to continue the correction, or stop the run.")
             return False
         self._correction_not_settled(
-            "its Programming Result did not carry one current settled `Review disposition: "
-            "SETTLED` line recording every finding fixed or rejected with reasons"
+            "its Programming Result did not carry a settled `disposition: SETTLED` in its opening "
+            "YAML, recording every finding fixed or rejected with reasons"
             if not disposition else
             f"its Programming Result declared `{disposition}`, so the correction is not settled")
         return True
 
     def _correction_not_settled(self, reason):
+        # Corrections continue while they make progress: another of the
+        # report's findings settled restarts the count of attempts.
+        report = self.project.material("Verification Report")["text"] or ""
+        result = self.project.material("Programming Result")["text"] or ""
+        settled = len(set(verification_finding_labels(report)) & {entry[0] for entry in correction_dispositions(result)})
+        if settled > self.findings_settled:
+            self.findings_settled, self.no_progress = settled, 0
         self.no_progress += 1
         self.attempt_note = (f"The previous correction did not settle its findings: {reason}. "
                              "Actually resolve every recorded finding — fix it the smallest way or "
                              "reject it with a concrete reason — then save the one current Programming "
-                             "Result with that disposition of every finding and a final "
-                             "`Review disposition: SETTLED` line. A saved success word alone is not a "
-                             "settled correction.")
+                             "Result with that disposition of every finding and opening YAML "
+                             "`disposition: SETTLED`. A saved success word alone is not a settled "
+                             "correction.")
         self.observation = "Correction not settled."
         if self.no_progress >= NO_PROGRESS_LIMIT:
             self._end_unfinished_no_progress(reason)
@@ -807,38 +793,66 @@ class RunDriver:
             return True
         verdict = verification_verdict(report["text"])
         disposition = review_disposition(report["text"])
-        if not verdict or not disposition:
-            missing = ("no readable verdict" if not verdict else
-                       "no single current `Review disposition:` line — missing, duplicated, unknown or "
-                       "contradictory declarations read as incomplete")
+        # User closure and a severe finding stop the run whatever else the
+        # report's fields say: neither is retried away.
+        stopping = verdict == "CLOSED BY USER — UNRESOLVED FINDINGS" or disposition == "SEVERE"
+        if not stopping and (not verdict or not disposition):
+            missing = ("no `status:` value in its opening YAML" if not verdict else
+                       "no valid `disposition:` value in its opening YAML — missing, duplicated or "
+                       "off-list values read as incomplete")
             self.no_progress += 1
             self.attempt_note = (f"The previous verification saved a report with {missing}. "
                                  "Investigate the cause and change the approach, then save one current "
-                                 "Verification Report whose verdict line states PASSED or NOT PASSED and "
-                                 "which carries exactly one `Review disposition:` line (SETTLED, "
-                                 "CORRECTION, SEVERE, INCOMPLETE or ASK USER).")
+                                 "Verification Report whose opening YAML `status:` states PASSED or "
+                                 "NOT PASSED and whose `disposition:` states one of SETTLED, "
+                                 "CORRECTION, SEVERE, INCOMPLETE or ASK USER.")
             self.observation = f"Verification Report: {missing}."
             if self.no_progress >= NO_PROGRESS_LIMIT:
                 self._end_unfinished_no_progress(f"the saved Verification Report has {missing}")
             return True
-        contradictory = (
+        contradictory = not stopping and (
             (verdict == "PASSED" and disposition != "SETTLED")
             or (verdict == "NOT PASSED" and disposition == "SETTLED")
-            or (verdict == "REVIEW INCOMPLETE" and disposition in {"SETTLED", "CORRECTION"})
+            or (verdict == "INCOMPLETE" and disposition in {"SETTLED", "CORRECTION"})
         )
         if contradictory:
             self.no_progress += 1
-            self.attempt_note = (f"The previous verification's verdict ({verdict}) contradicts its "
-                                 f"`Review disposition: {disposition}` line. Resolve the contradiction "
-                                 "and save one current Verification Report whose verdict and disposition "
+            self.attempt_note = (f"The previous verification's `status: {verdict}` contradicts its "
+                                 f"`disposition: {disposition}`. Resolve the contradiction "
+                                 "and save one current Verification Report whose two YAML values "
                                  "agree.")
             self.observation = "Verification Report: contradictory verdict and disposition."
             if self.no_progress >= NO_PROGRESS_LIMIT:
                 self._end_unfinished_no_progress("the saved Verification Report contradicts itself")
             return True
         with self.lock:
-            self.verdicts.append(verdict)
-        if disposition == "INCOMPLETE" or verdict == "REVIEW INCOMPLETE":
+            self.verdicts.append(verdict or "VERDICT MISSING")
+        if verdict == "CLOSED BY USER — UNRESOLVED FINDINGS":
+            self._end("unfinished",
+                      "The Verification Report records user closure with unresolved findings. The run "
+                      "ends unfinished; nothing is claimed to have passed.")
+            return False
+        if disposition == "SEVERE":
+            # When the run resumes, the answer guides the correction that must
+            # fix the severe finding with evidence.
+            self.step = "correction"
+            self._pause_for_owner(
+                "The Verification Report records an unresolved severe finding. A severe finding settles "
+                "only through a recorded fix with evidence that its harmful path was removed; a rejection "
+                "does not stand. Answer to guide the correction, or stop the run — the run cannot "
+                "complete while the severe finding stands.")
+            return False
+        if disposition == "ASK USER":
+            # A missing authority or unresolved product choice outranks ordinary
+            # incompleteness, unless this run chose best guesses over pauses.
+            if self.config.get("best_guess"):
+                return self._best_guess_repeat("The saved Verification Report left a decision for the user (ASK USER).")
+            self._pause_for_owner(
+                "The Verification Report's disposition is ASK USER: a missing authority or an unresolved "
+                "product choice needs your decision. Answer it and the verification is retried with your "
+                "decision, or stop the run.")
+            return False
+        if verdict == "INCOMPLETE" or disposition == "INCOMPLETE":
             self.no_progress += 1
             self.attempt_note = ("The previous verification did not finish. Investigate the cause and "
                                  "change the approach, then complete or rerun the review so one current "
@@ -851,26 +865,21 @@ class RunDriver:
             self.observation = "Verification Report: SETTLED."
             self._end("complete", "Verification settled with no unresolved finding; the run is complete.")
             return False
-        if disposition == "CORRECTION":
-            self.observation = "Verification Report: findings require builder decisions. Correction follows."
-            self.step = "correction"
-            return True
-        if disposition == "SEVERE":
-            # The owner decides; when the run resumes, the answer guides the
-            # correction that must fix the severe finding with evidence.
-            self.step = "correction"
-            self._pause_for_owner(
-                "The Verification Report records an unresolved severe finding. A severe finding settles "
-                "only through a recorded fix with evidence that its harmful path was removed; a rejection "
-                "does not stand. Answer to guide the correction, or stop the run — the run cannot "
-                "complete while the severe finding stands.")
-            return False
-        # ASK USER: missing authority or an unresolved product choice.
-        self._pause_for_owner(
-            "The Verification Report's disposition is ASK USER: a missing authority or an unresolved "
-            "product choice needs your decision. Answer it and the verification is retried with your "
-            "decision, or stop the run.")
-        return False
+        self.observation = "Verification Report: findings require builder decisions. Correction follows."
+        self.step = "correction"
+        return True
+
+    def _best_guess_repeat(self, asked):
+        self.no_progress += 1
+        self.attempt_note = ("The previous attempt asked the user instead of continuing. "
+                             "It said:\n\n" + quoted(asked) +
+                             "\n\nMake and record a best guess for each decision as an assumption in your "
+                             "saved document, and continue. A best guess never authorizes a destructive or "
+                             "external action.")
+        self.observation = "Step asked questions; a best-guess repeat was sent."
+        if self.no_progress >= NO_PROGRESS_LIMIT:
+            self._end_unfinished_no_progress("the step kept asking instead of making best guesses")
+        return True
 
     def _pause_for_owner(self, question):
         with self.lock:
@@ -958,12 +967,19 @@ class RunDriver:
                 "role_choices": {**self.defaults, **config.get("roles", {})}}
 
 
+class RunApprovalRequired(ProjectError):
+    def __init__(self, confirmation):
+        super().__init__("Review the current documents before starting this run.")
+        self.confirmation = confirmation
+
+
 class RunRegistry:
     """Live run drivers in memory, one per project at a time."""
 
     def __init__(self):
         self.lock = threading.Lock()
         self.by_project = {}
+        self.approval_confirmations = {}
 
     def find(self, project):
         with self.lock:
@@ -974,18 +990,58 @@ class RunRegistry:
         with self.lock:
             return self.by_project.get(str(project.root))
 
-    def start(self, registry, project, entry, brief, config, defaults, step3_tool, images, files):
+    def _confirm_approvals(self, project, documents, stale=False):
+        key = str(project.root)
+        token = secrets.token_urlsafe()
+        self.approval_confirmations[key] = (token, documents)
+        shown = []
+        for item in documents:
+            difference = ""
+            if item["state"] == "changed":
+                difference = "\n".join(difflib.unified_diff(
+                    item["before"].splitlines(), item["text"].splitlines(),
+                    fromfile="Approved " + item["role"], tofile="Current " + item["role"], lineterm=""))
+            shown.append({key: item[key] for key in ("stage", "role", "path", "state", "text")}
+                         | {"difference": difference})
+        raise RunApprovalRequired({"token": token, "documents": shown, "stale": stale})
+
+    def start(self, registry, project, entry, brief, config, defaults, step3_tool, images, files,
+              confirmation=None):
         current = self.find(project)
         if current is not None:
             raise ProjectError("A Run to Completion is already active in this project. Stop it before starting another.")
-        unsupported = unsupported_roles(config, entry, step3_tool, defaults)
-        if unsupported:
-            role, tool = unsupported[0]
-            raise ProjectError(f"{ROLE_NAMES[role]} is assigned to {TOOL_LABELS.get(tool, (tool,))[0]}, "
-                               "which cannot exchange turns in-app, so an unattended run cannot use it. "
-                               "Choose a supported tool in Configure Path; nothing was substituted and the run did not start.")
-        driver = RunDriver(registry, project, entry, brief, config, defaults, step3_tool, images, files)
-        driver.start()  # Raises on a failed brief save; the run never starts.
+        with project.document_lock:
+            documents = project.run_approval_documents()
+            pending = self.approval_confirmations.get(str(project.root))
+            consent = False
+            if confirmation is not None:
+                # Only a server-issued choice for the exact pair displayed can
+                # approve them. Changes to either path or text refresh the choice.
+                if not pending or confirmation != pending[0] or documents != pending[1]:
+                    self._confirm_approvals(project, documents, stale=True)
+                consent = True
+            elif any(item["state"] in {"changed", "missing"} for item in documents):
+                self._confirm_approvals(project, documents)
+            approved = all(item["state"] != "unapproved" for item in documents)
+            effective_entry = "build" if approved else entry
+            unsupported = unsupported_roles(config, effective_entry, step3_tool, defaults)
+            if unsupported:
+                role, tool = unsupported[0]
+                raise ProjectError(f"{ROLE_NAMES[role]} is assigned to {TOOL_LABELS.get(tool, (tool,))[0]}, "
+                                   "which cannot exchange turns in-app, so an unattended run cannot use it. "
+                                   "Choose a supported tool in Configure Path; nothing was substituted and the run did not start.")
+            supplied = {}
+            for item in documents:
+                if item["state"] == "unapproved":
+                    continue
+                saved = item
+                if consent:
+                    saved, _warning = project.approve_document(item["stage"], item["text"], item["path"])
+                supplied[item["role"]] = dict(saved, resolved=item["resolved"])
+            self.approval_confirmations.pop(str(project.root), None)
+            driver = RunDriver(registry, project, effective_entry, brief, config, defaults, step3_tool,
+                               images, files, startup_documents=supplied if approved else None)
+            driver.start()  # Raises on a failed brief save; the run never starts.
         with self.lock:
             self.by_project[str(project.root)] = driver
         return driver
